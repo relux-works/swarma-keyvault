@@ -312,9 +312,17 @@ func TestDependencyNativeInputTripwire(t *testing.T) {
 }
 
 func checkDependencyInputs(root string) error {
+	// Go reports package directories from its working directory. Compare them
+	// with the same physical root, including when TMPDIR uses /tmp's alias.
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("resolve module root: %w", err)
+	}
+	root = resolvedRoot
 	cmd := exec.Command("go", "list", "-deps", "-test", "-json", "./...")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
+	// An explicit Env otherwise retains a valid same-directory alias PWD.
+	cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=", "PWD="+root)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
@@ -536,10 +544,11 @@ func TestNativeInputTripwireStateReferences(t *testing.T) {
 	}
 }
 
-// A package of the module's build graph inside checkout state is refused, as
-// PR82 review r1 showed Go builds an imported one; without that import the
-// same module passes (control). Limit: a package built only by an explicit
-// command-line argument is outside the build graph this checks.
+// Imported checkout-state packages are refused, while a plain module passes,
+// for supplied, physical and symlinked roots, with default environment or a
+// valid same-directory alias PWD. This retains the temporary-root regression
+// and checks the child environment without changing the parent globally.
+// Limit: explicit-only packages remain outside the default build graph.
 func TestDependencyGraphCheckoutState(t *testing.T) {
 	module := func(t *testing.T, main string) string {
 		t.Helper()
@@ -561,13 +570,73 @@ func TestDependencyGraphCheckoutState(t *testing.T) {
 		}
 		return root
 	}
-	hidden := module(t, "package main\n\nimport (\n\t_ \"example.com/fixture/.agents/x\"\n\t_ \"example.com/fixture/lib\"\n)\n\nfunc main() {}\n")
-	if err := checkDependencyInputs(hidden); err == nil || !strings.Contains(err.Error(), "from checkout state .agents/x") {
-		t.Fatalf("hidden package not refused: %v", err)
+	for _, aliasPWD := range []bool{false, true} {
+		environment := "default-env"
+		if aliasPWD {
+			environment = "alias-pwd"
+		}
+		t.Run(environment, func(t *testing.T) {
+			for _, spelling := range []string{"supplied", "physical", "symlink"} {
+				t.Run(spelling, func(t *testing.T) {
+					for _, hidden := range []bool{true, false} {
+						name := "plain"
+						main := "package main\n\nimport _ \"example.com/fixture/lib\"\n\nfunc main() {}\n"
+						if hidden {
+							name = "hidden"
+							main = "package main\n\nimport (\n\t_ \"example.com/fixture/.agents/x\"\n\t_ \"example.com/fixture/lib\"\n)\n\nfunc main() {}\n"
+						}
+						t.Run(name, func(t *testing.T) {
+							root := module(t, main)
+							if spelling != "supplied" {
+								var err error
+								root, err = filepath.EvalSymlinks(root)
+								if err != nil {
+									t.Fatal(err)
+								}
+							}
+							alias := ""
+							if spelling == "symlink" || aliasPWD {
+								alias = filepath.Join(t.TempDir(), "module")
+								if err := os.Symlink(root, alias); err != nil {
+									t.Fatal(err)
+								}
+							}
+							if spelling == "symlink" {
+								root = alias
+							}
+							if aliasPWD {
+								rootInfo, err := os.Stat(root)
+								if err != nil {
+									t.Fatal(err)
+								}
+								aliasInfo, err := os.Stat(alias)
+								if err != nil || !os.SameFile(rootInfo, aliasInfo) {
+									t.Fatalf("PWD alias does not name the module: %v", err)
+								}
+								t.Setenv("PWD", alias)
+							}
+							err := checkDependencyInputs(root)
+							if hidden {
+								if err == nil || !strings.Contains(err.Error(), "from checkout state .agents/x") {
+									t.Fatalf("hidden package not refused: %v", err)
+								}
+							} else if err != nil {
+								t.Fatalf("control: %v", err)
+							}
+						})
+					}
+				})
+			}
+		})
 	}
-	plain := module(t, "package main\n\nimport _ \"example.com/fixture/lib\"\n\nfunc main() {}\n")
-	if err := checkDependencyInputs(plain); err != nil {
-		t.Fatalf("control: %v", err)
+}
+
+// A missing module root remains a specific filesystem failure, never an empty
+// dependency inventory that can be accepted as a successful scan.
+func TestDependencyGraphMissingRoot(t *testing.T) {
+	err := checkDependencyInputs(filepath.Join(t.TempDir(), "absent"))
+	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "resolve module root") {
+		t.Fatalf("missing root: %v", err)
 	}
 }
 
