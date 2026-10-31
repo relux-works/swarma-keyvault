@@ -1,0 +1,10 @@
+{
+  "session": "startup",
+  "note": "negative: an unknown signer subcommand is usage, exit 2",
+  "args": [
+    "signer",
+    "attest"
+  ],
+  "exit": 2,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"usage\",\"message\":\"unknown signer command \\\"attest\\\"; use serve\",\"hint\":\"mac-keyvault signer serve --address <service>/<purpose> [--kind K] [--version N]\"}}"
+}

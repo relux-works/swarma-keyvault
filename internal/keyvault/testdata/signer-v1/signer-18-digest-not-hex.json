@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request (not hex)",
+  "request": {
+    "id": 18,
+    "op": "sign",
+    "digest": "zz"
+  },
+  "response": "{\"id\":18,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"digest must be hex: encoding/hex: invalid byte: U+007A 'z'\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

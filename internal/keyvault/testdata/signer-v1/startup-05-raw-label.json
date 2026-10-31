@@ -1,0 +1,12 @@
+{
+  "session": "startup",
+  "note": "negative: a raw label inside the prefix is foreign_label, exit 3, before the store is opened",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "works.relux.mac-keyvault.key.kvctl.pki-root.v1"
+  ],
+  "exit": 3,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"foreign_label\",\"message\":\"\\\"works.relux.mac-keyvault.key.kvctl.pki-root.v1\\\" is not a <service>/<purpose> address; raw labels are not accepted\",\"hint\":\"addresses are <service>/<purpose>, optionally with --kind and --version; the label is derived by the vault\"}}"
+}

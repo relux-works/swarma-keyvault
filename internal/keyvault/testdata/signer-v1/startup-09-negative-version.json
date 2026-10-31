@@ -1,0 +1,14 @@
+{
+  "session": "startup",
+  "note": "negative: a negative --version is invalid_purpose, exit 3",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "test/guard",
+    "--version",
+    "-1"
+  ],
+  "exit": 3,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"invalid_purpose\",\"message\":\"version -1 must be at least 1\",\"hint\":\"nothing was created or changed; fix the input and rerun\"}}"
+}

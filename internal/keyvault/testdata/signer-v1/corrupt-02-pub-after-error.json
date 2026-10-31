@@ -1,0 +1,9 @@
+{
+  "session": "corrupt",
+  "note": "positive control: pub answers after the failed sign; the stream continues",
+  "request": {
+    "id": 2,
+    "op": "pub"
+  },
+  "response": "{\"id\":2,\"ok\":true,\"result\":{\"label\":\"works.relux.mac-keyvault.key.test.corrupt.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":\"spki-der\",\"der_base64\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzy1HdI63vAcAf4cUlYvWpS6iaeaI6ROZ8mBfKzQxrvlI9Q72+ezK4lkUbdhWk/LOLq9ywBPyt9SQyXupx+dllA==\"}}"
+}

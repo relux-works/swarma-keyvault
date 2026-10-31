@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "positive control after the duplicate refusals: the stream never ended and sign still reaches the backend",
+  "request": {
+    "id": 39,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":39,\"ok\":true,\"result\":{\"label\":\"works.relux.mac-keyvault.key.test.signer.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"hash\":\"sha256\",\"digest\":\"e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2\",\"format\":\"ecdsa-der-low-s\",\"signature\":\"304402200f04c66e3ea5b1834951596367d99a939f60459e5c1b47e5d0f1a1ae13e7904a02201a2834bc8f7b827c87ccaf03f76396c9e64d21ea65138b0337b927c4ddbee652\",\"signature_base64\":\"MEQCIA8Exm4+pbGDSVFZY2fZmpOfYEWeXBtH5dDxoa4T55BKAiAaKDS8j3uCfIfMrwP3Y5bJ5k0h6mUTiwM3uSfE3b7mUg==\",\"low_s\":true,\"normalized\":false}}"
+}

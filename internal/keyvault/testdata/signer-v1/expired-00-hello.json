@@ -1,0 +1,5 @@
+{
+  "session": "expired",
+  "note": "hello for a record whose validity.not_after passed",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/expired\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.expired.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}

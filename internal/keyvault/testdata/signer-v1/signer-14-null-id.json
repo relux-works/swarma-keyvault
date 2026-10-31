@@ -1,0 +1,6 @@
+{
+  "session": "signer",
+  "note": "negative: missing_id for null",
+  "request_raw": "{\"id\":null,\"op\":\"describe\"}",
+  "response": "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"missing_id\",\"message\":\"id is required and must be a JSON string or number\",\"hint\":\"send {\\\"id\\\": <string|number>, \\\"op\\\": ...}; the id is echoed in the response\"}}"
+}

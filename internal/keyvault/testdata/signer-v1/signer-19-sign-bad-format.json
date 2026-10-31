@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request (format)",
+  "request": {
+    "id": 19,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "format": "pkcs1"
+  },
+  "response": "{\"id\":19,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"sign format must be ecdsa-der-low-s or ecdsa-raw, got \\\"pkcs1\\\"\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

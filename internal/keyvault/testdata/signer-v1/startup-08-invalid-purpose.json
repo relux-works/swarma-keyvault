@@ -1,0 +1,12 @@
+{
+  "session": "startup",
+  "note": "negative: a purpose outside [a-z0-9-] is invalid_purpose, exit 3",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "test/Guard"
+  ],
+  "exit": 3,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"invalid_purpose\",\"message\":\"purpose \\\"Guard\\\" must match ^[a-z0-9-]+$ and be 1-40 characters\",\"hint\":\"nothing was created or changed; fix the input and rerun\"}}"
+}

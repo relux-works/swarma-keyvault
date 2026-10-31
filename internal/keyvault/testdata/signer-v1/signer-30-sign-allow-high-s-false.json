@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: explicit allow_high_s false on sign; bad_request, nothing signed",
+  "request": {
+    "id": 30,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "allow_high_s": false
+  },
+  "response": "{\"id\":30,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"sign takes only digest, format besides id and op (got allow_high_s)\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

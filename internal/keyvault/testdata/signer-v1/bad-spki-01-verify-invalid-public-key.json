@@ -1,0 +1,11 @@
+{
+  "session": "bad-spki",
+  "note": "negative: verify against a stored public half that is not a P-256 SPKI is invalid_public_key",
+  "request": {
+    "id": 1,
+    "op": "verify",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "signature": "304402200f04c66e3ea5b1834951596367d99a939f60459e5c1b47e5d0f1a1ae13e7904a02201a2834bc8f7b827c87ccaf03f76396c9e64d21ea65138b0337b927c4ddbee652"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"invalid_public_key\",\"message\":\"public key is not a P-256 SPKI: asn1: structure error: tags don't match (16 vs {class:1 tag:14 length:111 isCompound:true}) {optional:false explicit:false application:false private:false defaultValue:<nil> tag:<nil> stringType:0 timeType:0 set:false omitEmpty:false} publicKeyInfo @2\",\"hint\":\"pass the SPKI DER or PEM that pub produced; nothing was verified\"}}"
+}

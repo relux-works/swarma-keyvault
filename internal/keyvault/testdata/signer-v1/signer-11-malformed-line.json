@@ -1,0 +1,6 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request, id null, stream continues",
+  "request_raw": "{\"id\": 11, \"op\": ",
+  "response": "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"line is not one JSON object: member \\\"op\\\": unexpected EOF\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

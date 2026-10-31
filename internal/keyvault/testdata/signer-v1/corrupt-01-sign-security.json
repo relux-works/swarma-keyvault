@@ -1,0 +1,10 @@
+{
+  "session": "corrupt",
+  "note": "negative: the backend's signature does not verify under the key's own public half; security, nothing emitted",
+  "request": {
+    "id": 1,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"security\",\"message\":\"the signature Security.framework produced for works.relux.mac-keyvault.key.test.corrupt.v1 does not verify under its own public key\",\"hint\":\"nothing was emitted; the keychain item may be damaged, describe and rotate it\"}}"
+}

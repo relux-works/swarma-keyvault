@@ -1,0 +1,9 @@
+{
+  "session": "bad-spki",
+  "note": "positive control: describe still answers after the errors",
+  "request": {
+    "id": 3,
+    "op": "describe"
+  },
+  "response": "{\"id\":3,\"ok\":true,\"result\":{\"algorithm\":\"ec-p256\",\"created\":\"2023-11-14T22:13:20Z\",\"description\":\"signer contract v1 golden fixture\",\"exposure\":\"never\",\"extraction\":\"none\",\"findings\":[],\"fingerprint\":\"cRU_iE2T-6ntclsfsuHmBncVHAReOEqRPCNKN3YN04U\",\"format\":{\"public\":\"spki-der\",\"signature\":\"ecdsa-der-low-s\"},\"issuer\":null,\"kind\":\"key\",\"label\":\"works.relux.mac-keyvault.key.test.bad-spki.v1\",\"meta\":{\"owner\":\"golden\"},\"operations\":[{\"name\":\"ecdsa-sha256-sign\",\"input\":\"sha256-digest\",\"output\":\"ecdsa-der-low-s|ecdsa-raw\",\"via\":\"sign\"},{\"name\":\"ecdsa-sha256-verify\",\"input\":\"sha256-digest+signature\",\"output\":\"verdict\",\"via\":\"verify\"},{\"name\":\"ecies-p256-encrypt\",\"input\":\"payload\",\"output\":\"envelope:ecies-x963-sha256-aesgcm\",\"via\":\"reserved\"},{\"name\":\"export-public\",\"input\":\"\",\"output\":\"spki-der|spki-pem|jwk\",\"via\":\"pub\"}],\"origin\":{\"host\":\"testhost\",\"source\":\"generated\",\"tool\":\"mac-keyvault/test\",\"user\":\"tester\"},\"purpose\":\"bad-spki\",\"schema\":2,\"service\":\"test\",\"store\":\"keychain\",\"title\":\"golden bad-spki\",\"usages\":[\"sign\",\"verify\"],\"validity\":{\"not_after\":null,\"not_before\":null},\"version\":1}}"
+}

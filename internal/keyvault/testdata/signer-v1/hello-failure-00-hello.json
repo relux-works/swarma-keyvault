@@ -1,0 +1,5 @@
+{
+  "session": "hello-failure",
+  "note": "startup failure: the backend fails outside the OSStatus space; one hello line, failure, exit 1",
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"failure\",\"message\":\"bridge: helper exited before answering\",\"hint\":\"check the path or environment named in the message and rerun\"}}"
+}

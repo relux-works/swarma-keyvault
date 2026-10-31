@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: invalid_digest on verify (server gate; verify does not pass through Manager.Sign)",
+  "request": {
+    "id": 26,
+    "op": "verify",
+    "digest": "abcd",
+    "signature": "304402200f04c66e3ea5b1834951596367d99a939f60459e5c1b47e5d0f1a1ae13e7904a02201a2834bc8f7b827c87ccaf03f76396c9e64d21ea65138b0337b927c4ddbee652"
+  },
+  "response": "{\"id\":26,\"ok\":false,\"error\":{\"code\":\"invalid_digest\",\"message\":\"digest is 2 bytes; ecdsa-sha256 takes exactly a 32-byte SHA-256 digest\",\"hint\":\"digest is the SHA-256 digest of the payload as 64 hex characters; nothing was verified\"}}"
+}

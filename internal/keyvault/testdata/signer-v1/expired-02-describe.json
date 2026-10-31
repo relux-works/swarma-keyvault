@@ -1,0 +1,9 @@
+{
+  "session": "expired",
+  "note": "describe reports validity_expired and no sign operation",
+  "request": {
+    "id": 2,
+    "op": "describe"
+  },
+  "response": "{\"id\":2,\"ok\":true,\"result\":{\"algorithm\":\"ec-p256\",\"created\":\"2023-11-14T22:13:20Z\",\"description\":\"signer contract v1 golden fixture\",\"exposure\":\"never\",\"extraction\":\"none\",\"findings\":[\"validity_expired\"],\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":{\"public\":\"spki-der\",\"signature\":\"ecdsa-der-low-s\"},\"issuer\":null,\"kind\":\"key\",\"label\":\"works.relux.mac-keyvault.key.test.expired.v1\",\"meta\":{\"owner\":\"golden\"},\"operations\":[{\"name\":\"ecdsa-sha256-verify\",\"input\":\"sha256-digest+signature\",\"output\":\"verdict\",\"via\":\"verify\"},{\"name\":\"ecies-p256-encrypt\",\"input\":\"payload\",\"output\":\"envelope:ecies-x963-sha256-aesgcm\",\"via\":\"reserved\"},{\"name\":\"export-public\",\"input\":\"\",\"output\":\"spki-der|spki-pem|jwk\",\"via\":\"pub\"}],\"origin\":{\"host\":\"testhost\",\"source\":\"generated\",\"tool\":\"mac-keyvault/test\",\"user\":\"tester\"},\"purpose\":\"expired\",\"schema\":2,\"service\":\"test\",\"store\":\"keychain\",\"title\":\"golden expired\",\"usages\":[\"sign\",\"verify\"],\"validity\":{\"not_after\":\"2026-01-01T00:00:00Z\",\"not_before\":null},\"version\":1}}"
+}

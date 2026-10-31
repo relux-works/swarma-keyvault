@@ -1,0 +1,5 @@
+{
+  "session": "hello-entitlement",
+  "note": "startup failure: listing fails with -34018; one hello line, missing_entitlement, exit 1",
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"missing_entitlement\",\"message\":\"Security.framework refused list with errSecMissingEntitlement: the Secure Enclave and the Data Protection keychain need a binary signed with a provisioning profile\",\"hint\":\"this binary is not signed with a provisioning profile; use the login keychain store (drop --enclave / --user-presence); nothing was created and no fallback was made\",\"os_status\":-34018}}"
+}

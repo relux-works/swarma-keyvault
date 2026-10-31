@@ -1,0 +1,9 @@
+{
+  "session": "signer",
+  "note": "negative: unknown_op",
+  "request": {
+    "id": 16,
+    "op": "export-private"
+  },
+  "response": "{\"id\":16,\"ok\":false,\"error\":{\"code\":\"unknown_op\",\"message\":\"unknown op \\\"export-private\\\"\",\"hint\":\"ops are describe, pub, sign, verify\"}}"
+}

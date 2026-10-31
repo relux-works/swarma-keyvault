@@ -1,0 +1,10 @@
+{
+  "session": "startup",
+  "note": "negative: `signer serve` without --address is usage, exit 2",
+  "args": [
+    "signer",
+    "serve"
+  ],
+  "exit": 2,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"usage\",\"message\":\"signer serve requires --address <service>/<purpose>\",\"hint\":\"mac-keyvault signer serve --address <service>/<purpose> [--kind K] [--version N]\"}}"
+}

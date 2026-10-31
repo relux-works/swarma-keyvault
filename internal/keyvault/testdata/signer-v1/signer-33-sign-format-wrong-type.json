@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: a member the op takes with the wrong JSON type; bad_request",
+  "request": {
+    "id": 33,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "format": 7
+  },
+  "response": "{\"id\":33,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"request member has the wrong type: json: cannot unmarshal number into Go struct field Request.format of type string\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

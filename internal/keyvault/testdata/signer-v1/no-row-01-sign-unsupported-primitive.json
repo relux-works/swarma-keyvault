@@ -1,0 +1,10 @@
+{
+  "session": "no-row",
+  "note": "negative: sign on a record without a registry row is unsupported_primitive",
+  "request": {
+    "id": 1,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"unsupported_primitive\",\"message\":\"works.relux.mac-keyvault.key.test.no-row.v1 is (key, ec-p256, enclave), a primitive this revision has no registry row for\",\"hint\":\"only (key, ec-p256, keychain) and (key, ec-p256, enclave) perform operations in this revision\"}}"
+}

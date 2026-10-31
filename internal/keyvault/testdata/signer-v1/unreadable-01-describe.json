@@ -1,0 +1,9 @@
+{
+  "session": "unreadable",
+  "note": "describe reports the unreadable tag as a finding; policy unknown",
+  "request": {
+    "id": 1,
+    "op": "describe"
+  },
+  "response": "{\"id\":1,\"ok\":true,\"result\":{\"algorithm\":\"unknown\",\"created\":null,\"description\":\"\",\"exposure\":\"unknown\",\"extraction\":\"unknown\",\"findings\":[\"unsupported_primitive\",\"record_unreadable\"],\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":{},\"issuer\":null,\"kind\":\"unknown\",\"label\":\"works.relux.mac-keyvault.key.test.unreadable.v1\",\"meta\":{},\"operations\":[],\"origin\":{\"host\":\"\",\"source\":\"\",\"tool\":\"\",\"user\":\"\"},\"purpose\":\"unknown\",\"schema\":0,\"service\":\"unknown\",\"store\":\"unknown\",\"title\":\"\",\"usages\":null,\"validity\":{\"not_after\":null,\"not_before\":null},\"version\":0}}"
+}

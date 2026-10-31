@@ -1,0 +1,10 @@
+{
+  "session": "expired",
+  "note": "negative: expired",
+  "request": {
+    "id": 1,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"expired\",\"message\":\"works.relux.mac-keyvault.key.test.expired.v1 expired at 2026-01-01T00:00:00Z (validity.not_after); ecdsa-sha256-sign is refused\",\"hint\":\"rotate creates the next generation with the same not_after; init a fresh record for a new validity\"}}"
+}

@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: unknown_op — ops are matched exactly, SIGN is not sign",
+  "request": {
+    "id": 25,
+    "op": "SIGN",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":25,\"ok\":false,\"error\":{\"code\":\"unknown_op\",\"message\":\"unknown op \\\"SIGN\\\"\",\"hint\":\"ops are describe, pub, sign, verify\"}}"
+}

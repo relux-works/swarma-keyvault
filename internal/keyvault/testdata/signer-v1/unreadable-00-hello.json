@@ -1,0 +1,5 @@
+{
+  "session": "unreadable",
+  "note": "hello line: the record is unreadable but the item resolves; label and fingerprint are announced",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/unreadable\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.unreadable.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}

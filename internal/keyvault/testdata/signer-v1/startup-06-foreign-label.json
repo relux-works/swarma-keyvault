@@ -1,0 +1,12 @@
+{
+  "session": "startup",
+  "note": "negative: a label outside the prefix is foreign_label, exit 3",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "com.apple.security.something"
+  ],
+  "exit": 3,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"foreign_label\",\"message\":\"\\\"com.apple.security.something\\\" is not a <service>/<purpose> address; raw labels are not accepted\",\"hint\":\"addresses are <service>/<purpose>, optionally with --kind and --version; the label is derived by the vault\"}}"
+}

@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: explicit empty signature on pub; bad_request",
+  "request": {
+    "id": 31,
+    "op": "pub",
+    "signature": ""
+  },
+  "response": "{\"id\":31,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"pub takes only format besides id and op (got signature)\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

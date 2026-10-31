@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: explicit allow_high_s false on pub; bad_request",
+  "request": {
+    "id": 29,
+    "op": "pub",
+    "allow_high_s": false
+  },
+  "response": "{\"id\":29,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"pub takes only format besides id and op (got allow_high_s)\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

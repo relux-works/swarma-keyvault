@@ -1,0 +1,10 @@
+{
+  "session": "verify-only",
+  "note": "negative: usage_refused",
+  "request": {
+    "id": 1,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"usage_refused\",\"message\":\"works.relux.mac-keyvault.key.test.verify-only.v1 has usages [verify]; ecdsa-sha256-sign requires usage sign\",\"hint\":\"init a record with --usages including sign; usages are fixed at creation\"}}"
+}

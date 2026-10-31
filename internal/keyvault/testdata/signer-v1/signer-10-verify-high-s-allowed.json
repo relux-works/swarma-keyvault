@@ -1,0 +1,12 @@
+{
+  "session": "signer",
+  "note": "positive control: allow_high_s accepts the twin",
+  "request": {
+    "id": 10,
+    "op": "verify",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "signature": "304502200f04c66e3ea5b1834951596367d99a939f60459e5c1b47e5d0f1a1ae13e7904a022100e5d7cb4270847d84783350fc089c6935d699d8c342041381bc00a2fe1ea43eff",
+    "allow_high_s": true
+  },
+  "response": "{\"id\":10,\"ok\":true,\"result\":{\"label\":\"works.relux.mac-keyvault.key.test.signer.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"hash\":\"sha256\",\"digest\":\"e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2\",\"format\":\"ecdsa-der-low-s\",\"low_s\":false,\"high_s_allowed\":true,\"verified\":true}}"
+}

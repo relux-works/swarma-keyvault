@@ -1,0 +1,10 @@
+{
+  "session": "entitlement",
+  "note": "negative: sign answered by Security.framework with -34018 is missing_entitlement with os_status",
+  "request": {
+    "id": 1,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"missing_entitlement\",\"message\":\"Security.framework refused sign with errSecMissingEntitlement: the Secure Enclave and the Data Protection keychain need a binary signed with a provisioning profile\",\"hint\":\"this binary is not signed with a provisioning profile; use the login keychain store (drop --enclave / --user-presence); nothing was created and no fallback was made\",\"os_status\":-34018}}"
+}

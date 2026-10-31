@@ -1,0 +1,5 @@
+{
+  "session": "bad-spki",
+  "note": "hello for a record whose stored public half is not a P-256 SPKI",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/bad-spki\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.bad-spki.v1\",\"fingerprint\":\"cRU_iE2T-6ntclsfsuHmBncVHAReOEqRPCNKN3YN04U\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}

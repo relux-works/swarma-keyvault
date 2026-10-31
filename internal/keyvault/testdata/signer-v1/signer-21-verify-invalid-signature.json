@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: invalid_signature",
+  "request": {
+    "id": 21,
+    "op": "verify",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "signature": "3000"
+  },
+  "response": "{\"id\":21,\"ok\":false,\"error\":{\"code\":\"invalid_signature\",\"message\":\"signature is not a DER ECDSA-Sig-Value: asn1: syntax error: sequence truncated\",\"hint\":\"pass the DER SEQUENCE {r, s} the sign command produced, or --raw for r||s; nothing was verified\"}}"
+}

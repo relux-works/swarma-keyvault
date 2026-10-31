@@ -1,0 +1,6 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request under id null for a member repeated inside an object nested in an array member (rev8 F1)",
+  "request_raw": "{\"id\":41,\"op\":\"sign\",\"digest\":\"e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2\",\"x\":[{\"z\":1},{\"z\":1,\"z\":2}]}",
+  "response": "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"line is not one JSON object: duplicate member \\\"z\\\" at x[1]\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

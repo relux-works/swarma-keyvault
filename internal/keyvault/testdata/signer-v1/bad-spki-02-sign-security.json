@@ -1,0 +1,10 @@
+{
+  "session": "bad-spki",
+  "note": "negative: sign cannot re-check the signature under a public half that is not a P-256 SPKI; security, nothing emitted",
+  "request": {
+    "id": 2,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":2,\"ok\":false,\"error\":{\"code\":\"security\",\"message\":\"the signature Security.framework produced for works.relux.mac-keyvault.key.test.bad-spki.v1 does not verify under its own public key\",\"hint\":\"nothing was emitted; the keychain item may be damaged, describe and rotate it\"}}"
+}

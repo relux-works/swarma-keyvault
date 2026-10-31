@@ -1,0 +1,9 @@
+{
+  "session": "signer",
+  "note": "a string id is echoed verbatim",
+  "request": {
+    "id": "req-24",
+    "op": "pub"
+  },
+  "response": "{\"id\":\"req-24\",\"ok\":true,\"result\":{\"label\":\"works.relux.mac-keyvault.key.test.signer.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":\"spki-der\",\"der_base64\":\"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzy1HdI63vAcAf4cUlYvWpS6iaeaI6ROZ8mBfKzQxrvlI9Q72+ezK4lkUbdhWk/LOLq9ywBPyt9SQyXupx+dllA==\"}}"
+}

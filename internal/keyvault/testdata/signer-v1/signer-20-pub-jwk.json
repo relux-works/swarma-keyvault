@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request (pub format outside contract)",
+  "request": {
+    "id": 20,
+    "op": "pub",
+    "format": "jwk"
+  },
+  "response": "{\"id\":20,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"pub format must be spki-der or spki-pem, got \\\"jwk\\\"\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

@@ -1,0 +1,6 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request under id null when one line carries two JSON documents; the first is never answered on its own",
+  "request_raw": "{\"id\":43,\"op\":\"describe\"} {\"id\":44,\"op\":\"describe\"}",
+  "response": "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"line is not one JSON object: unexpected data after the JSON document\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

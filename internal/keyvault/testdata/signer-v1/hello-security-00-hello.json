@@ -1,0 +1,5 @@
+{
+  "session": "hello-security",
+  "note": "startup failure: listing the keychain fails with a Security status; one hello line, ok false, security with os_status, exit 1",
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"security\",\"message\":\"Security.framework list failed with errSecInteractionNotAllowed\",\"hint\":\"errSecInteractionNotAllowed (-25308) from list; check the login keychain state and rerun\",\"os_status\":-25308}}"
+}

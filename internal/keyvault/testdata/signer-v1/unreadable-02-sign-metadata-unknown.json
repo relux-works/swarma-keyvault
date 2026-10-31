@@ -1,0 +1,10 @@
+{
+  "session": "unreadable",
+  "note": "negative: sign on an unreadable record is metadata_unknown; nothing signed",
+  "request": {
+    "id": 2,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2"
+  },
+  "response": "{\"id\":2,\"ok\":false,\"error\":{\"code\":\"metadata_unknown\",\"message\":\"works.relux.mac-keyvault.key.test.unreadable.v1 does not carry a readable schema-2 record; its policy is unknown, so ecdsa-sha256-sign is not performed\",\"hint\":\"describe shows the findings; delete --confirm and init a fresh record\"}}"
+}

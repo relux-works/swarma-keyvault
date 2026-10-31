@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "pub spki-pem",
+  "request": {
+    "id": 3,
+    "op": "pub",
+    "format": "spki-pem"
+  },
+  "response": "{\"id\":3,\"ok\":true,\"result\":{\"label\":\"works.relux.mac-keyvault.key.test.signer.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":\"spki-pem\",\"pem\":\"-----BEGIN PUBLIC KEY-----\\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzy1HdI63vAcAf4cUlYvWpS6iaeaI\\n6ROZ8mBfKzQxrvlI9Q72+ezK4lkUbdhWk/LOLq9ywBPyt9SQyXupx+dllA==\\n-----END PUBLIC KEY-----\\n\"}}"
+}

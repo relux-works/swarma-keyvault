@@ -1,0 +1,13 @@
+{
+  "session": "startup",
+  "note": "negative: the vault cannot be opened (lock path unavailable) is failure, exit 1, one hello line",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "test/guard"
+  ],
+  "exit": 1,
+  "setup": "lock-path-unavailable",
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"failure\",\"message\":\"lock path: no writable state directory: HOME is unset\",\"hint\":\"check the path or environment named in the message and rerun\"}}"
+}

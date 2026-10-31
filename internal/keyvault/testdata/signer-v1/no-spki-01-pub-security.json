@@ -1,0 +1,9 @@
+{
+  "session": "no-spki",
+  "note": "negative: pub with an unreadable public half is security (no os_status: not a framework status)",
+  "request": {
+    "id": 1,
+    "op": "pub"
+  },
+  "response": "{\"id\":1,\"ok\":false,\"error\":{\"code\":\"security\",\"message\":\"public key of works.relux.mac-keyvault.key.test.no-spki.v1 is unreadable; fingerprint unknown\",\"hint\":\"describe shows the findings; rotate the record\"}}"
+}

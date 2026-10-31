@@ -1,0 +1,9 @@
+{
+  "session": "no-row",
+  "note": "positive control: describe answers after the refusals with the unsupported_primitive finding and no operations",
+  "request": {
+    "id": 3,
+    "op": "describe"
+  },
+  "response": "{\"id\":3,\"ok\":true,\"result\":{\"algorithm\":\"ec-p256\",\"created\":\"2023-11-14T22:13:20Z\",\"description\":\"signer contract v1 golden fixture\",\"exposure\":\"unknown\",\"extraction\":\"none\",\"findings\":[\"unsupported_primitive\"],\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"format\":{\"public\":\"spki-der\",\"signature\":\"ecdsa-der-low-s\"},\"issuer\":null,\"kind\":\"key\",\"label\":\"works.relux.mac-keyvault.key.test.no-row.v1\",\"meta\":{\"owner\":\"golden\"},\"operations\":[],\"origin\":{\"host\":\"testhost\",\"source\":\"generated\",\"tool\":\"mac-keyvault/test\",\"user\":\"tester\"},\"purpose\":\"no-row\",\"schema\":2,\"service\":\"test\",\"store\":\"enclave\",\"title\":\"golden no-row\",\"usages\":[\"sign\",\"verify\"],\"validity\":{\"not_after\":null,\"not_before\":null},\"version\":1}}"
+}

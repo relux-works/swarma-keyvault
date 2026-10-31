@@ -1,0 +1,5 @@
+{
+  "session": "signer",
+  "note": "hello line: contract 1, label, fingerprint, ops",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/signer\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.signer.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}

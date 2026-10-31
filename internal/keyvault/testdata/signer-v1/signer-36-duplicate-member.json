@@ -1,0 +1,6 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request under id null for a repeated member (the first digest is not the one sent last; nothing is signed)",
+  "request_raw": "{\"id\":36,\"op\":\"sign\",\"digest\":\"00\",\"digest\":\"e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2\"}",
+  "response": "{\"id\":null,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"line is not one JSON object: duplicate member \\\"digest\\\"\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

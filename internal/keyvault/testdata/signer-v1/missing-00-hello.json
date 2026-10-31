@@ -1,0 +1,5 @@
+{
+  "session": "missing",
+  "note": "negative: startup failure hello with not_found; no further lines",
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"not_found\",\"message\":\"key not found: test/missing\",\"hint\":\"no version of test/missing exists for any kind; list shows every record\"}}"
+}

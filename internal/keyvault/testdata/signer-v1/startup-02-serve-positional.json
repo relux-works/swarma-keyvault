@@ -1,0 +1,13 @@
+{
+  "session": "startup",
+  "note": "negative: a positional argument is usage, exit 2",
+  "args": [
+    "signer",
+    "serve",
+    "--address",
+    "test/guard",
+    "extra"
+  ],
+  "exit": 2,
+  "response": "{\"contract\":1,\"ok\":false,\"error\":{\"code\":\"usage\",\"message\":\"signer serve takes no positional arguments; use --address (got \\\"extra\\\")\",\"hint\":\"mac-keyvault signer serve --address <service>/<purpose> [--kind K] [--version N]\"}}"
+}

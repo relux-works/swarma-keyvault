@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: bad_request for a member outside the contract",
+  "request": {
+    "id": 12,
+    "op": "sign",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "bogus": 1
+  },
+  "response": "{\"id\":12,\"ok\":false,\"error\":{\"code\":\"bad_request\",\"message\":\"sign takes only digest, format besides id and op (got bogus)\",\"hint\":\"requests are one JSON object per line: {id, op, ...params}; see the signerclient package for the fields each op takes\"}}"
+}

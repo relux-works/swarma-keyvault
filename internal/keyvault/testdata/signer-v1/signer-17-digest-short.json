@@ -1,0 +1,10 @@
+{
+  "session": "signer",
+  "note": "negative: invalid_digest (wrong length)",
+  "request": {
+    "id": 17,
+    "op": "sign",
+    "digest": "abcd"
+  },
+  "response": "{\"id\":17,\"ok\":false,\"error\":{\"code\":\"invalid_digest\",\"message\":\"digest is 2 bytes; ecdsa-sha256 takes exactly a 32-byte SHA-256 digest\",\"hint\":\"digest is the SHA-256 digest of the payload as 64 hex characters; nothing was signed\"}}"
+}

@@ -1,0 +1,5 @@
+{
+  "session": "backend-failure",
+  "note": "hello for a record whose backend fails sign with an error outside the OSStatus space",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/backend-failure\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.backend-failure.v1\",\"fingerprint\":\"2nXKWMnWmV5HurpMyvnrt-tepY812lt13cG_EjD402s\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}

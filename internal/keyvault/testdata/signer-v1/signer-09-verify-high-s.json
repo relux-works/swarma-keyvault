@@ -1,0 +1,11 @@
+{
+  "session": "signer",
+  "note": "negative: high_s_refused before the vault is read",
+  "request": {
+    "id": 9,
+    "op": "verify",
+    "digest": "e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2",
+    "signature": "304502200f04c66e3ea5b1834951596367d99a939f60459e5c1b47e5d0f1a1ae13e7904a022100e5d7cb4270847d84783350fc089c6935d699d8c342041381bc00a2fe1ea43eff"
+  },
+  "response": "{\"id\":9,\"ok\":false,\"result\":{\"hash\":\"sha256\",\"digest\":\"e26be18e2d49e4df1b0ffc1b33eb909dad3e558f3b24e211270f198a733016c2\",\"format\":\"ecdsa-der-low-s\",\"low_s\":false,\"high_s_allowed\":false,\"verified\":false},\"error\":{\"code\":\"high_s_refused\",\"message\":\"signature s is in the high half of the P-256 order (malleable form); the vault only accepts low-S signatures\",\"hint\":\"signatures made by mac-keyvault are always low-S; set allow_high_s to accept this one knowingly\"}}"
+}

@@ -1,0 +1,5 @@
+{
+  "session": "no-spki",
+  "note": "hello line: public half unreadable; fingerprint is empty, never guessed",
+  "response": "{\"contract\":1,\"ok\":true,\"result\":{\"tool\":\"mac-keyvault\",\"tool_version\":\"test\",\"address\":\"test/no-spki\",\"kind\":\"key\",\"version\":1,\"label\":\"works.relux.mac-keyvault.key.test.no-spki.v1\",\"fingerprint\":\"\",\"ops\":[\"describe\",\"pub\",\"sign\",\"verify\"]}}"
+}
