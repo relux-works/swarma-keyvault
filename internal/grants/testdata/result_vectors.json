@@ -1,0 +1,58 @@
+[
+  {
+    "name": "result-synthetic-canonical",
+    "raw": "{\"action\":\"repository.create\",\"audit_sequence\":\"3\",\"certificate_id\":\"cert-synthetic-1\",\"cycle_id\":\"claude-dm\",\"dispatch_id\":\"dispatch-synthetic-1\",\"entry_id\":\"repo-create\",\"observed_at\":\"2026-10-31T13:01:00Z\",\"operation_use_id\":\"claude-dm/create\",\"provider_receipt_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"repository\":{\"name\":\"matrix-grants-poc-261031\",\"organization\":\"relux-works\",\"provider\":\"github\",\"repository_id\":\"1001\",\"visibility\":\"private\"},\"request_digest\":\"d967a14947434291a9ee0401fc77253e1e85bc5925271ada38782001fe7d64e1\",\"reservation_id\":\"reservation-synthetic-1\",\"state\":\"succeeded\",\"type\":\"grants-result-1\"}",
+    "want_error": "",
+    "kind": "grants-result-1",
+    "state": "succeeded"
+  },
+  {
+    "name": "refused-no-reservation-fields",
+    "raw": "{\"code\":\"receiver-unavailable\",\"input_sha256\":\"7ba980415239801c201e18bdfb50a5de4bfc049b02c2c338cee5da73571e558b\",\"observed_at\":\"2026-10-31T13:00:01Z\",\"state\":\"refused\",\"type\":\"grants-result-1\"}",
+    "want_error": "",
+    "kind": "grants-result-1",
+    "state": "refused"
+  },
+  {
+    "name": "refused-with-fake-repository",
+    "raw": "{\"code\":\"receiver-unavailable\",\"input_sha256\":\"7ba980415239801c201e18bdfb50a5de4bfc049b02c2c338cee5da73571e558b\",\"observed_at\":\"2026-10-31T13:00:01Z\",\"repository\":{\"name\":\"matrix-grants-poc-261031\",\"organization\":\"relux-works\",\"provider\":\"github\",\"repository_id\":\"1001\",\"visibility\":\"private\"},\"state\":\"refused\",\"type\":\"grants-result-1\"}",
+    "want_error": "bad-schema",
+    "kind": "grants-result-1",
+    "state": "refused"
+  },
+  {
+    "name": "held-reserved-before-intent",
+    "raw": "{\"action\":\"repository.create\",\"audit_sequence\":\"3\",\"certificate_id\":\"cert-synthetic-1\",\"cycle_id\":\"claude-dm\",\"entry_id\":\"repo-create\",\"observed_at\":\"2026-10-31T13:01:00Z\",\"operation_use_id\":\"claude-dm/create\",\"request_digest\":\"d967a14947434291a9ee0401fc77253e1e85bc5925271ada38782001fe7d64e1\",\"reservation_id\":\"reservation-synthetic-1\",\"state\":\"reserved\",\"type\":\"grants-result-1\"}",
+    "want_error": "",
+    "kind": "grants-result-1",
+    "state": "reserved"
+  },
+  {
+    "name": "held-blocked-before-intent",
+    "raw": "{\"action\":\"repository.create\",\"audit_sequence\":\"3\",\"certificate_id\":\"cert-synthetic-1\",\"code\":\"expired\",\"cycle_id\":\"claude-dm\",\"entry_id\":\"repo-create\",\"observed_at\":\"2026-10-31T14:00:00Z\",\"operation_use_id\":\"claude-dm/create\",\"request_digest\":\"d967a14947434291a9ee0401fc77253e1e85bc5925271ada38782001fe7d64e1\",\"reservation_id\":\"reservation-synthetic-1\",\"state\":\"blocked\",\"type\":\"grants-result-1\"}",
+    "want_error": "",
+    "kind": "grants-result-1",
+    "state": "blocked"
+  },
+  {
+    "name": "blocked-forged-dispatch-id",
+    "raw": "{\"action\":\"repository.create\",\"audit_sequence\":\"3\",\"certificate_id\":\"cert-synthetic-1\",\"code\":\"expired\",\"cycle_id\":\"claude-dm\",\"dispatch_id\":\"fabricated-intent\",\"entry_id\":\"repo-create\",\"observed_at\":\"2026-10-31T14:00:00Z\",\"operation_use_id\":\"claude-dm/create\",\"request_digest\":\"d967a14947434291a9ee0401fc77253e1e85bc5925271ada38782001fe7d64e1\",\"reservation_id\":\"reservation-synthetic-1\",\"state\":\"blocked\",\"type\":\"grants-result-1\"}",
+    "want_error": "bad-schema",
+    "kind": "grants-result-1",
+    "state": "blocked"
+  },
+  {
+    "name": "held-real-intent-unknown",
+    "raw": "{\"action\":\"repository.create\",\"audit_sequence\":\"3\",\"certificate_id\":\"cert-synthetic-1\",\"code\":\"dispatch-outcome-unknown\",\"cycle_id\":\"claude-dm\",\"dispatch_id\":\"dispatch-synthetic-1\",\"entry_id\":\"repo-create\",\"observed_at\":\"2026-10-31T13:01:00Z\",\"operation_use_id\":\"claude-dm/create\",\"request_digest\":\"d967a14947434291a9ee0401fc77253e1e85bc5925271ada38782001fe7d64e1\",\"reservation_id\":\"reservation-synthetic-1\",\"state\":\"unknown\",\"type\":\"grants-result-1\"}",
+    "want_error": "",
+    "kind": "grants-result-1",
+    "state": "unknown"
+  },
+  {
+    "name": "held-clock-unavailable-no-projection",
+    "raw": "{\"code\":\"clock-unavailable\",\"input_sha256\":\"7ba980415239801c201e18bdfb50a5de4bfc049b02c2c338cee5da73571e558b\",\"type\":\"grants-error-1\"}",
+    "want_error": "",
+    "kind": "grants-error-1",
+    "state": ""
+  }
+]
