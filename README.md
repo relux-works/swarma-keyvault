@@ -60,3 +60,16 @@ may hold multiple grants; finite validity is capped at ten calendar years and
 reissue or expansion requires a fresh owner signature. This certificate layer,
 its audit coverage and Matrix requester/effect integration are not implemented by
 the compatibility extraction above.
+
+The portable `internal/grants` package provides bounded canonical decoding,
+typed untrusted projections, P-256 certificate signature verification against an
+explicit public owner/SPKI pin and comparison of declared certificate/request
+fields. Matching includes exact subject,
+audience, cycle/use, repository and half-open validity predicates. These helpers
+do not establish issuer trust, authenticate receiver context or DELETE receipts,
+check current revocation, reserve a use or authorize an effect. Run their isolated
+portable tests without native custody access:
+
+```sh
+CGO_ENABLED=0 go test ./internal/grants
+```
