@@ -73,3 +73,10 @@ portable tests without native custody access:
 ```sh
 CGO_ENABLED=0 go test ./internal/grants
 ```
+
+Public revocation checks additionally require the retained certificate's exact
+signing authority and target ID; future-effective scheduling is unsupported.
+Immutable replay comparisons require the exact signed envelope and payload in
+the same typed ID namespace. A second valid signature under the same ID is a
+collision. These read-only checks do not insert or revoke records, authenticate
+current storage/lifecycle state, refresh validity or reserve/release a use.
