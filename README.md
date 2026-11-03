@@ -60,3 +60,11 @@ may hold multiple grants; finite validity is capped at ten calendar years and
 reissue or expansion requires a fresh owner signature. This certificate layer,
 its audit coverage and Matrix requester/effect integration are not implemented by
 the compatibility extraction above.
+
+Internal journal framing can encode and read bounded binary records with explicit
+sequence, predecessor-digest and epoch-reference comparisons. Its versioned
+allocation limits are provisional record-layout bounds. Bodies remain opaque;
+framing neither validates lifecycle records nor authenticates an epoch, receiver
+or provider. It does not append, sync, repair or truncate a journal. Package tests
+include exact-byte fixtures, malformed/truncated records and checksum controls;
+these checks establish no native durability or installed custody qualification.
