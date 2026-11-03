@@ -80,3 +80,11 @@ Immutable replay comparisons require the exact signed envelope and payload in
 the same typed ID namespace. A second valid signature under the same ID is a
 collision. These read-only checks do not insert or revoke records, authenticate
 current storage/lifecycle state, refresh validity or reserve/release a use.
+
+Internal journal framing can encode and read bounded binary records with explicit
+sequence, predecessor-digest and epoch-reference comparisons. Its versioned
+allocation limits are provisional record-layout bounds. Bodies remain opaque;
+framing neither validates lifecycle records nor authenticates an epoch, receiver
+or provider. It does not append, sync, repair or truncate a journal. Package tests
+include exact-byte fixtures, malformed/truncated records and checksum controls;
+these checks establish no native durability or installed custody qualification.
