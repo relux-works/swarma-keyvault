@@ -88,3 +88,9 @@ framing neither validates lifecycle records nor authenticates an epoch, receiver
 or provider. It does not append, sync, repair or truncate a journal. Package tests
 include exact-byte fixtures, malformed/truncated records and checksum controls;
 these checks establish no native durability or installed custody qualification.
+
+The internal offline scanner checks a physical frame chain from genesis through
+EOF under an explicit byte budget of at most 64 MiB. It returns only a complete
+physical summary; corruption, an incomplete tail or an over-budget stream returns
+no summary. It neither reconstructs typed grant state nor authenticates the
+caller-supplied epoch reference, and it never repairs or truncates a journal.
