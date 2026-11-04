@@ -67,7 +67,8 @@ func validateJournalActivation(body *journalActivationBody, sequence, wantAudit 
 		seen[ref] = true
 	}
 	for i, ref := range body.heldUses {
-		if !journalEarlierInsertion(ref, sequence) {
+		// A single insertion has one kind, so it cannot also be a predecessor.
+		if !journalEarlierInsertion(ref, sequence) || seen[ref] {
 			return errJournalActivationRef
 		}
 		if i > 0 && (ref.sequence < body.heldUses[i-1].sequence ||

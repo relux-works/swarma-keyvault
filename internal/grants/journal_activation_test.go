@@ -85,6 +85,59 @@ func TestJournalActivationExactBytes(t *testing.T) {
 	}
 }
 
+// One physical insertion cannot be both a certificate predecessor and a held
+// use. Both codec directions reject every tested overlap without partial output
+// or input changes; disjoint refs retain their existing ordering and bytes.
+// These are representation checks, not evidence of actual history or authority.
+func TestJournalActivationDisjointRefs(t *testing.T) {
+	for _, counts := range [][2]int{{0, 0}, {1, 0}, {3, 3}} {
+		t.Run(fmt.Sprintf("valid-%d-%d", counts[0], counts[1]), func(t *testing.T) {
+			body := journalActivationFixture(t, counts[0], counts[1])
+			if counts[0] == 3 {
+				body.predecessors = []journalHistoryRef{{10, 0}, {30, 0}, {20, 0}}
+				body.heldUses = []journalHistoryRef{{1, 0}, {11, 0}, {31, 0}}
+			}
+			want := journalActivationTestWire(t, body)
+			wire, err := encodeJournalActivationBody(body, 2000, 7)
+			if err != nil || !bytes.Equal(wire, want) {
+				t.Fatalf("valid disjoint encoding: %v", err)
+			}
+			got, err := decodeJournalActivationBody(want, 2000, 7)
+			if err != nil || !journalActivationEqual(got, body) {
+				t.Fatalf("valid disjoint decoding: %#v %v", got, err)
+			}
+		})
+	}
+	for p := 0; p < 3; p++ {
+		for h := 0; h < 3; h++ {
+			t.Run(fmt.Sprintf("overlap-predecessor%d-hold%d", p, h), func(t *testing.T) {
+				body := journalActivationFixture(t, 3, 3)
+				body.predecessors[p] = body.heldUses[h]
+				raw := journalActivationTestWire(t, body)
+				t.Run("encode", func(t *testing.T) {
+					got, err := encodeJournalActivationBody(body, 2000, 7)
+					if got != nil || err != errJournalActivationRef {
+						t.Fatalf("overlapping insertion encoding: len%d err%v", len(got), err)
+					}
+					if !bytes.Equal(journalActivationTestWire(t, body), raw) {
+						t.Fatal("refusal changed input body")
+					}
+				})
+				t.Run("decode", func(t *testing.T) {
+					before := bytes.Clone(raw)
+					got, err := decodeJournalActivationBody(raw, 2000, 7)
+					if got != nil || err != errJournalActivationRef {
+						t.Fatalf("overlapping insertion decoding: %#v err%v", got, err)
+					}
+					if !bytes.Equal(raw, before) {
+						t.Fatal("refusal changed input bytes")
+					}
+				})
+			})
+		}
+	}
+}
+
 // Maximum reference counts use an actually complete canonical payload and past
 // numeric refs. This is not a reachable-history, maximum-envelope or authority proof.
 func TestJournalActivationMaximumCounts(t *testing.T) {

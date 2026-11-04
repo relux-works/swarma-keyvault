@@ -108,6 +108,9 @@ EOF under an explicit byte budget of at most 64 MiB. It returns only a complete
 physical summary; corruption, an incomplete tail or an over-budget stream returns
 no summary. It neither reconstructs typed grant state nor authenticates the
 caller-supplied epoch reference, and it never repairs or truncates a journal.
+An empty stream is accepted as a zero-frame summary. Without a separate trusted
+rollback witness, that result cannot distinguish an empty journal from one
+truncated to zero bytes.
 
 The internal activation-body codec checks the bounded binary layout, complete
 canonical certificate representation, reference counts/order and explicit
