@@ -74,6 +74,11 @@ portable tests without native custody access:
 CGO_ENABLED=0 go test ./internal/grants
 ```
 
+The composed signed-request check matches against exactly the payload returned
+by public signature verification under the supplied pin. DELETE matching
+explicitly requires its paired CREATE entry and same-cycle use. It still does
+not authenticate the CREATE result or authorize dispatch.
+
 Public revocation checks additionally require the retained certificate's exact
 signing authority and target ID; future-effective scheduling is unsupported.
 Immutable replay comparisons require the exact signed envelope and payload in

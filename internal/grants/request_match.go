@@ -12,6 +12,20 @@ var (
 	errResourceMismatch = errors.New("resource-mismatch")
 )
 
+// checkSignedRequestMatch verifies the complete signed certificate under the
+// explicit public pin, then matches the request against exactly that verified
+// payload. The caller cannot substitute a separate unsigned certificate.
+// Nil establishes public signature and declaration agreement only, with the
+// same enrollment, lifecycle, receiver, clock, state and effect limits as the
+// two underlying checks. No dispatch capability or private operation results.
+func checkSignedRequestMatch(envelopeRaw, requestRaw []byte, pin publicIssuerPin, runtime, channel string, observedAt time.Time) error {
+	envelope, err := checkSignedRecordWithPin(envelopeRaw, certificateEnvelopeWire, pin)
+	if err != nil {
+		return err
+	}
+	return checkDeclaredRequestMatch(envelope.payload, requestRaw, runtime, channel, observedAt)
+}
+
 // checkDeclaredRequestMatch checks only predicates declared in two untrusted
 // canonical documents and an explicitly supplied runtime/channel/time sample.
 // Nil means the declarations match, never that either document or context is
@@ -73,14 +87,11 @@ func checkDeclaredRequestMatch(certificateRaw, requestRaw []byte, runtime, chann
 		if entry.deleteTarget.resourceTargetText != request.deleteTarget.resourceTargetText {
 			return errResourceMismatch
 		}
-		// The certificate decoder already establishes exactly one paired
-		// CREATE use in this cycle. Bind the request to THAT declared use;
-		// a later custody gate must still authenticate its actual outcome.
-		for _, paired := range certificate.entries {
-			if paired.entryID == entry.deleteTarget.pairedCreateEntry &&
-				!entryDeclaresUse(paired, request.cycleID, request.deleteTarget.createOperationUseID) {
-				return errScheduleMismatch
-			}
+		// Require the paired entry explicitly even though the complete
+		// decoder also checks its existence. Its actual provider outcome
+		// remains a separate authenticated custody requirement.
+		if !pairedCreateDeclaresUse(certificate.entries, entry.deleteTarget.pairedCreateEntry, request.cycleID, request.deleteTarget.createOperationUseID) {
+			return errScheduleMismatch
 		}
 	}
 	// A structurally valid request may not extend the certificate's interval.
@@ -95,6 +106,15 @@ func checkDeclaredRequestMatch(certificateRaw, requestRaw []byte, runtime, chann
 		return ErrExpired
 	}
 	return nil
+}
+
+func pairedCreateDeclaresUse(entries []*entryProjection, entryID, cycleID, operationUseID string) bool {
+	for _, entry := range entries {
+		if entry.entryID == entryID {
+			return entry.action == "repository.create" && entryDeclaresUse(entry, cycleID, operationUseID)
+		}
+	}
+	return false
 }
 
 func entryDeclaresUse(entry *entryProjection, cycleID, operationUseID string) bool {
