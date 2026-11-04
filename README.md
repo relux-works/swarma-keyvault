@@ -18,7 +18,7 @@ migration or installed binary replacement.
 ## Tools and local build
 
 The initial custody target is macOS with Go 1.25.5 or later, cgo and the Apple
-Command Line Tools. `go` builds the two CLI programs, `swiftc` builds the paired
+Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired
 CryptoKit helper, and macOS `sandbox-exec` confines fake-backed test processes.
 From this directory, build only new local artifacts:
 
@@ -218,3 +218,101 @@ against the exact payload and public pin. On any nonzero exit, discard redirecte
 output, including a possible partial output after a successful signature. Issuing
 does not activate, persist or reserve a certificate, authenticate a requester,
 or contact a provider.
+
+### Local repository request and mediation
+
+The bounded local path accepts only the first-issue private CREATE for
+`relux-works/matrix-grants-poc-261031`, under `@alexis:gr.relux.works` and one
+explicitly enrolled cycle. The paired DELETE remains signed certificate data;
+this executor never dispatches it. This is a local proof of concept, with no
+Matrix receiver, device authentication, revocation/reissue workflow or protected
+clock. Its subject is a custodian-declared association to a separately pinned
+P-256 requester key; copying subject JSON without that key cannot authenticate
+a request.
+
+An already provisioned `swarma-grants/requester-local-v1`, generation 1, must be
+an Enclave non-presence, non-extractable signing key. Request signing checks the
+actual resolved record and separate public pin before its single private call:
+
+```sh
+.temp/build/swarma-keyvault grants request \
+  --payload request.json --requester-spki-der requester.spki.der > local-request.json
+```
+
+`request.json` is the existing complete canonical `grants-request-1` payload
+(at most 8,192 bytes), including explicit certificate/entry/cycle/use IDs, subject,
+audience, CREATE target and expiry. This command verifies its own resulting
+signature but does not enroll a key or prove that a certificate allows it. The
+new canonical envelope has exactly `payload`, `signature`, `type`, with type
+`grants-local-request-1`. Payload and low-S DER signature use strict unpadded
+base64url; signing covers SHA-256 of `swarma-grants/local-request/1`, LF and the
+exact request bytes. Limits are 12,288 bytes overall, 10,923 encoded/8,192 decoded
+payload bytes and 96 encoded/72 decoded signature bytes. Existing certificate,
+request and correlation-digest formats retain their contracts.
+
+The custodian supplies a separate canonical local configuration, at most 8,192
+bytes, as an owner-private regular 0600 file, without a final-component symlink.
+It has exactly these fields (formatted here for reading; replace all placeholders):
+
+```json
+{
+  "audience": {"deployment_id": "explicit-local-deployment", "executor_id": "explicit-local-executor"},
+  "cycle": {"channel": "encrypted-dm", "cycle_id": "codex-dm", "runtime": "codex"},
+  "gh_path": "/absolute/path/to/gh",
+  "name": "matrix-grants-poc-261031",
+  "organization": "relux-works",
+  "owner_mxid": "@alexis:gr.relux.works",
+  "owner_spki": "UNPADDED_BASE64URL_OF_SEPARATELY_VERIFIED_OWNER_SPKI_DER",
+  "requester_spki": "UNPADDED_BASE64URL_OF_SEPARATELY_VERIFIED_DISTINCT_REQUESTER_SPKI_DER",
+  "state_dir": "/absolute/path/to/private-local-state",
+  "subject": {
+    "account_mxid": "@actual-requester:example.invalid",
+    "device_ed25519": "ACTUAL_SEPARATELY_OBTAINED_MATRIX_DEVICE_PUBLIC_KEY",
+    "device_id": "ACTUAL_DEVICE"
+  },
+  "type": "grants-local-enrollment-1"
+}
+```
+
+Both public pins must be valid distinct P-256 SPKI DER keys. A P-256 requester
+pin is not a Matrix Ed25519 device key. All subject, audience and cycle values
+must match the signed certificate and request exactly. Provision the state
+directory explicitly with owner-only 0700 permissions before execution; no
+request field or CLI flag can override the enrollment, pins or provider path.
+Keep the same exact config and state directory for subsequent calls. Changing
+config bytes changes the journal epoch and refuses existing history; it is not
+a migration or reset procedure.
+
+```sh
+.temp/build/swarma-keyvault grants execute \
+  --config enrollment.json --certificate signed-certificate.json \
+  --request local-request.json
+```
+
+The mediator validates both signatures, exact fields and host-time validity
+before reservation. Under one local file lock it replays the complete bounded
+journal, then writes and syncs a reservation containing the exact certificate,
+request and use/correlation identity, followed by a synced dispatch intent.
+Only then does the selected absolute `gh` executable receive one
+`api --hostname github.com -X POST orgs/relux-works/repos --input -` invocation,
+with structured JSON stdin for the exact private repository. It uses existing
+GitHub CLI authentication; it never reads or exports credentials. No shell,
+existence probe, adoption, automatic retry or DELETE is performed. The process
+has a 30-second deadline and bounded stdout/stderr. A successful receipt must
+contain a positive integer repository ID, nonempty node ID, exact full name
+and `private: true`, and must be durably recorded before reporting success.
+
+The CLI emits a local `succeeded` observation with repository identifiers, or
+`unknown` and a nonzero exit when dispatch/receipt durability is uncertain.
+After a reservation, the use stays held; a new request ID does not replenish it.
+Do not resend or manually erase state after an unknown result, failed output,
+interruption or incomplete/corrupt journal. Replay never truncates or repairs
+history automatically. Local state is limited to 256 held uses and 64 MiB.
+
+Host time, file sync and cooperating same-user callers are the boundary. A
+same-UID process can rewrite config/state or call `gh` directly; this path claims
+no rollback resistance, protected time or exclusive provider credential access.
+Fake keys, storage fault injection and Go subprocess fixtures exercise this path
+under confinement; they do not qualify real owner presence or provider effects.
+Discard partial signing output on any nonzero exit. Execution output failure
+may follow an actual effect: preserve the journal and treat the use as held.

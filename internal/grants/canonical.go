@@ -16,6 +16,8 @@ const (
 	resultWire
 	revocationWire
 	revocationEnvelopeWire
+	localRequestEnvelopeWire
+	localEnrollmentWire
 )
 
 type wireKind uint8
@@ -65,6 +67,10 @@ func parseCanonical(raw []byte, profile wireProfile) (*wireValue, error) {
 		maximum = 8192
 	case revocationWire:
 		maximum = 4096
+	case localRequestEnvelopeWire:
+		maximum = 12288
+	case localEnrollmentWire:
+		maximum = 8192
 	default:
 		return nil, errBadEncoding
 	}
@@ -186,6 +192,17 @@ func (p *canonicalParser) readString(limit int) (string, error) {
 }
 
 func (p *canonicalParser) fieldStringLimit(depth int, name string) int {
+	if depth == 1 && p.profile == localRequestEnvelopeWire {
+		if name == "payload" {
+			return 10923
+		}
+		if name == "signature" {
+			return 96
+		}
+	}
+	if depth == 1 && p.profile == localEnrollmentWire && (name == "owner_spki" || name == "requester_spki") {
+		return 1366
+	}
 	if depth == 1 && (p.profile == certificateEnvelopeWire || p.profile == revocationEnvelopeWire) {
 		if name == "signature" {
 			return 96

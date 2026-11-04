@@ -8,6 +8,7 @@ const (
 	certificatePayloadField envelopeField = iota + 1
 	revocationPayloadField
 	signatureField
+	localRequestPayloadField
 )
 
 // decodeEnvelopeField checks only a fixed envelope field's bounded canonical
@@ -24,6 +25,8 @@ func decodeEnvelopeField(value string, field envelopeField) ([]byte, error) {
 		encodedMaximum, decodedMaximum = 5462, 4096
 	case signatureField:
 		encodedMaximum, decodedMaximum = 96, 72
+	case localRequestPayloadField:
+		encodedMaximum, decodedMaximum = 10923, 8192
 	default:
 		return nil, errBadSchema
 	}

@@ -19,6 +19,7 @@ func TestEnvelopeBase64Boundaries(t *testing.T) {
 		{certificatePayloadField, 65536, 87382},
 		{revocationPayloadField, 4096, 5462},
 		{signatureField, 72, 96},
+		{localRequestPayloadField, 8192, 10923},
 	}
 	for _, test := range cases {
 		exact := bytes.Repeat([]byte{0xab}, test.limit)
@@ -53,7 +54,7 @@ func TestEnvelopeBase64CanonicalSpellings(t *testing.T) {
 		{"AAAA", []byte{0, 0, 0}}, {"_w", []byte{255}}, {"__8", []byte{255, 255}},
 		{"AQIDBA", []byte{1, 2, 3, 4}},
 	} {
-		for _, field := range []envelopeField{certificatePayloadField, revocationPayloadField, signatureField} {
+		for _, field := range []envelopeField{certificatePayloadField, revocationPayloadField, signatureField, localRequestPayloadField} {
 			got, err := decodeEnvelopeField(test.raw, field)
 			if err != nil || !bytes.Equal(got, test.want) {
 				t.Fatalf("literal %q/%d: %x %v", test.raw, field, got, err)
@@ -75,10 +76,12 @@ func TestEnvelopeBase64CanonicalSpellings(t *testing.T) {
 // raw bytes in a permissive decoder; this implementation must refuse them.
 // This is a representation witness, not a signature/whole-envelope test.
 func TestEnvelopeBase64UnusedBitsAtCap(t *testing.T) {
-	for _, field := range []envelopeField{certificatePayloadField, revocationPayloadField} {
+	for _, field := range []envelopeField{certificatePayloadField, revocationPayloadField, localRequestPayloadField} {
 		limit := 65536
 		if field == revocationPayloadField {
 			limit = 4096
+		} else if field == localRequestPayloadField {
+			limit = 8192
 		}
 		valid := strings.Repeat("A", base64.RawURLEncoding.EncodedLen(limit))
 		alias := valid[:len(valid)-1] + "B"
@@ -98,7 +101,7 @@ func TestEnvelopeBase64UnusedBitsAtCap(t *testing.T) {
 // Unsupported selectors refuse without decoding bytes or returning a value;
 // a fixed supported selector remains available immediately afterwards.
 func TestEnvelopeBase64UnknownField(t *testing.T) {
-	for _, field := range []envelopeField{0, 4, 255} {
+	for _, field := range []envelopeField{0, localRequestPayloadField + 1, 255} {
 		if out, err := decodeEnvelopeField("AA", field); !errors.Is(err, errBadSchema) || out != nil {
 			t.Fatal("unknown selector", out, err)
 		}
