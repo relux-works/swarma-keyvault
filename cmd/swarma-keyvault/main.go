@@ -30,6 +30,18 @@ func (v *onceString) Set(value string) error {
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) >= 2 && args[0] == "grants" {
+		switch args[1] {
+		case "a2a-prepare":
+			return runA2ACertificate(args[2:], stdin, stdout, stderr, false)
+		case "a2a-issue":
+			return runA2ACertificate(args[2:], stdin, stdout, stderr, true)
+		case "a2a-request-prepare":
+			return runA2ARequest(args[2:], stdin, stdout, stderr, false)
+		case "a2a-request-pack":
+			return runA2ARequest(args[2:], stdin, stdout, stderr, true)
+		}
+	}
 	if len(args) >= 2 && args[0] == "grants" && args[1] == "local-issue" {
 		return runIssueProfile(args[2:], stdin, stdout, stderr, true)
 	}

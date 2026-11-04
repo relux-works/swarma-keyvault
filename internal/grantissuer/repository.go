@@ -21,9 +21,14 @@ var ErrOwnerKeyMismatch = errors.New("owner presence key does not match the type
 // Prepared binds one exact payload and independently expected public pin. The
 // fixed first-slice scope does not expose a generic digest-signing interface.
 type Prepared struct {
-	plan   *grants.RepositoryIssuance
+	plan interface {
+		Digest() [32]byte
+		Review() string
+		SignedEnvelope([]byte) ([]byte, error)
+	}
 	public []byte
 	local  bool
+	reason string
 }
 
 func Prepare(payload, expectedPublicDER []byte) (*Prepared, error) {
@@ -44,12 +49,29 @@ func PrepareLocal(payload, expectedOwnerDER, expectedRequesterDER []byte) (*Prep
 	return &Prepared{plan: plan, public: bytes.Clone(expectedOwnerDER), local: true}, nil
 }
 
+// PrepareA2A checks the separate single-CREATE identity-key profile, including
+// its complete nontruncated presence reason, before any manager is constructed.
+func PrepareA2A(payload, expectedOwnerDER, expectedRequesterDER []byte) (*Prepared, error) {
+	plan, err := grants.PrepareA2ACertificate(payload, OwnerMXID, expectedOwnerDER, expectedRequesterDER)
+	if err != nil {
+		return nil, err
+	}
+	reason, err := plan.Prompt()
+	if err != nil {
+		return nil, err
+	}
+	return &Prepared{plan: plan, public: bytes.Clone(expectedOwnerDER), reason: reason}, nil
+}
+
 // Prompt names only the digest this exact typed preparation will sign. The
 // helper's presence dialog still names its selected key separately.
 func (p *Prepared) Prompt(digest []byte) string {
 	want := p.plan.Digest()
 	if !bytes.Equal(digest, want[:]) {
 		return ""
+	}
+	if p.reason != "" {
+		return p.reason
 	}
 	prefix := "grant repository.create "
 	if p.local {

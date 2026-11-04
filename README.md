@@ -361,3 +361,79 @@ Fake keys, storage fault injection and Go subprocess fixtures exercise this path
 under confinement; they do not qualify real owner presence or provider effects.
 Discard partial signing output on any nonzero exit. Execution output failure
 may follow an actual effect: preserve the journal and treat the use as held.
+
+## Application-key grant preparation
+
+The separate `grants-a2a-certificate-1` profile binds a full Matrix account ID
+and a P-256 public-key SPKI SHA256. Its current narrow scope is one private
+CREATE of `relux-works/matrix-grants-g2-261104`, one use, a positive interval of
+at most 30 minutes, and no DELETE. It does not reinterpret an existing local
+certificate, authenticate a Matrix device or implement E2EE. Application-key
+signatures do not isolate processes sharing the same OS user or provider login.
+
+Prepare the exact unsigned certificate with separately admitted public pins:
+
+```sh
+.temp/build/swarma-keyvault grants a2a-prepare \
+  --payload certificate.canonical.json \
+  --owner-spki-der owner.der --requester-spki-der grantee.der \
+  > certificate.checked.json 2> certificate.review.txt
+```
+
+This public-only operation returns the unchanged checked payload and a complete
+review. The presence reason derives from that same immutable payload: action,
+private resource, full grantee ID, 16 hexadecimal characters of its key hash,
+the exact interval in MSK, and the final 12 hexadecimal characters of the
+domain digest. Seconds and the second date are included when needed; times are
+not rounded. An invalid, control-containing or over-200-Unicode-scalar reason
+refuses preparation. Nothing is truncated. This cap matches the current helper
+preprocessing; it is not evidence that macOS displays every character.
+
+The distinct `a2a-issue` command takes the same flags. It prepares the complete
+certificate and reason before constructing the signing manager, then requires
+the fixed owner key's exact generation, public pin, nonextractability and
+Enclave/presence policy. It writes the full review before the private call and
+verifies the resulting DER low-S signature. It neither creates keys nor installs
+or activates a grant. A separate attended authorization is required to invoke
+it; the human handles the OS prompt. A failure produces no retry or fallback.
+
+For a requester, public preparation and signature packing are separate:
+
+```sh
+.temp/build/swarma-keyvault grants a2a-request-prepare \
+  --payload request.canonical.json --request action.canonical.json \
+  > request.prepared.json
+
+.temp/build/swarma-keyvault grants a2a-request-pack \
+  --payload request.canonical.json --request action.canonical.json \
+  --signature request.signature.der --public-spki-der grantee.der \
+  > request.envelope.json
+```
+
+Preparation emits exact base64url payloads and `digest_sha256`: SHA256 of
+`swarma-grants/a2a-request/1`, one LF, and the exact canonical request. The
+admitted `mac-keyvault sign --digest HEX --format ecdsa-der-low-s --out FILE`
+primitive signs those 32 digest bytes once. Hashing the digest file again or
+signing the request without its domain is a different operation. Packing checks
+the signature against the supplied public key; that check alone does not make
+the key trusted by a receiver. Scratch inputs and outputs belong under `.temp/`.
+
+The request has twelve closed string fields in byte-sorted order: `action`,
+`audience`, `expires_at`, `grant_registry_sha256`, `issued_at`, `nonce`,
+`request_sha256`, `resource`, `room_id`, `sender_mxid`, `topic`, `version`.
+It carries no grant. Requests last at most five minutes; nonces and hashes are
+64 lowercase hexadecimal characters. The separate action payload is exactly
+`name`, `organization`, `visibility`. All signed JSON uses the restricted
+printable-ASCII canonical grammar: no whitespace, trailing LF, duplicate or
+unknown members, Unicode escapes or repair. Wire keys are exactly `payload`,
+`request`, `signature`, `type`; binary fields use unpadded canonical base64url.
+
+The internal public verifier consumes separately pinned key and grant registries,
+looks up the full actual sender, verifies owner and request signatures, exact
+audience/context/payload hashes and validity, and selects exactly one applicable
+nonrevoked grant. A short display alias cannot substitute for a full sender ID.
+The event context must come from an admitted authentic projection; caller-supplied
+JSON is not itself evidence of network origin. Verification does not reserve a
+nonce/use, authorize provider dispatch or implement a live Matrix intake.
+Durable one-use execution, authentic event projection integration and actual
+presence/provider qualification for this new profile remain separate work.

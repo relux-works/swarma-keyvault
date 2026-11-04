@@ -92,7 +92,7 @@ func TestDomainDigestSeparatesKinds(t *testing.T) {
 // Unknown/zero kind refuses with no digest; a nearby valid request kind works.
 func TestDomainDigestRejectsUnknownKind(t *testing.T) {
 	raw := []byte(`{"a":"x","b":true}`)
-	for _, domain := range []digestDomain{0, 8, 255} {
+	for _, domain := range []digestDomain{0, 10, 255} {
 		before := bytes.Clone(raw)
 		got, err := domainDigest(domain, raw)
 		if !errors.Is(err, errUnknownDigestDomain) || got != ([32]byte{}) {
@@ -104,5 +104,27 @@ func TestDomainDigestRejectsUnknownKind(t *testing.T) {
 	}
 	if _, err := domainDigest(requestDomain, raw); err != nil {
 		t.Fatalf("valid control: %v", err)
+	}
+}
+
+// Fixed independent SHA256 vectors distinguish the application-request and
+// owner-certificate domains; appending a final LF changes the signed digest.
+func TestA2ADomainFixedVectors(t *testing.T) {
+	raw := []byte(`{"a":"x","b":true}`)
+	for _, tc := range []struct {
+		domain digestDomain
+		want   string
+	}{
+		{a2aCertificateDomain, "8c2430fd885cd7acad82a963e1a1f7113c3f1a890814fa291d1f213bfb32aaa6"},
+		{a2aRequestDomain, "5460e7862f02be0f5a2ca3320a12f46df047350bf2cf2bacad31108e17d4c6bd"},
+	} {
+		got, err := domainDigest(tc.domain, raw)
+		if err != nil || hex.EncodeToString(got[:]) != tc.want {
+			t.Fatal("fixed vector", tc.domain, got, err)
+		}
+		changed, err := domainDigest(tc.domain, append(bytes.Clone(raw), '\n'))
+		if err != nil || changed == got {
+			t.Fatal("terminal LF not bound", err)
+		}
 	}
 }

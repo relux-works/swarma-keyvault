@@ -15,6 +15,8 @@ const (
 	localCertificateDomain
 	localOperationDomain
 	localAttestation2Domain
+	a2aCertificateDomain
+	a2aRequestDomain
 )
 
 var errUnknownDigestDomain = errors.New("unsupported grant digest domain")
@@ -41,6 +43,10 @@ func domainDigest(domain digestDomain, exact []byte) ([sha256.Size]byte, error) 
 		prefix = "swarma-grants/local-operation/1"
 	case localAttestation2Domain:
 		prefix = "swarma-grants/local-request/2"
+	case a2aCertificateDomain:
+		prefix = "swarma-grants/a2a-certificate/1"
+	case a2aRequestDomain:
+		prefix = "swarma-grants/a2a-request/1"
 	default:
 		return [sha256.Size]byte{}, errUnknownDigestDomain
 	}

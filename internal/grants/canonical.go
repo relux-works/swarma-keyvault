@@ -23,6 +23,13 @@ const (
 	localOperationWire
 	localRequest2EnvelopeWire
 	localEnrollment2Wire
+	a2aCertificateWire
+	a2aCertificateEnvelopeWire
+	a2aRequestWire
+	a2aActionWire
+	a2aRequestEnvelopeWire
+	a2aKeyRegistryWire
+	a2aGrantRegistryWire
 )
 
 type wireKind uint8
@@ -76,6 +83,16 @@ func parseCanonical(raw []byte, profile wireProfile) (*wireValue, error) {
 		maximum = 12288
 	case localEnrollmentWire, localEnrollment2Wire:
 		maximum = 8192
+	case a2aCertificateWire, a2aRequestWire:
+		maximum = 4096
+	case a2aActionWire:
+		maximum = 1024
+	case a2aCertificateEnvelopeWire, a2aRequestEnvelopeWire:
+		maximum = 8192
+	case a2aKeyRegistryWire:
+		maximum = 16384
+	case a2aGrantRegistryWire:
+		maximum = 98304
 	default:
 		return nil, errBadEncoding
 	}
@@ -197,6 +214,24 @@ func (p *canonicalParser) readString(limit int) (string, error) {
 }
 
 func (p *canonicalParser) fieldStringLimit(depth int, name string) int {
+	if depth == 1 && (p.profile == a2aCertificateEnvelopeWire || p.profile == a2aRequestEnvelopeWire) {
+		switch name {
+		case "payload":
+			return 5462
+		case "request":
+			return 1366
+		case "signature":
+			return 96
+		}
+	}
+	if p.profile == a2aKeyRegistryWire && depth == 3 && name == "spki" {
+		return 1366
+	}
+	// A grants map's arrays contain base64url certificate envelopes. The
+	// enclosing 96KiB, token, member and typed per-account limits still apply.
+	if p.profile == a2aGrantRegistryWire && depth == 2 {
+		return 10923
+	}
 	if depth == 1 && (p.profile == localRequestEnvelopeWire || p.profile == localRequest2EnvelopeWire) {
 		if name == "payload" {
 			return 10923
@@ -285,7 +320,11 @@ func (p *canonicalParser) readArray(depth int) (*wireValue, error) {
 	node := &wireValue{kind: arrayValue}
 	if !p.at(']') {
 		for {
-			value, err := p.readValue(depth, 1024)
+			stringLimit := 1024
+			if p.profile == a2aGrantRegistryWire && depth == 3 {
+				stringLimit = 10923
+			}
+			value, err := p.readValue(depth, stringLimit)
 			if err != nil {
 				return nil, err
 			}
