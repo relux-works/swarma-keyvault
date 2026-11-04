@@ -117,3 +117,64 @@ canonical certificate representation, reference counts/order and explicit
 sequence/audit references. It preserves the exact envelope. Signature validation,
 history/ID resolution, the complete RESERVED set, current authority and atomic
 state/audit changes require separate checks; this codec performs no activation.
+
+### Prepare an unsigned repository certificate
+
+Build the portable authoring CLI without native custody access:
+
+```sh
+CGO_ENABLED=0 go build -o .temp/build/swarma-keyvault ./cmd/swarma-keyvault
+CGO_ENABLED=0 go test ./internal/grants ./cmd/swarma-keyvault
+```
+
+`grants prepare` takes an explicit canonical JSON draft, an owner Matrix account
+and a separate public P-256 SPKI DER file. It creates a first-issue certificate
+with a private repository CREATE and its paired DELETE, one finite use of each
+per explicitly listed cycle. It supplies no default target, time or cycle.
+The draft has exactly these eight fields (shown formatted for reading):
+
+```json
+{
+  "audience": {"deployment_id": "example", "executor_id": "example"},
+  "certificate_id": "example",
+  "cycles": [{"channel": "encrypted-dm", "cycle_id": "codex-dm", "runtime": "codex"}],
+  "expires_at": "2026-11-04T03:00:00Z",
+  "name": "example-private-repository",
+  "not_before": "2026-11-04T02:00:00Z",
+  "organization": "example",
+  "subject": {
+    "account_mxid": "@requester:example.invalid",
+    "device_ed25519": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+    "device_id": "EXAMPLE"
+  }
+}
+```
+
+Replace every example value with the intended explicit value. The input file
+must use the existing canonical ASCII JSON representation: sorted object keys,
+no whitespace, no duplicate keys and no trailing newline. Existing certificate
+representation and validity limits apply. Drafts are limited to 65,536 bytes;
+public DER input is limited to 1,024 bytes. No private key belongs in either file.
+
+```sh
+.temp/build/swarma-keyvault grants prepare \
+  --plan .temp/draft.canonical.json \
+  --owner-mxid @owner:example.invalid \
+  --issuer-spki-der .temp/owner-public.der \
+  > .temp/certificate.unsigned.json 2> .temp/certificate.review.txt
+```
+
+`--plan -` reads the bounded draft from stdin. Stdout contains the exact unsigned
+canonical payload without a newline. Stderr contains an explicitly unsigned
+full-field review and SHA-256 of `swarma-grants/certificate/1`, LF and those exact
+payload bytes. The issuer key ID is SHA-256 of the exact supplied public DER.
+The CLI itself writes no files; the shell redirections above create the outputs.
+Input refusal produces no payload. A failed or short review write prevents
+payload output; a failed or short payload write returns failure, so discard any
+partial redirected output on nonzero exit.
+
+This command does not enroll the supplied owner or key, authenticate a declared
+subject/channel, sign, access Keychain, reserve a use or contact a provider.
+Declaring an encrypted channel does not demonstrate a qualified receiver.
+Typed issuance must separately validate and display the same exact payload
+under its owner-presence contract. A prepared document grants no active rights.
