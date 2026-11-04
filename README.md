@@ -94,3 +94,9 @@ EOF under an explicit byte budget of at most 64 MiB. It returns only a complete
 physical summary; corruption, an incomplete tail or an over-budget stream returns
 no summary. It neither reconstructs typed grant state nor authenticates the
 caller-supplied epoch reference, and it never repairs or truncates a journal.
+
+The internal activation-body codec checks the bounded binary layout, complete
+canonical certificate representation, reference counts/order and explicit
+sequence/audit references. It preserves the exact envelope. Signature validation,
+history/ID resolution, the complete RESERVED set, current authority and atomic
+state/audit changes require separate checks; this codec performs no activation.
