@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -52,7 +51,7 @@ func localTestFixture(t *testing.T) *localFixture {
 	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": LocalOwnerMXID,
 		"owner_spki": base64.RawURLEncoding.EncodeToString(ownerDER), "requester_spki": base64.RawURLEncoding.EncodeToString(requesterDER),
 		"subject": q["subject"], "audience": q["audience"], "cycle": cycle, "organization": LocalOrganization, "name": LocalRepository,
-		"state_dir": t.TempDir(), "gh_path": filepath.Join(string(filepath.Separator), "fixture", "gh")}
+		"state_dir": t.TempDir(), "gh_path": localExecutableMetadataFixture(t)}
 	if err := os.Chmod(config["state_dir"].(string), 0700); err != nil {
 		t.Fatal(err)
 	}

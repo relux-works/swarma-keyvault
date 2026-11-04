@@ -15,6 +15,20 @@ import (
 
 var errLocalProvider = errors.New("local provider outcome unavailable")
 
+// ErrLocalProviderUnavailable refuses a known unusable provider path before a
+// reservation. It does not describe a failure after durable dispatch intent.
+var ErrLocalProviderUnavailable = errors.New("local provider executable unavailable")
+
+// Check metadata without starting a process or probing provider credentials.
+// This does not prevent same-UID replacement or prove ACL/format eligibility.
+func checkLocalProviderExecutable(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+		return ErrLocalProviderUnavailable
+	}
+	return nil
+}
+
 const localReceiptLimit = 65536
 
 type localProviderReceipt struct {

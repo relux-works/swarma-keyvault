@@ -327,7 +327,15 @@ truncation or reset.
 ```
 
 The mediator validates both signatures, exact fields and host-time validity
-before reservation. Under one local file lock it replays the complete bounded
+before reservation. It checks the configured provider path with `Lstat` before
+opening state and again under the lock immediately before reservation: it must
+be a regular file with an execute bit, and a final-component symlink refuses.
+A failed check returns a plain refusal without consuming a use or calling the
+provider; the first check opens no state. Lock acquisition can create the lock
+and empty journal infrastructure, but a repeated-check refusal appends nothing.
+These metadata checks do not prove binary format, ACL eligibility or prevent a
+same-user replacement race. A start failure after intent remains UNKNOWN/held.
+Under one local file lock it replays the complete bounded
 journal, then writes and syncs a reservation containing the exact certificate,
 request and use/correlation identity, followed by a synced dispatch intent.
 Only then does the selected absolute `gh` executable receive one

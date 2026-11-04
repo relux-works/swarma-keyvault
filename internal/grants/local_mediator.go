@@ -45,6 +45,9 @@ func (m *LocalMediator) Execute(ctx context.Context, certificate, request []byte
 	if err != nil {
 		return nil, err
 	}
+	if err := checkLocalProviderExecutable(m.enrollment.ghPath); err != nil {
+		return nil, err
+	}
 	state, err := m.open(m.enrollment)
 	if err != nil {
 		return nil, ErrLocalState
@@ -70,6 +73,11 @@ func (m *LocalMediator) Execute(ctx context.Context, certificate, request []byte
 	}
 	checked.observedAt, err = localObservedTime(checked.observedAt)
 	if err != nil {
+		return nil, err
+	}
+	// Lock acquisition/replay may have waited while the selected executable
+	// disappeared. Refuse before any reservation instead of burning the use.
+	if err := checkLocalProviderExecutable(m.enrollment.ghPath); err != nil {
 		return nil, err
 	}
 	reservation := state.link.sequence

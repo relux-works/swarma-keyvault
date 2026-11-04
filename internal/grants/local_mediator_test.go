@@ -294,7 +294,7 @@ func TestLocalMediatorStateRefusals(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "epoch":
-				f.config["gh_path"] = "/fixture/other-gh"
+				f.config["gh_path"] = localExecutableMetadataFixture(t)
 				m.enrollment, err = ParseLocalEnrollment(requestTestBytes(t, f.config))
 				if err != nil {
 					t.Fatal(err)
