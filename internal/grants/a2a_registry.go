@@ -40,10 +40,10 @@ func NewA2AReceiver(config A2AReceiverConfig) (*A2AReceiver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := parseMatrixAccountRepresentation(config.OwnerMXID); err != nil {
+	if _, err := parseA2AAccount(config.OwnerMXID); err != nil {
 		return nil, errIssuerUntrusted
 	}
-	if _, err := parseMatrixAccountRepresentation(config.Audience); err != nil {
+	if _, err := parseA2AAccount(config.Audience); err != nil {
 		return nil, ErrA2AContext
 	}
 	if !a2aContextText(config.RoomID, '!') {
@@ -90,7 +90,7 @@ func (r *A2AReceiver) parseKeys(raw []byte) error {
 		return errBadSchema
 	}
 	for _, m := range f["keys"].members {
-		if _, err := parseMatrixAccountRepresentation(m.name); err != nil {
+		if _, err := parseA2AAccount(m.name); err != nil {
 			return err
 		}
 		v, err := subobjectTexts(m.value, "generation", "spki", "spki_sha256", "status")
@@ -191,7 +191,7 @@ func (r *A2AReceiver) parseGrants(raw []byte, owner *ecdsa.PublicKey, ownerMXID 
 	}
 	ids := map[string]bool{}
 	for _, m := range f["grants"].members {
-		if _, err := parseMatrixAccountRepresentation(m.name); err != nil {
+		if _, err := parseA2AAccount(m.name); err != nil {
 			return err
 		}
 		key, ok := r.keys[m.name]
@@ -249,7 +249,7 @@ func (r *A2AReceiver) Verify(event A2AEvent, now time.Time) (*A2AVerifiedEnvelop
 	if r == nil {
 		return nil, ErrA2AContext
 	}
-	if _, err := parseMatrixAccountRepresentation(event.SenderMXID); err != nil {
+	if _, err := parseA2AAccount(event.SenderMXID); err != nil {
 		return nil, ErrA2ASenderUnavailable
 	}
 	if event.RecipientMXID != r.audience || event.RoomID != r.room || event.Topic != r.topic || event.Kind != "request" || !a2aContextText(event.EventID, '$') {

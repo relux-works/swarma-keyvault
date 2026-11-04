@@ -437,3 +437,21 @@ JSON is not itself evidence of network origin. Verification does not reserve a
 nonce/use, authorize provider dispatch or implement a live Matrix intake.
 Durable one-use execution, authentic event projection integration and actual
 presence/provider qualification for this new profile remain separate work.
+
+The internal read-only `ParseA2AObservation` adapter accepts the closed
+`a2a.event-verification-input/1` observation profile. It checks full sender,
+selected stored-session receiver, exact requested/returned event IDs, room
+presence and the independently configured room, topic root and slug. An absent
+returned room is explicitly weaker endpoint-only context, never a returned-room
+match. Its caller must establish a successful invocation of an admitted
+projection binary; a JSON file alone cannot establish that provenance.
+
+The adapter decodes strict bounded JSON without duplicate keys or Unicode
+replacement, then requires the exact five-field `m.text` request wrapper,
+configured human labels, one full receiver mention and matching thread/reply
+relations. Both explicit reply and no-re fallback forms have contract tests.
+It reconstructs the expected human prefix and extracts the remaining bytes once;
+it never trims, repairs CRLF, scans markdown fences or chooses another envelope.
+Extraction alone does not authenticate a request: the inert bad-signature
+fixture extracts but fails the public verifier. Executed conformance with an
+actual upstream formatter and a qualified live projection remains pending.

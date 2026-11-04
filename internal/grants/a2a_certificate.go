@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -65,7 +66,7 @@ func parseA2ACertificate(raw []byte) (*a2aCertificate, error) {
 		return nil, errBadSchema
 	}
 	c := &a2aCertificate{raw: bytes.Clone(raw)}
-	if c.audience, err = parseMatrixAccountRepresentation(f["audience"].text); err != nil {
+	if c.audience, err = parseA2AAccount(f["audience"].text); err != nil {
 		return nil, err
 	}
 	if c.id, err = parseOpaqueID(f["certificate_id"].text); err != nil {
@@ -81,7 +82,7 @@ func parseA2ACertificate(raw []byte) (*a2aCertificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c.account, err = parseMatrixAccountRepresentation(sub["account_mxid"]); err != nil {
+	if c.account, err = parseA2AAccount(sub["account_mxid"]); err != nil {
 		return nil, err
 	}
 	if c.subjectHash, err = parseWireDigest(sub["spki_sha256"]); err != nil {
@@ -165,7 +166,7 @@ func PrepareA2ACertificate(raw []byte, ownerMXID string, ownerDER, granteeDER []
 	if err != nil {
 		return nil, err
 	}
-	if _, err := parseMatrixAccountRepresentation(ownerMXID); err != nil {
+	if _, err := parseA2AAccount(ownerMXID); err != nil {
 		return nil, errIssuerUntrusted
 	}
 	if c.issuer.ownerMXID != ownerMXID || c.issuer.keyID != "sha256:"+hex.EncodeToString(sha256Sum(ownerDER)) {
@@ -201,4 +202,18 @@ func (p *A2ACertificateIssuance) SignedEnvelope(signature []byte) ([]byte, error
 		return nil, err
 	}
 	return json.Marshal(map[string]string{"type": "grants-a2a-signed-certificate-1", "payload": base64.RawURLEncoding.EncodeToString(p.certificate.raw), "signature": base64.RawURLEncoding.EncodeToString(signature)})
+}
+
+// The G2 account subset requires a nonempty localpart and no whitespace.
+// Keep legacy profiles' representation parser unchanged.
+func parseA2AAccount(value string) (string, error) {
+	if strings.IndexByte(value, ':') <= 1 {
+		return "", errBadSchema
+	}
+	for _, c := range value {
+		if unicode.IsSpace(c) {
+			return "", errBadSchema
+		}
+	}
+	return parseMatrixAccountRepresentation(value)
 }

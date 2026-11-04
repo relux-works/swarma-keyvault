@@ -57,10 +57,10 @@ func parseA2ARequest(raw, action []byte) (*a2aRequest, error) {
 		return nil, ErrA2AContext
 	}
 	q := &a2aRequest{raw: bytes.Clone(raw), actionPayload: bytes.Clone(action), nonce: f["nonce"], room: f["room_id"], topic: f["topic"]}
-	if q.sender, err = parseMatrixAccountRepresentation(f["sender_mxid"]); err != nil {
+	if q.sender, err = parseA2AAccount(f["sender_mxid"]); err != nil {
 		return nil, err
 	}
-	if q.audience, err = parseMatrixAccountRepresentation(f["audience"]); err != nil {
+	if q.audience, err = parseA2AAccount(f["audience"]); err != nil {
 		return nil, err
 	}
 	if !a2aContextText(q.room, '!') {
