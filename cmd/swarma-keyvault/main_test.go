@@ -84,7 +84,7 @@ type mustNotRead struct{}
 func (mustNotRead) Read([]byte) (int, error) { panic("invalid arguments read input") }
 
 // Unknown/duplicate/missing/ambiguous arguments refuse before reading input and
-// emit no payload. No command or flag can select a signing/effect operation.
+// emit no payload. Prepare flags cannot redirect to a signing/effect operation.
 func TestPrepareCLIArguments(t *testing.T) {
 	args, _, _ := prepareCLIFixture(t)
 	for _, bad := range [][]string{

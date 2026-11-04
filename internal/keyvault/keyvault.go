@@ -734,6 +734,27 @@ func (m *Manager) Sign(addr Address, digest []byte) (SignResult, error) {
 // and policy checks, immediately before the private operation, and its
 // error refuses the signature without touching the key.
 func (m *Manager) SignIf(addr Address, digest []byte, allow func() error) (SignResult, error) {
+	if allow == nil {
+		return m.SignIfKey(addr, digest, nil)
+	}
+	return m.SignIfKey(addr, digest, func(ResolvedSigningKey) error { return allow() })
+}
+
+// ResolvedSigningKey is a narrow public snapshot of the actual key selected
+// after normal signing policy checks. SPKI is owned by the snapshot; changing
+// it cannot alter the record or public key passed to the signing backend.
+type ResolvedSigningKey struct {
+	Address      Address
+	Store        StoreKind
+	UserPresence bool
+	Extraction   string
+	SPKI         []byte
+}
+
+// SignIfKey adds a final key-aware policy gate to Sign. The gate observes the
+// resolved generation rather than a separate earlier describe lookup. Rejection
+// performs no private operation. It grants no additional signing authority.
+func (m *Manager) SignIfKey(addr Address, digest []byte, allow func(ResolvedSigningKey) error) (SignResult, error) {
 	if err := ValidateDigest(digest); err != nil {
 		return SignResult{}, err
 	}
@@ -751,7 +772,12 @@ func (m *Manager) SignIf(addr Address, digest []byte, allow func() error) (SignR
 		return SignResult{}, err
 	}
 	if allow != nil {
-		if err := allow(); err != nil {
+		view := ResolvedSigningKey{
+			Address: Address{Kind: key.Record.Kind, Service: key.Record.Service, Purpose: key.Record.Purpose, Version: key.Record.Version},
+			Store:   key.Record.Store, UserPresence: key.Record.UserPresence, Extraction: key.Record.Extraction,
+			SPKI: append([]byte(nil), key.SPKI...),
+		}
+		if err := allow(view); err != nil {
 			return SignResult{}, err
 		}
 	}

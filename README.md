@@ -178,3 +178,43 @@ subject/channel, sign, access Keychain, reserve a use or contact a provider.
 Declaring an encrypted channel does not demonstrate a qualified receiver.
 Typed issuance must separately validate and display the same exact payload
 under its owner-presence contract. A prepared document grants no active rights.
+
+### Issue the selected private repository certificate
+
+`grants issue --payload FILE|- --owner-spki-der FILE` signs the complete canonical
+payload using the existing `alexis/grants-owner-v1` key, explicit generation 1.
+This initial interface accepts only owner `@alexis:gr.relux.works`, one cycle,
+one private CREATE for `relux-works/matrix-grants-poc-261031` and its paired
+single-use DELETE, with no superseded certificates. DELETE is signed scope;
+this interface executes no repository operation.
+
+The separate public DER file must be obtained through the intended enrollment
+contract. Supplying it does not enroll an owner or make a certificate trusted by
+a consumer. Before the private call, the actual resolved key must match that
+exact public DER, semantic address and generation, Secure Enclave store,
+user-presence requirement and non-extraction policy. No generic digest or key
+selector is exposed. Complete payload validation precedes store access.
+
+Build a separate native CLI with cgo and keep the matching Swift helper beside
+it; preserve installed binaries and existing ACL trust:
+
+```sh
+CGO_ENABLED=1 go build -trimpath -o .temp/build/swarma-keyvault ./cmd/swarma-keyvault
+swiftc -O -o .temp/build/mac-keyvault-enclave cmd/mac-keyvault-enclave/main.swift
+```
+
+This command requires an independently accepted build, the separately provisioned
+owner-presence key and an attended operation. Before invoking it, explain the
+expected OS action/digest prompt; the human alone answers that prompt. A denied
+or unavailable prompt ends the attempt. The command never creates a key, retries
+signing or falls back to another store. Fake-backed tests do not qualify native
+presence, helper execution or Keychain ACL behavior.
+
+Stderr displays a short Russian scope statement, the local unverified Matrix
+subject association, all signed fields and the domain-bound digest. A failed or
+short review write prevents the private call. Stdout receives only the existing
+signed-certificate envelope, without a newline, after its signature verifies
+against the exact payload and public pin. On any nonzero exit, discard redirected
+output, including a possible partial output after a successful signature. Issuing
+does not activate, persist or reserve a certificate, authenticate a requester,
+or contact a provider.
