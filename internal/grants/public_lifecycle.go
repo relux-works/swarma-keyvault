@@ -10,20 +10,24 @@ var (
 	errCertificateIDCollision   = errors.New("certificate-id-collision")
 	errRevocationIDCollision    = errors.New("revocation-id-collision")
 	errRequiredStateUnavailable = errors.New("required-state-unavailable")
+	// Internal component reason only; this does not extend the wire error codes.
+	errFutureRevocationUnsupported = errors.New("future-revocation-unsupported")
 )
 
 // checkRevocationAgainstCertificate verifies the complete public signatures,
 // exact target ID and retained certificate's exact lifecycle signing authority.
 // A generally pinned different key is insufficient, even under the same owner.
-// Initial revocations cannot schedule a future effective instant relative to
-// the supplied sample. No clock is read or qualified here, and nil performs no
+// Both records are checked against the same explicit pin. Future-effective
+// scheduling refuses as errFutureRevocationUnsupported relative to the supplied
+// sample; malformed representations keep their schema/encoding refusals.
+// No clock is read or qualified here, and nil performs no
 // revocation, immutable insert, audit commit, use change or other state write.
-func checkRevocationAgainstCertificate(revocationRaw, retainedCertificateRaw []byte, revokerPin, certificatePin publicIssuerPin, observedAt time.Time) error {
-	certificateEnvelope, err := checkSignedRecordWithPin(retainedCertificateRaw, certificateEnvelopeWire, certificatePin)
+func checkRevocationAgainstCertificate(revocationRaw, retainedCertificateRaw []byte, pin publicIssuerPin, observedAt time.Time) error {
+	certificateEnvelope, err := checkSignedRecordWithPin(retainedCertificateRaw, certificateEnvelopeWire, pin)
 	if err != nil {
 		return err
 	}
-	revocationEnvelope, err := checkSignedRecordWithPin(revocationRaw, revocationEnvelopeWire, revokerPin)
+	revocationEnvelope, err := checkSignedRecordWithPin(revocationRaw, revocationEnvelopeWire, pin)
 	if err != nil {
 		return err
 	}
@@ -47,7 +51,7 @@ func checkRevocationAgainstCertificate(revocationRaw, retainedCertificateRaw []b
 		return ErrInvalidObservation
 	}
 	if revocation.effectiveAt.After(observedAt) {
-		return errBadSchema
+		return errFutureRevocationUnsupported
 	}
 	return nil
 }

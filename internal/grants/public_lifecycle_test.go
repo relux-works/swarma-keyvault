@@ -44,21 +44,21 @@ func signedRevocationFixture(t *testing.T, key *ecdsa.PrivateKey, revocation map
 }
 
 // A correctly signed revocation must name the retained signed certificate
-// and its exact lifecycle authority, even if a different key is independently
-// accepted by its supplied pin. No lifecycle write, current state or trusted
+// and its exact lifecycle authority. A different key of the same owner cannot
+// supply a second revocation pin. No lifecycle write, current state or trusted
 // clock is established by these public component checks.
 func TestPublicRevocationRetainedAuthority(t *testing.T) {
 	key, pin, certificate, revocation := publicLifecycleFixture(t)
 	valid := signedRevocationFixture(t, key, revocation)
 	checkGood := func() {
 		t.Helper()
-		if err := checkRevocationAgainstCertificate(valid, certificate, pin, pin, declaredMatchTime()); err != nil {
+		if err := checkRevocationAgainstCertificate(valid, certificate, pin, declaredMatchTime()); err != nil {
 			t.Fatal("valid retained-authority control", err)
 		}
 	}
 	checkGood()
-	otherKey, otherPin, _, otherRevocation := publicLifecycleFixture(t)
-	if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, otherKey, otherRevocation), certificate, otherPin, pin, declaredMatchTime()); !errors.Is(err, errIssuerUntrusted) {
+	otherKey, _, _, otherRevocation := publicLifecycleFixture(t)
+	if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, otherKey, otherRevocation), certificate, pin, declaredMatchTime()); !errors.Is(err, errIssuerUntrusted) {
 		t.Fatal("globally pinned different key cannot revoke target", err)
 	}
 	checkGood()
@@ -69,14 +69,14 @@ func TestPublicRevocationRetainedAuthority(t *testing.T) {
 		want error
 	}{
 		{"wrong-target", func(r map[string]any) { r["certificate_id"] = "certificate-B" }, declaredMatchTime(), errBadLifecycleReference},
-		{"future-effective", func(r map[string]any) { r["effective_at"] = "2026-11-02T11:00:01Z" }, declaredMatchTime(), errBadSchema},
+		{"future-effective", func(r map[string]any) { r["effective_at"] = "2026-11-02T11:00:01Z" }, declaredMatchTime(), errFutureRevocationUnsupported},
 		{"invalid-clock-sample", func(map[string]any) {}, time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), ErrInvalidObservation},
 		{"extra-field", func(r map[string]any) { r["extra"] = true }, declaredMatchTime(), errBadSchema},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			copy := subobjectCopy(revocation)
 			test.edit(copy)
-			if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, key, copy), certificate, pin, pin, test.at); !errors.Is(err, test.want) {
+			if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, key, copy), certificate, pin, test.at); !errors.Is(err, test.want) {
 				t.Fatalf("got %v, want %v", err, test.want)
 			}
 			checkGood()
@@ -84,13 +84,13 @@ func TestPublicRevocationRetainedAuthority(t *testing.T) {
 	}
 	// Changing the signing key while retaining the target's issuer declaration
 	// is a mathematical signature failure, not a new lifecycle authority.
-	if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, otherKey, revocation), certificate, pin, pin, declaredMatchTime()); !errors.Is(err, errSignatureInvalid) {
+	if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, otherKey, revocation), certificate, pin, declaredMatchTime()); !errors.Is(err, errSignatureInvalid) {
 		t.Fatal("wrong revocation signing key", err)
 	}
 	for _, reason := range []string{"owner-revoked", "superseded", "compromised"} {
 		copy := subobjectCopy(revocation)
 		copy["reason_code"] = reason
-		if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, key, copy), certificate, pin, pin, declaredMatchTime().Add(time.Second)); err != nil {
+		if err := checkRevocationAgainstCertificate(signedRevocationFixture(t, key, copy), certificate, pin, declaredMatchTime().Add(time.Second)); err != nil {
 			t.Fatal("supported reason and past effective instant", err)
 		}
 	}
@@ -176,17 +176,116 @@ func TestPublicLifecycleRetainedInputAndOwnership(t *testing.T) {
 	if err := checkImmutableSignedReplay(certificate, nil, certificateEnvelopeWire, pin, pin); !errors.Is(err, errBadEncoding) {
 		t.Fatal("missing retained data", err)
 	}
-	if err := checkRevocationAgainstCertificate(raw, append(bytes.Clone(certificate), '\n'), pin, pin, declaredMatchTime()); !errors.Is(err, errBadEncoding) {
+	if err := checkRevocationAgainstCertificate(raw, append(bytes.Clone(certificate), '\n'), pin, declaredMatchTime()); !errors.Is(err, errBadEncoding) {
 		t.Fatal("malformed retained certificate", err)
 	}
 	wrongPin := publicIssuerPin{ownerMXID: "@other:example.invalid", spkiDER: pin.spkiDER}
 	if err := checkImmutableSignedReplay(certificate, certificate, certificateEnvelopeWire, pin, wrongPin); !errors.Is(err, errIssuerUntrusted) {
 		t.Fatal("untrusted retained data", err)
 	}
-	if err := checkRevocationAgainstCertificate(raw, certificate, pin, pin, declaredMatchTime()); err != nil {
+	if err := checkRevocationAgainstCertificate(raw, certificate, pin, declaredMatchTime()); err != nil {
 		t.Fatal("valid control", err)
 	}
 	if !bytes.Equal(certificate, beforeCert) || !bytes.Equal(raw, beforeRevoke) || !bytes.Equal(pin.spkiDER, beforeSPKI) {
 		t.Fatal("input mutated")
+	}
+}
+
+// The single pin must verify both mathematical signatures independently.
+// Choosing a different valid pin cannot authorize a different key of the same
+// owner to revoke this retained certificate. Valid neighbors exclude reject-all.
+func TestPublicRevocationSinglePinVerifiesBothRecords(t *testing.T) {
+	key, pin, certificate, revocation := publicLifecycleFixture(t)
+	valid := signedRevocationFixture(t, key, revocation)
+	otherKey, otherPin, _, otherRevocation := publicLifecycleFixture(t)
+	otherSigned := signedRevocationFixture(t, otherKey, otherRevocation)
+	certificatePayload, _ := declaredMatchFixture("repository.create", "claude-dm")
+	certificatePayload["issuer"] = subobjectCopy(revocation["issuer"].(map[string]any))
+	wrongCertificateSignature := signedCertificateFixture(t, otherKey, certificatePayload, "swarma-grants/certificate/1")
+	for _, test := range []struct {
+		name                    string
+		revocation, certificate []byte
+		pin                     publicIssuerPin
+		want                    error
+	}{
+		{"retained-signature", valid, wrongCertificateSignature, pin, errSignatureInvalid},
+		{"revocation-signature", signedRevocationFixture(t, otherKey, revocation), certificate, pin, errSignatureInvalid},
+		{"other-key-retained-pin", otherSigned, certificate, pin, errIssuerUntrusted},
+		{"other-key-revoker-pin", otherSigned, certificate, otherPin, errIssuerUntrusted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			checkGood := func() {
+				t.Helper()
+				if err := checkRevocationAgainstCertificate(valid, certificate, pin, declaredMatchTime()); err != nil {
+					t.Fatal("valid same-pin neighbor", err)
+				}
+			}
+			checkGood()
+			if err := checkRevocationAgainstCertificate(test.revocation, test.certificate, test.pin, declaredMatchTime()); !errors.Is(err, test.want) {
+				t.Fatalf("got %v, want %v", err, test.want)
+			}
+			checkGood()
+		})
+	}
+}
+
+// Exact effective time is supported and any future instant is refused without
+// rounding/skew. Nanosecond neighbors and another zone for the same supplied
+// instant exercise comparison only; no trusted clock or revocation is created.
+func TestPublicRevocationEffectiveAtBoundary(t *testing.T) {
+	key, pin, certificate, revocation := publicLifecycleFixture(t)
+	raw := signedRevocationFixture(t, key, revocation)
+	at := declaredMatchTime()
+	for _, test := range []struct {
+		name string
+		at   time.Time
+		want error
+	}{
+		{"one-nanosecond-future", at.Add(-time.Nanosecond), errFutureRevocationUnsupported},
+		{"exact", at, nil},
+		{"one-nanosecond-past", at.Add(time.Nanosecond), nil},
+		{"equivalent-zone", at.In(time.FixedZone("test-offset", 2*60*60)), nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := checkRevocationAgainstCertificate(raw, certificate, pin, test.at); !errors.Is(err, test.want) {
+				t.Fatalf("got %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+// A complete signed future declaration has a dedicated internal reason,
+// distinct from malformed representation. Valid/future checks leave all input
+// bytes unchanged and perform no lifecycle, audit or use transition.
+func TestPublicRevocationFutureRefusalAndOwnership(t *testing.T) {
+	key, pin, certificate, revocation := publicLifecycleFixture(t)
+	valid := signedRevocationFixture(t, key, revocation)
+	revocation["effective_at"] = "2026-11-02T11:00:01Z"
+	future := signedRevocationFixture(t, key, revocation)
+	for _, test := range []struct {
+		raw  []byte
+		want error
+	}{{valid, nil}, {future, errFutureRevocationUnsupported}} {
+		beforeRaw, beforeCert, beforePin := bytes.Clone(test.raw), bytes.Clone(certificate), bytes.Clone(pin.spkiDER)
+		err := checkRevocationAgainstCertificate(test.raw, certificate, pin, declaredMatchTime())
+		if !errors.Is(err, test.want) {
+			t.Fatalf("got %v, want %v", err, test.want)
+		}
+		if test.want != nil && errors.Is(err, errBadSchema) {
+			t.Fatal("future reason conflated with malformed schema")
+		}
+		if !bytes.Equal(test.raw, beforeRaw) || !bytes.Equal(certificate, beforeCert) || !bytes.Equal(pin.spkiDER, beforePin) {
+			t.Fatal("input changed")
+		}
+	}
+	for _, malformed := range []string{"2026-11-02T11:00:01.0Z", "not-a-time"} {
+		revocation["effective_at"] = malformed
+		err := checkRevocationAgainstCertificate(signedRevocationFixture(t, key, revocation), certificate, pin, declaredMatchTime())
+		if !errors.Is(err, errBadSchema) || errors.Is(err, errFutureRevocationUnsupported) {
+			t.Fatal("malformed time must keep its schema refusal", err)
+		}
+	}
+	if err := checkRevocationAgainstCertificate(valid, certificate, pin, declaredMatchTime()); err != nil {
+		t.Fatal("valid neighbor after refusals", err)
 	}
 }

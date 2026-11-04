@@ -75,7 +75,10 @@ CGO_ENABLED=0 go test ./internal/grants
 ```
 
 Public revocation checks additionally require the retained certificate's exact
-signing authority and target ID; future-effective scheduling is unsupported.
+signing authority and target ID, using one explicit pin for both signatures.
+Future-effective scheduling refuses with a distinct internal reason; malformed
+representations retain their schema/encoding refusals. This introduces no new
+external wire error code.
 Immutable replay comparisons require the exact signed envelope and payload in
 the same typed ID namespace. A second valid signature under the same ID is a
 collision. These read-only checks do not insert or revoke records, authenticate
