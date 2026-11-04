@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -149,4 +150,75 @@ func writeA2AOutput(w io.Writer, raw []byte) int {
 		return 1
 	}
 	return 0
+}
+
+func runA2AExecutor(args []string, stdout, stderr io.Writer, operation string) int {
+	usageText := "swarma-keyvault grants " + operation + " --config FILE"
+	if operation != "a2a-state-init" {
+		usageText += " --event EVENT"
+	}
+	f := flag.NewFlagSet(operation, flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	var config, event onceString
+	f.Var(&config, "config", "separately installed bounded public trust configuration")
+	if operation != "a2a-state-init" {
+		f.Var(&event, "event", "explicit original Matrix event ID")
+	}
+	usage := func() int { fmt.Fprintln(stderr, usageText); return 2 }
+	if err := f.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(stderr, usageText)
+			return 0
+		}
+		return usage()
+	}
+	if f.NArg() != 0 || !config.set || config.value == "" || config.value == "-" || (operation != "a2a-state-init" && (!event.set || event.value == "")) {
+		return usage()
+	}
+	raw, err := readInput(config.value, nil, 196608)
+	if err != nil {
+		fmt.Fprintln(stderr, "cannot read bounded a2a public trust configuration")
+		return 1
+	}
+	executor, err := grants.ParseA2AExecutor(raw)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var result any
+	switch operation {
+	case "a2a-state-init":
+		err = executor.InitializeState()
+		result = map[string]string{"type": "grants-a2a-state-initialized-1"}
+	case "a2a-verify":
+		var verified *grants.A2AVerifiedEnvelope
+		verified, err = executor.Verify(context.Background(), event.value)
+		if err == nil {
+			result = map[string]string{"type": "grants-a2a-verification-1", "certificate_id": verified.CertificateID, "entry_id": verified.EntryID, "sender_mxid": verified.SenderMXID, "event_id": verified.EventID, "request_sha256": verified.RequestSHA256}
+		}
+	case "a2a-execute":
+		var out *grants.A2AOutcome
+		out, err = executor.Execute(context.Background(), event.value)
+		if out != nil {
+			result = map[string]string{"type": "grants-a2a-outcome-1", "state": out.State, "repository_id": out.RepositoryID, "node_id": out.NodeID, "full_name": out.FullName}
+		}
+	default:
+		return usage()
+	}
+	if err != nil {
+		// A post-intent failure still reports UNKNOWN; failed publication cannot
+		// roll back the held use or authorize retry. Never forward subprocess text.
+		if result != nil && operation == "a2a-execute" {
+			if b, merr := json.Marshal(result); merr == nil {
+				_ = writeA2AOutput(stdout, b)
+			}
+		}
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	raw, err = json.Marshal(result)
+	if err != nil {
+		return 1
+	}
+	return writeA2AOutput(stdout, raw)
 }

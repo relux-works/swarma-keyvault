@@ -475,5 +475,57 @@ durable reservation, dispatch intent and validated receipt under one lock.
 Ambiguous process/receipt/outcome failures retain the use with `unknown`; there
 is no automatic retry, release, cleanup or DELETE. File checks, checksums and
 cooperating-process locks do not resist same-UID rollback or bypass. These APIs
-have isolated fake/process-fixture qualification; public CLI configuration,
-admitted live projection and actual operational acceptance remain pending.
+have isolated fake/process-fixture qualification. Admission of a live projection
+binary and actual operational acceptance remain pending.
+
+
+The executor CLI uses a separately installed public trust configuration:
+
+```sh
+.temp/build/swarma-keyvault grants a2a-verify --config /absolute/public-config.json --event '$original-event'
+.temp/build/swarma-keyvault grants a2a-state-init --config /absolute/public-config.json
+.temp/build/swarma-keyvault grants a2a-execute --config /absolute/public-config.json --event '$original-event'
+```
+
+`a2a-verify` observes one network event and verifies it without opening state or
+calling the repository provider. `a2a-state-init` is a separate explicit operation
+on an already existing empty private directory; neither verify nor execute
+initializes or repairs it. Execute accepts no projection-file or stdin override.
+It calls the pinned a2a binary once using its selected own stored configuration:
+`--profile CONNECTION --as IDENTITY read ROOM --event EVENT --verification-input --json`.
+A failed process, timeout, oversized output, partial JSON or mismatched observation
+cannot authorize dispatch, even if part of stdout looks valid. Subprocess raw
+stderr is withheld. JSON command results go to stdout; refusals go to stderr with
+a nonzero exit. An `unknown` result retains its use; failed result publication is
+never permission to retry.
+
+The configuration is one closed JSON object, type
+`grants-a2a-executor-config-1`, at most 196608 bytes. Every field is a string:
+
+| Fields | Meaning |
+| --- | --- |
+| `type` | Exact configuration version above |
+| `owner_mxid`, `owner_spki`, `owner_spki_sha256` | Separately trusted full owner account, public DER and its digest |
+| `audience`, `room_id`, `topic`, `thread_root` | Full receiver account, exact room, topic slug and thread event ID |
+| `declared_from`, `declared_to` | Expected human labels; `declared_to` equals the selected local a2a identity |
+| `key_registry`, `key_registry_sha256` | Exact public key-registry bytes and independent digest |
+| `grant_registry`, `grant_registry_sha256` | Exact signed-grant registry bytes and independent digest |
+| `state_dir`, `state_epoch` | Separate absolute private directory and nonzero independent 32-byte epoch |
+| `a2a_path`, `a2a_sha256` | Absolute admitted projection executable and exact file digest |
+| `a2a_identity`, `a2a_connection`, `a2a_config_dir` | Own identity, named connection and absolute existing configuration root |
+| `gh_path`, `gh_sha256` | Absolute admitted provider executable and exact file digest |
+
+Binary strings use canonical unpadded base64url; digests and epoch use 64 lowercase
+hex digits. Paths are absolute and clean. Executables must be regular,
+executable, owned by the current user or root, and not writable by group/others;
+symlink executable paths refuse. The provider pin is checked again immediately
+before dispatch. These checks detect accidental drift and do not prevent a
+same-UID replacement race or compromise of the configured host.
+
+Install this configuration through its custodian's approved route, independently
+of event contents. It contains no credential/token fields. Keep the same state
+directory and epoch when refreshing registries: changing an epoch is not a grant
+reset operation. Unknown fields and duplicate keys refuse. Tests cover the actual
+subprocess argv and selected configuration root with Go-only child fixtures;
+those tests do not qualify or install a live a2a binary. Build and test commands
+above keep local candidates and test artifacts under `.temp/`.

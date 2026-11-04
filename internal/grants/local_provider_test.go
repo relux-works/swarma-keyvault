@@ -17,6 +17,9 @@ import (
 // records each process start, without opening credentials or making a network
 // call. The external docking test uses this same process boundary.
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("KEYVAULT_A2A_PROJECTION_FIXTURE"); mode != "" && len(os.Args) > 1 && os.Args[1] == "--profile" {
+		os.Exit(runA2AProjectionFixture(mode))
+	}
 	if mode := os.Getenv("KEYVAULT_A2A_GH_FIXTURE"); mode != "" {
 		os.Exit(runA2AProviderFixture(mode))
 	}

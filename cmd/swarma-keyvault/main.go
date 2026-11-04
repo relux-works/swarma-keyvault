@@ -32,6 +32,8 @@ func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "grants" {
 		switch args[1] {
+		case "a2a-verify", "a2a-state-init", "a2a-execute":
+			return runA2AExecutor(args[2:], stdout, stderr, args[1])
 		case "a2a-prepare":
 			return runA2ACertificate(args[2:], stdin, stdout, stderr, false)
 		case "a2a-issue":
