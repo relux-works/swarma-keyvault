@@ -453,8 +453,12 @@ relations. Both explicit reply and no-re fallback forms have contract tests.
 It reconstructs the expected human prefix and extracts the remaining bytes once;
 it never trims, repairs CRLF, scans markdown fences or chooses another envelope.
 Extraction alone does not authenticate a request: the inert bad-signature
-fixture extracts but fails the public verifier. Executed conformance with an
-actual upstream formatter and a qualified live projection remains pending.
+fixture extracts but fails the public verifier. Exact content fixtures emitted
+by the post formatter through a fake homeserver cover both reply forms. Their
+unchanged inert envelopes refuse before journal writes or provider calls. A
+derived wrapper with a valid software-signed request verifies and dispatches
+once through an inert provider; changed wrapper/context and replay refuse.
+Qualification of a live projection binary remains pending.
 
 The internal G2 mediator rechecks the original event before opening state,
 under its lock, and immediately before one fixed private repository CREATE.
