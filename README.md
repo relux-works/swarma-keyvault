@@ -79,6 +79,12 @@ by public signature verification under the supplied pin. DELETE matching
 explicitly requires its paired CREATE entry and same-cycle use. It still does
 not authenticate the CREATE result or authorize dispatch.
 
+Logical uses retain the exact `(certificate_id, entry_id, operation_use_id)`
+namespace as separate comparable fields. Use IDs may repeat across entries;
+the signed cycle is checked separately and does not add another allowance.
+Request IDs identify correlation, not new uses. Deriving this representation
+key neither reserves a use nor authenticates any request or current state.
+
 Public revocation checks additionally require the retained certificate's exact
 signing authority and target ID; future-effective scheduling is unsupported.
 Immutable replay comparisons require the exact signed envelope and payload in
