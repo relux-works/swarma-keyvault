@@ -25,7 +25,22 @@ type UnsignedCertificate struct {
 // It accesses no key store, clock, receiver, lifecycle state or provider. The
 // supplied owner/SPKI are authoring inputs; this does not enroll either one.
 func PrepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER []byte) (*UnsignedCertificate, error) {
-	node, err := parseCanonical(draft, certificateWire)
+	return prepareRepositoryCertificate(draft, ownerMXID, spkiDER, nil, false)
+}
+
+// PrepareLocalRepositoryCertificate authors the distinct local certificate
+// with an explicit requester DER, not a Matrix device or a verifier selector.
+func PrepareLocalRepositoryCertificate(draft []byte, ownerMXID string, spkiDER, requesterDER []byte) (*UnsignedCertificate, error) {
+	return prepareRepositoryCertificate(draft, ownerMXID, spkiDER, requesterDER, true)
+}
+
+func prepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER, requesterDER []byte, local bool) (*UnsignedCertificate, error) {
+	profile, domain := certificateWire, certificateDomain
+	if local {
+		profile, domain = localCertificateWire, localCertificateDomain
+	}
+
+	node, err := parseCanonical(draft, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +53,17 @@ func PrepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER []byte
 			return nil, errBadSchema
 		}
 	}
-	if _, err := parseSubjectNode(f["subject"]); err != nil {
+	if local {
+		if _, err := parseLocalSubjectNode(f["subject"]); err != nil {
+			return nil, err
+		}
+		if _, err := localPublicKey(requesterDER); err != nil {
+			return nil, err
+		}
+		if bytes.Equal(spkiDER, requesterDER) {
+			return nil, errRequesterMismatch
+		}
+	} else if _, err := parseSubjectNode(f["subject"]); err != nil {
 		return nil, err
 	}
 	if _, err := parseAudienceNode(f["audience"]); err != nil {
@@ -90,6 +115,11 @@ func PrepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER []byte
 			map[string]any{"entry_id": "repo-delete", "action": "repository.delete", "target": map[string]any{"organization": plan["organization"], "name": plan["name"], "paired_create_entry": "repo-create"}, "uses": deleteUses},
 		},
 	}
+	if local {
+		certificate["type"] = "grants-local-certificate-1"
+		hash := sha256.Sum256(requesterDER)
+		certificate["requester_spki_sha256"] = hex.EncodeToString(hash[:])
+	}
 	var encoded bytes.Buffer
 	encoder := json.NewEncoder(&encoded)
 	encoder.SetEscapeHTML(false)
@@ -98,10 +128,14 @@ func PrepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER []byte
 	}
 	// Encoder appends exactly one LF. The signed payload has none.
 	payload := bytes.Clone(encoded.Bytes()[:encoded.Len()-1])
-	if _, err := parseCertificateProjection(payload); err != nil {
+	if local {
+		if _, err := parseLocalCertificateProjection(payload); err != nil {
+			return nil, err
+		}
+	} else if _, err := parseCertificateProjection(payload); err != nil {
 		return nil, err
 	}
-	digest, err := domainDigest(certificateDomain, payload)
+	digest, err := domainDigest(domain, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -110,5 +144,12 @@ func PrepareRepositoryCertificate(draft []byte, ownerMXID string, spkiDER []byte
 		return nil, errBadEncoding
 	}
 	review := fmt.Sprintf("UNSIGNED certificate; no rights are active.\nDomain: swarma-grants/certificate/1\nSHA256(domain + LF + exact payload): %x\n%s\n", digest, display.Bytes())
+	if local {
+		text, err := localRepositoryReview(payload, digest, plan["organization"].(string), plan["name"].(string))
+		if err != nil {
+			return nil, err
+		}
+		review = "UNSIGNED certificate; no rights are active.\n" + text
+	}
 	return &UnsignedCertificate{Payload: payload, Digest: digest, Review: review}, nil
 }

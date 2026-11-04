@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -17,12 +16,8 @@ const LocalOwnerMXID = "@alexis:gr.relux.works"
 // This domain authenticates only the explicitly enrolled local association;
 // it is separate from the existing request correlation digest and Matrix.
 func localRequestDigest(raw []byte) [32]byte {
-	h := sha256.New()
-	h.Write([]byte("swarma-grants/local-request/1\n"))
-	h.Write(raw)
-	var sum [32]byte
-	copy(sum[:], h.Sum(nil))
-	return sum
+	digest, _ := domainDigest(localAttestation2Domain, raw)
+	return digest
 }
 
 func localPublicKey(der []byte) (*ecdsa.PublicKey, error) {
@@ -42,16 +37,16 @@ func localPublicKey(der []byte) (*ecdsa.PublicKey, error) {
 
 type localAttestation struct {
 	raw, signature []byte
-	request        *requestProjection
+	request        *localOperationProjection
 }
 
 func parseLocalAttestation(raw []byte) (*localAttestation, error) {
-	node, err := parseCanonical(raw, localRequestEnvelopeWire)
+	node, err := parseCanonical(raw, localRequest2EnvelopeWire)
 	if err != nil {
 		return nil, err
 	}
 	f, err := subobjectTexts(node, "type", "payload", "signature")
-	if err != nil || f["type"] != "grants-local-request-1" {
+	if err != nil || f["type"] != "grants-local-request-2" {
 		return nil, errBadSchema
 	}
 	payload, err := decodeEnvelopeField(f["payload"], localRequestPayloadField)
@@ -65,7 +60,7 @@ func parseLocalAttestation(raw []byte) (*localAttestation, error) {
 	if _, _, err := parseLowSSignatureDER(signature); err != nil {
 		return nil, err
 	}
-	request, err := parseRequestProjection(payload)
+	request, err := parseLocalOperationProjection(payload)
 	if err != nil {
 		return nil, err
 	}
@@ -75,12 +70,12 @@ func parseLocalAttestation(raw []byte) (*localAttestation, error) {
 // LocalRequestSigning owns exact typed request bytes. It does not enroll a key,
 // verify a certificate, reserve a use or authenticate a Matrix device.
 type LocalRequestSigning struct {
-	request *requestProjection
+	request *localOperationProjection
 	public  *ecdsa.PublicKey
 }
 
 func PrepareLocalRequest(raw, publicDER []byte) (*LocalRequestSigning, error) {
-	request, err := parseRequestProjection(raw)
+	request, err := parseLocalOperationProjection(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -103,5 +98,5 @@ func (p *LocalRequestSigning) SignedEnvelope(signature []byte) ([]byte, error) {
 	if err := verifyP256Signature(p.public, p.Digest(), signature); err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]string{"type": "grants-local-request-1", "payload": base64.RawURLEncoding.EncodeToString(p.request.raw), "signature": base64.RawURLEncoding.EncodeToString(signature)})
+	return json.Marshal(map[string]string{"type": "grants-local-request-2", "payload": base64.RawURLEncoding.EncodeToString(p.request.raw), "signature": base64.RawURLEncoding.EncodeToString(signature)})
 }

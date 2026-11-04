@@ -109,7 +109,7 @@ func TestLocalMediatorRejectsBeforeState(t *testing.T) {
 				c = requestTestBytes(t, f.certificate)
 			case "wrong-requester":
 				m.enrollment.requesterDER = f.ownerDER
-				want = errSignatureInvalid
+				want = errRequesterMismatch
 			case "changed-request":
 				q = append(bytes.Clone(q), '\n')
 				want = errBadEncoding

@@ -18,6 +18,7 @@ type RepositoryIssuance struct {
 	payload, public []byte
 	owner, review   string
 	digest          [sha256.Size]byte
+	profile         wireProfile
 }
 
 // NewRepositoryIssuance validates a one-cycle first-issue private CREATE and
@@ -28,38 +29,8 @@ func NewRepositoryIssuance(payload []byte, owner string, public []byte, organiza
 	if err != nil {
 		return nil, err
 	}
-	if _, err := parseMatrixAccountRepresentation(owner); err != nil || len(public) == 0 || len(public) > 1024 {
-		return nil, errIssuerUntrusted
-	}
-	parsed, err := x509.ParsePKIXPublicKey(public)
-	if err != nil {
-		return nil, errIssuerUntrusted
-	}
-	key, ok := parsed.(*ecdsa.PublicKey)
-	if !ok || key.Curve != elliptic.P256() {
-		return nil, errIssuerUntrusted
-	}
-	id := sha256.Sum256(public)
-	if certificate.issuer.ownerMXID != owner || certificate.issuer.keyID != "sha256:"+hex.EncodeToString(id[:]) || certificate.issuer.purpose != "grants-owner-v1" {
-		return nil, errIssuerUntrusted
-	}
-	if organization == "" || name == "" || len(certificate.supersedes) != 0 || len(certificate.cycles) != 1 || len(certificate.entries) != 2 {
-		return nil, errScheduleMismatch
-	}
-	var create, remove *entryProjection
-	for _, entry := range certificate.entries {
-		if entry.action == "repository.create" {
-			create = entry
-		} else {
-			remove = entry
-		}
-	}
-	if create == nil || remove == nil || len(create.uses) != 1 || len(remove.uses) != 1 {
-		return nil, errScheduleMismatch
-	}
-	if create.createTarget.organization != organization || create.createTarget.name != name || create.createTarget.visibility != "private" ||
-		remove.deleteTarget.organization != organization || remove.deleteTarget.name != name || remove.deleteTarget.pairedCreateEntry != create.entryID {
-		return nil, errResourceMismatch
+	if err := validateRepositoryScope(certificate, owner, public, organization, name); err != nil {
+		return nil, err
 	}
 	digest, err := domainDigest(certificateDomain, payload)
 	if err != nil {
@@ -70,7 +41,7 @@ func NewRepositoryIssuance(payload []byte, owner string, public []byte, organiza
 		return nil, errBadEncoding
 	}
 	review := fmt.Sprintf("Разрешается одно создание приватного репозитория %s/%s и парное удаление; в первом срезе удаление не выполняется.\nПодпись ещё не выполнена. Привязка requester к Matrix subject локальная и не подтверждает Matrix identity.\nDomain: swarma-grants/certificate/1\nSHA256(domain + LF + exact payload): %x\n%s\n", organization, name, digest, display.Bytes())
-	return &RepositoryIssuance{payload: bytes.Clone(payload), public: bytes.Clone(public), owner: owner, review: review, digest: digest}, nil
+	return &RepositoryIssuance{payload: bytes.Clone(payload), public: bytes.Clone(public), owner: owner, review: review, digest: digest, profile: certificateEnvelopeWire}, nil
 }
 
 func (p *RepositoryIssuance) Digest() [sha256.Size]byte { return p.digest }
@@ -86,15 +57,61 @@ func (p *RepositoryIssuance) SignedEnvelope(signature []byte) ([]byte, error) {
 	if _, _, err := parseLowSSignatureDER(signature); err != nil {
 		return nil, err
 	}
+	envelopeType := ""
+	switch p.profile {
+	case certificateEnvelopeWire:
+		envelopeType = "grants-signed-certificate-1"
+	case localCertificateEnvelopeWire:
+		envelopeType = "grants-signed-local-certificate-1"
+	default:
+		return nil, errBadSchema
+	}
 	raw, err := json.Marshal(map[string]string{
-		"type": "grants-signed-certificate-1", "payload": base64.RawURLEncoding.EncodeToString(p.payload),
+		"type": envelopeType, "payload": base64.RawURLEncoding.EncodeToString(p.payload),
 		"signature": base64.RawURLEncoding.EncodeToString(signature),
 	})
 	if err != nil {
 		return nil, errBadSchema
 	}
-	if err := checkCertificateSignatureWithPin(raw, p.owner, p.public); err != nil {
+	if _, err := checkSignedRecordWithPin(raw, p.profile, publicIssuerPin{ownerMXID: p.owner, spkiDER: p.public}); err != nil {
 		return nil, err
 	}
 	return raw, nil
+}
+
+func validateRepositoryScope(certificate *certificateProjection, owner string, public []byte, organization, name string) error {
+	if _, err := parseMatrixAccountRepresentation(owner); err != nil || len(public) == 0 || len(public) > 1024 {
+		return errIssuerUntrusted
+	}
+	parsed, err := x509.ParsePKIXPublicKey(public)
+	if err != nil {
+		return errIssuerUntrusted
+	}
+	key, ok := parsed.(*ecdsa.PublicKey)
+	if !ok || key.Curve != elliptic.P256() {
+		return errIssuerUntrusted
+	}
+	id := sha256.Sum256(public)
+	if certificate.issuer.ownerMXID != owner || certificate.issuer.keyID != "sha256:"+hex.EncodeToString(id[:]) || certificate.issuer.purpose != "grants-owner-v1" {
+		return errIssuerUntrusted
+	}
+	if organization == "" || name == "" || len(certificate.supersedes) != 0 || len(certificate.cycles) != 1 || len(certificate.entries) != 2 {
+		return errScheduleMismatch
+	}
+	var create, remove *entryProjection
+	for _, entry := range certificate.entries {
+		if entry.action == "repository.create" {
+			create = entry
+		} else {
+			remove = entry
+		}
+	}
+	if create == nil || remove == nil || len(create.uses) != 1 || len(remove.uses) != 1 {
+		return errScheduleMismatch
+	}
+	if create.createTarget.organization != organization || create.createTarget.name != name || create.createTarget.visibility != "private" ||
+		remove.deleteTarget.organization != organization || remove.deleteTarget.name != name || remove.deleteTarget.pairedCreateEntry != create.entryID {
+		return errResourceMismatch
+	}
+	return nil
 }

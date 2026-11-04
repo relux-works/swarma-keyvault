@@ -47,6 +47,12 @@ func checkSignedRecordWithPin(raw []byte, profile wireProfile, pin publicIssuerP
 			return nil, err
 		}
 		issuer = certificate.issuer
+	case localCertificateEnvelopeWire:
+		certificate, err := parseLocalCertificateProjection(envelope.payload)
+		if err != nil {
+			return nil, err
+		}
+		issuer = certificate.issuer
 	case revocationEnvelopeWire:
 		revocation, err := parseRevocationProjection(envelope.payload)
 		if err != nil {

@@ -24,14 +24,33 @@ func parseRequestProjection(raw []byte) (*requestProjection, error) {
 	if err != nil {
 		return nil, err
 	}
+	kind, err := memberText(node, "type")
+	if err != nil || kind != "grants-request-1" {
+		return nil, errBadSchema
+	}
+	subject, err := parseSubjectNode(f["subject"])
+	if err != nil {
+		return nil, err
+	}
+	value, err := parseRequestBody(raw, f)
+	if err != nil {
+		return nil, err
+	}
+	value.subject = subject
+	return value, nil
+}
+
+// Called after each profile checks its closed fields and distinct subject.
+func parseRequestBody(raw []byte, f map[string]*wireValue) (*requestProjection, error) {
 	for name, field := range f {
 		if name != "subject" && name != "audience" && name != "target" && (field == nil || field.kind != stringValue) {
 			return nil, errBadSchema
 		}
 	}
-	if f["type"].text != "grants-request-1" || !oneOf(f["action"].text, "repository.create", "repository.delete") {
+	if !oneOf(f["action"].text, "repository.create", "repository.delete") {
 		return nil, errBadSchema
 	}
+	var err error
 	value := &requestProjection{action: f["action"].text}
 	for _, field := range []struct {
 		name        string
@@ -42,10 +61,6 @@ func parseRequestProjection(raw []byte) (*requestProjection, error) {
 			return nil, e
 		}
 		*field.destination = parsed
-	}
-	value.subject, err = parseSubjectNode(f["subject"])
-	if err != nil {
-		return nil, err
 	}
 	value.audience, err = parseAudienceNode(f["audience"])
 	if err != nil {

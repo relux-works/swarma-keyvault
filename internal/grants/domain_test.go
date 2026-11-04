@@ -92,7 +92,7 @@ func TestDomainDigestSeparatesKinds(t *testing.T) {
 // Unknown/zero kind refuses with no digest; a nearby valid request kind works.
 func TestDomainDigestRejectsUnknownKind(t *testing.T) {
 	raw := []byte(`{"a":"x","b":true}`)
-	for _, domain := range []digestDomain{0, 5, 255} {
+	for _, domain := range []digestDomain{0, 8, 255} {
 		before := bytes.Clone(raw)
 		got, err := domainDigest(domain, raw)
 		if !errors.Is(err, errUnknownDigestDomain) || got != ([32]byte{}) {

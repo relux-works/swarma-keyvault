@@ -14,7 +14,7 @@ import (
 type LocalEnrollment struct {
 	owner            publicIssuerPin
 	requesterDER     []byte
-	subject          *subjectProjection
+	subject          *localSubjectProjection
 	audience         *audienceProjection
 	cycle            *cycleProjection
 	stateDir, ghPath string
@@ -22,7 +22,7 @@ type LocalEnrollment struct {
 }
 
 func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
-	node, err := parseCanonical(raw, localEnrollmentWire)
+	node, err := parseCanonical(raw, localEnrollment2Wire)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
 		}
 		texts[name] = f[name].text
 	}
-	if texts["type"] != "grants-local-enrollment-1" || texts["owner_mxid"] != LocalOwnerMXID || texts["organization"] != LocalOrganization || texts["name"] != LocalRepository {
+	if texts["type"] != "grants-local-enrollment-2" || texts["owner_mxid"] != LocalOwnerMXID || texts["organization"] != LocalOrganization || texts["name"] != LocalRepository {
 		return nil, errResourceMismatch
 	}
 	public := func(value string) ([]byte, error) {
@@ -64,7 +64,7 @@ func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
 	if bytes.Equal(ownerDER, requesterDER) {
 		return nil, errIssuerUntrusted
 	}
-	subject, err := parseSubjectNode(f["subject"])
+	subject, err := parseLocalSubjectNode(f["subject"])
 	if err != nil {
 		return nil, err
 	}
@@ -83,14 +83,14 @@ func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
 		}
 	}
 	return &LocalEnrollment{owner: publicIssuerPin{ownerMXID: texts["owner_mxid"], spkiDER: ownerDER}, requesterDER: requesterDER,
-		subject: subject, audience: audience, cycle: cycle, stateDir: texts["state_dir"], ghPath: texts["gh_path"], epoch: sha256.Sum256(append([]byte("swarma-grants/local-state/1\n"), raw...))}, nil
+		subject: subject, audience: audience, cycle: cycle, stateDir: texts["state_dir"], ghPath: texts["gh_path"], epoch: sha256.Sum256(append([]byte("swarma-grants/local-state/2\n"), raw...))}, nil
 }
 
 // checkedLocalCreate is immutable outside this package. The provider consumes
 // this same object after verification and durable intent, never unchecked argv.
 type checkedLocalCreate struct {
 	certificate, attestation []byte
-	request                  *requestProjection
+	request                  *localOperationProjection
 	certificateID            string
 	correlation              [32]byte
 	observedAt               time.Time
@@ -100,11 +100,11 @@ func (e *LocalEnrollment) check(certificateRaw, requestRaw []byte, observedAt ti
 	if e == nil {
 		return nil, errIssuerUntrusted
 	}
-	envelope, err := checkSignedRecordWithPin(certificateRaw, certificateEnvelopeWire, e.owner)
+	envelope, err := checkSignedRecordWithPin(certificateRaw, localCertificateEnvelopeWire, e.owner)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := NewRepositoryIssuance(envelope.payload, e.owner.ownerMXID, e.owner.spkiDER, LocalOrganization, LocalRepository); err != nil {
+	if _, err := NewLocalRepositoryIssuance(envelope.payload, e.owner.ownerMXID, e.owner.spkiDER, e.requesterDER, LocalOrganization, LocalRepository); err != nil {
 		return nil, err
 	}
 	attestation, err := parseLocalAttestation(requestRaw)
@@ -131,10 +131,17 @@ func (e *LocalEnrollment) check(certificateRaw, requestRaw []byte, observedAt ti
 	if request.action != "repository.create" || request.createTarget.organization != LocalOrganization || request.createTarget.name != LocalRepository {
 		return nil, errResourceMismatch
 	}
-	if err := checkDeclaredRequestMatch(envelope.payload, request.raw, e.cycle.runtime, e.cycle.channel, observedAt); err != nil {
+	certificate, err := parseLocalCertificateProjection(envelope.payload)
+	if err != nil {
 		return nil, err
 	}
-	correlation, _ := domainDigest(requestDomain, request.raw)
+	if *certificate.subject != *request.subject {
+		return nil, errSubjectMismatch
+	}
+	if err := checkRequestBodyMatch(certificate.certificateProjection, request.requestProjection, e.cycle.runtime, e.cycle.channel, observedAt); err != nil {
+		return nil, err
+	}
+	correlation := localOperationDigest(request.raw)
 	return &checkedLocalCreate{certificate: bytes.Clone(certificateRaw), attestation: bytes.Clone(requestRaw), request: request,
 		certificateID: request.certificateID, correlation: correlation, observedAt: observedAt.UTC()}, nil
 }

@@ -44,13 +44,18 @@ func checkDeclaredRequestMatch(certificateRaw, requestRaw []byte, runtime, chann
 	if err != nil {
 		return err
 	}
-	if certificate.certificateID != request.certificateID {
-		return errScheduleMismatch
-	}
 	if certificate.subject.accountMXID != request.subject.accountMXID ||
 		certificate.subject.deviceID != request.subject.deviceID ||
 		certificate.subject.deviceEd25519 != request.subject.deviceEd25519 {
 		return errSubjectMismatch
+	}
+	return checkRequestBodyMatch(certificate, request, runtime, channel, observedAt)
+}
+
+// Subject/profile compatibility is enforced by the two distinct callers.
+func checkRequestBodyMatch(certificate *certificateProjection, request *requestProjection, runtime, channel string, observedAt time.Time) error {
+	if certificate.certificateID != request.certificateID {
+		return errScheduleMismatch
 	}
 	if *certificate.audience != *request.audience {
 		return errAudienceMismatch

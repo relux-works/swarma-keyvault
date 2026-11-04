@@ -80,15 +80,15 @@ func TestLocalDocking(t *testing.T) {
 			requester := dockingKey(t, "swarma-grants", "requester-local-v1", false)
 			start := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
 			end := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
-			subject := map[string]any{"account_mxid": "@fixture:example.invalid", "device_id": "FIXTURE", "device_ed25519": base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))}
+			subject := map[string]any{"account_mxid": "@fixture:example.invalid", "device_id": "FIXTURE"}
 			audience := map[string]any{"deployment_id": "fixture", "executor_id": "fixture"}
 			cycle := map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}
 			draft := map[string]any{"audience": audience, "subject": subject, "certificate_id": "docking", "cycles": []any{cycle}, "not_before": start, "expires_at": end, "organization": grants.LocalOrganization, "name": grants.LocalRepository}
-			unsigned, err := grants.PrepareRepositoryCertificate(dockingJSON(t, draft), grants.LocalOwnerMXID, owner.item.SPKI)
+			unsigned, err := grants.PrepareLocalRepositoryCertificate(dockingJSON(t, draft), grants.LocalOwnerMXID, owner.item.SPKI, requester.item.SPKI)
 			if err != nil {
 				t.Fatal(err)
 			}
-			issuer, err := grantissuer.Prepare(unsigned.Payload, owner.item.SPKI)
+			issuer, err := grantissuer.PrepareLocal(unsigned.Payload, owner.item.SPKI, requester.item.SPKI)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -103,7 +103,7 @@ func TestLocalDocking(t *testing.T) {
 			}
 			entry := payload["entries"].([]any)[0].(map[string]any)
 			use := entry["uses"].([]any)[0].(map[string]any)
-			request := map[string]any{"type": "grants-request-1", "request_id": "docking-request", "certificate_id": payload["certificate_id"], "entry_id": entry["entry_id"], "cycle_id": use["cycle_id"], "operation_use_id": use["operation_use_id"], "subject": subject, "audience": audience, "action": entry["action"], "target": entry["target"], "expires_at": end}
+			request := map[string]any{"type": "grants-local-operation-1", "request_id": "docking-request", "certificate_id": payload["certificate_id"], "entry_id": entry["entry_id"], "cycle_id": use["cycle_id"], "operation_use_id": use["operation_use_id"], "subject": subject, "audience": audience, "action": entry["action"], "target": entry["target"], "expires_at": end}
 			signRequest := func() []byte {
 				t.Helper()
 				p, err := grantrequester.Prepare(dockingJSON(t, request), requester.item.SPKI)
@@ -125,7 +125,7 @@ func TestLocalDocking(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := map[string]any{"type": "grants-local-enrollment-1", "owner_mxid": grants.LocalOwnerMXID, "owner_spki": base64.RawURLEncoding.EncodeToString(owner.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(requester.item.SPKI), "subject": subject, "audience": audience, "cycle": cycle, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": exe}
+			config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": grants.LocalOwnerMXID, "owner_spki": base64.RawURLEncoding.EncodeToString(owner.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(requester.item.SPKI), "subject": subject, "audience": audience, "cycle": cycle, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": exe}
 			path := filepath.Join(root, "enrollment.json")
 			if err := os.WriteFile(path, dockingJSON(t, config), 0600); err != nil {
 				t.Fatal(err)

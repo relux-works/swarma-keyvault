@@ -228,7 +228,41 @@ this executor never dispatches it. This is a local proof of concept, with no
 Matrix receiver, device authentication, revocation/reissue workflow or protected
 clock. Its subject is a custodian-declared association to a separately pinned
 P-256 requester key; copying subject JSON without that key cannot authenticate
-a request.
+a request. The subject has exactly `account_mxid` and `device_id`; it contains
+no Matrix Ed25519 key. `encrypted-dm` is a declared cycle label: this local path
+does not authenticate a Matrix device, encrypt a message or deliver via Matrix.
+
+Use the explicit local authoring and issuance commands with independently
+obtained owner and requester P-256 SPKI DER files:
+
+```sh
+.temp/build/swarma-keyvault grants local-prepare \
+  --plan local-plan.json --owner-mxid @alexis:gr.relux.works \
+  --issuer-spki-der owner.spki.der --requester-spki-der requester.spki.der \
+  > local-certificate.json
+.temp/build/swarma-keyvault grants local-issue \
+  --payload local-certificate.json --owner-spki-der owner.spki.der \
+  --requester-spki-der requester.spki.der > signed-local-certificate.json
+```
+
+The bounded canonical draft has the same eight authoring fields shown above,
+with the two-field local subject. `local-prepare` makes no private call. It
+derives `requester_spki_sha256` as the full lowercase SHA-256 of the exact
+separate requester DER and emits `grants-local-certificate-1`. `local-issue`
+checks that signed constraint against the independently expected requester DER
+before accessing the owner key. The hash never selects a trusted key. Its
+complete Russian review includes the declared subject, full requester hash,
+all signed fields and an explicit statement that no Matrix device is
+authenticated and nothing is encrypted or delivered through Matrix. The
+presence prompt names `grant local repository.create`, the target and digest.
+The owner key, presence, review-write and single-attempt requirements of
+`grants issue` also apply here.
+
+The resulting envelope is `grants-signed-local-certificate-1`; its signature
+covers SHA-256 of `swarma-grants/local-certificate/1`, LF and the exact canonical
+payload. Certificate and envelope limits are 65,536 and 98,304 bytes. The existing
+Matrix `grants prepare` and `grants issue` formats remain separate and retain
+their original contracts.
 
 An already provisioned `swarma-grants/requester-local-v1`, generation 1, must be
 an Enclave non-presence, non-extractable signing key. Request signing checks the
@@ -239,16 +273,18 @@ actual resolved record and separate public pin before its single private call:
   --payload request.json --requester-spki-der requester.spki.der > local-request.json
 ```
 
-`request.json` is the existing complete canonical `grants-request-1` payload
+`request.json` is the complete canonical `grants-local-operation-1` payload
 (at most 8,192 bytes), including explicit certificate/entry/cycle/use IDs, subject,
-audience, CREATE target and expiry. This command verifies its own resulting
+audience, CREATE target and expiry, with the same two-field local subject.
+This command verifies its own resulting
 signature but does not enroll a key or prove that a certificate allows it. The
 new canonical envelope has exactly `payload`, `signature`, `type`, with type
-`grants-local-request-1`. Payload and low-S DER signature use strict unpadded
-base64url; signing covers SHA-256 of `swarma-grants/local-request/1`, LF and the
+`grants-local-request-2`. Payload and low-S DER signature use strict unpadded
+base64url; signing covers SHA-256 of `swarma-grants/local-request/2`, LF and the
 exact request bytes. Limits are 12,288 bytes overall, 10,923 encoded/8,192 decoded
-payload bytes and 96 encoded/72 decoded signature bytes. Existing certificate,
-request and correlation-digest formats retain their contracts.
+payload bytes and 96 encoded/72 decoded signature bytes. The local correlation
+is SHA-256 of `swarma-grants/local-operation/1`, LF and the exact operation bytes;
+it is distinct from the signature digest and the existing Matrix correlation.
 
 The custodian supplies a separate canonical local configuration, at most 8,192
 bytes, as an owner-private regular 0600 file, without a final-component symlink.
@@ -267,10 +303,9 @@ It has exactly these fields (formatted here for reading; replace all placeholder
   "state_dir": "/absolute/path/to/private-local-state",
   "subject": {
     "account_mxid": "@actual-requester:example.invalid",
-    "device_ed25519": "ACTUAL_SEPARATELY_OBTAINED_MATRIX_DEVICE_PUBLIC_KEY",
-    "device_id": "ACTUAL_DEVICE"
+    "device_id": "DECLARED_DEVICE"
   },
-  "type": "grants-local-enrollment-1"
+  "type": "grants-local-enrollment-2"
 }
 ```
 
@@ -280,12 +315,14 @@ must match the signed certificate and request exactly. Provision the state
 directory explicitly with owner-only 0700 permissions before execution; no
 request field or CLI flag can override the enrollment, pins or provider path.
 Keep the same exact config and state directory for subsequent calls. Changing
-config bytes changes the journal epoch and refuses existing history; it is not
-a migration or reset procedure.
+config bytes changes the journal epoch, SHA-256 of `swarma-grants/local-state/2`,
+LF and exact config bytes, and refuses existing history. Old local enrollment,
+attestation and journal formats are rejected without automatic migration,
+truncation or reset.
 
 ```sh
 .temp/build/swarma-keyvault grants execute \
-  --config enrollment.json --certificate signed-certificate.json \
+  --config enrollment.json --certificate signed-local-certificate.json \
   --request local-request.json
 ```
 

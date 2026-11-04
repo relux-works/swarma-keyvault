@@ -18,6 +18,11 @@ const (
 	revocationEnvelopeWire
 	localRequestEnvelopeWire
 	localEnrollmentWire
+	localCertificateWire
+	localCertificateEnvelopeWire
+	localOperationWire
+	localRequest2EnvelopeWire
+	localEnrollment2Wire
 )
 
 type wireKind uint8
@@ -59,17 +64,17 @@ type canonicalParser struct {
 func parseCanonical(raw []byte, profile wireProfile) (*wireValue, error) {
 	maximum := 0
 	switch profile {
-	case certificateWire:
+	case certificateWire, localCertificateWire:
 		maximum = 65536
-	case certificateEnvelopeWire:
+	case certificateEnvelopeWire, localCertificateEnvelopeWire:
 		maximum = 98304
-	case requestWire, resultWire, revocationEnvelopeWire:
+	case requestWire, resultWire, revocationEnvelopeWire, localOperationWire:
 		maximum = 8192
 	case revocationWire:
 		maximum = 4096
-	case localRequestEnvelopeWire:
+	case localRequestEnvelopeWire, localRequest2EnvelopeWire:
 		maximum = 12288
-	case localEnrollmentWire:
+	case localEnrollmentWire, localEnrollment2Wire:
 		maximum = 8192
 	default:
 		return nil, errBadEncoding
@@ -192,7 +197,7 @@ func (p *canonicalParser) readString(limit int) (string, error) {
 }
 
 func (p *canonicalParser) fieldStringLimit(depth int, name string) int {
-	if depth == 1 && p.profile == localRequestEnvelopeWire {
+	if depth == 1 && (p.profile == localRequestEnvelopeWire || p.profile == localRequest2EnvelopeWire) {
 		if name == "payload" {
 			return 10923
 		}
@@ -200,15 +205,15 @@ func (p *canonicalParser) fieldStringLimit(depth int, name string) int {
 			return 96
 		}
 	}
-	if depth == 1 && p.profile == localEnrollmentWire && (name == "owner_spki" || name == "requester_spki") {
+	if depth == 1 && (p.profile == localEnrollmentWire || p.profile == localEnrollment2Wire) && (name == "owner_spki" || name == "requester_spki") {
 		return 1366
 	}
-	if depth == 1 && (p.profile == certificateEnvelopeWire || p.profile == revocationEnvelopeWire) {
+	if depth == 1 && (p.profile == certificateEnvelopeWire || p.profile == revocationEnvelopeWire || p.profile == localCertificateEnvelopeWire) {
 		if name == "signature" {
 			return 96
 		}
 		if name == "payload" {
-			if p.profile == certificateEnvelopeWire {
+			if p.profile == certificateEnvelopeWire || p.profile == localCertificateEnvelopeWire {
 				return 87382
 			}
 			return 5462

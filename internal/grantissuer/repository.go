@@ -23,6 +23,7 @@ var ErrOwnerKeyMismatch = errors.New("owner presence key does not match the type
 type Prepared struct {
 	plan   *grants.RepositoryIssuance
 	public []byte
+	local  bool
 }
 
 func Prepare(payload, expectedPublicDER []byte) (*Prepared, error) {
@@ -33,6 +34,16 @@ func Prepare(payload, expectedPublicDER []byte) (*Prepared, error) {
 	return &Prepared{plan: plan, public: bytes.Clone(expectedPublicDER)}, nil
 }
 
+// PrepareLocal binds a distinct local certificate to independently expected
+// owner and requester public keys before constructing any private operation.
+func PrepareLocal(payload, expectedOwnerDER, expectedRequesterDER []byte) (*Prepared, error) {
+	plan, err := grants.NewLocalRepositoryIssuance(payload, OwnerMXID, expectedOwnerDER, expectedRequesterDER, Organization, Repository)
+	if err != nil {
+		return nil, err
+	}
+	return &Prepared{plan: plan, public: bytes.Clone(expectedOwnerDER), local: true}, nil
+}
+
 // Prompt names only the digest this exact typed preparation will sign. The
 // helper's presence dialog still names its selected key separately.
 func (p *Prepared) Prompt(digest []byte) string {
@@ -40,7 +51,11 @@ func (p *Prepared) Prompt(digest []byte) string {
 	if !bytes.Equal(digest, want[:]) {
 		return ""
 	}
-	return "grant repository.create " + Organization + "/" + Repository + " sha256 " + hex.EncodeToString(want[:6])
+	prefix := "grant repository.create "
+	if p.local {
+		prefix = "grant local repository.create "
+	}
+	return prefix + Organization + "/" + Repository + " sha256 " + hex.EncodeToString(want[:6])
 }
 
 // Sign displays the full exact review only after normal vault policy and the

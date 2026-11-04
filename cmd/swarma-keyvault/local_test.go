@@ -25,7 +25,8 @@ func localCLIFixture(t *testing.T) ([]string, []byte, *cliIssueStore) {
 	}
 	entry := certificate["entries"].([]any)[0].(map[string]any)
 	use := entry["uses"].([]any)[0].(map[string]any)
-	request := map[string]any{"type": "grants-request-1", "request_id": "local-request", "certificate_id": certificate["certificate_id"], "entry_id": entry["entry_id"], "cycle_id": use["cycle_id"], "operation_use_id": use["operation_use_id"], "subject": certificate["subject"], "audience": certificate["audience"], "action": "repository.create", "target": entry["target"], "expires_at": certificate["expires_at"]}
+	delete(certificate["subject"].(map[string]any), "device_ed25519")
+	request := map[string]any{"type": "grants-local-operation-1", "request_id": "local-request", "certificate_id": certificate["certificate_id"], "entry_id": entry["entry_id"], "cycle_id": use["cycle_id"], "operation_use_id": use["operation_use_id"], "subject": certificate["subject"], "audience": certificate["audience"], "action": "repository.create", "target": entry["target"], "expires_at": certificate["expires_at"]}
 	raw, err := json.Marshal(request)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +69,8 @@ func TestLocalRequestCLI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(append([]byte("swarma-grants/local-request/1\n"), payload...))
-	if envelope["type"] != "grants-local-request-1" || !bytes.Equal(raw, payload) || !ecdsa.VerifyASN1(&store.key.PublicKey, digest[:], sig) || stderr.Len() != 0 {
+	digest := sha256.Sum256(append([]byte("swarma-grants/local-request/2\n"), payload...))
+	if envelope["type"] != "grants-local-request-2" || !bytes.Equal(raw, payload) || !ecdsa.VerifyASN1(&store.key.PublicKey, digest[:], sig) || stderr.Len() != 0 {
 		t.Fatal("local request signature/output mismatch")
 	}
 }
@@ -130,7 +131,7 @@ func executeCLIFixture(t *testing.T) ([]string, []byte) {
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	config := map[string]any{"type": "grants-local-enrollment-1", "owner_mxid": grants.LocalOwnerMXID, "owner_spki": base64.RawURLEncoding.EncodeToString(first.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(second.item.SPKI), "subject": map[string]any{"account_mxid": "@fixture:example.invalid", "device_id": "FIXTURE", "device_ed25519": strings.Repeat("A", 43)}, "audience": map[string]any{"deployment_id": "fixture", "executor_id": "fixture"}, "cycle": map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": "/fixture/gh"}
+	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": grants.LocalOwnerMXID, "owner_spki": base64.RawURLEncoding.EncodeToString(first.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(second.item.SPKI), "subject": map[string]any{"account_mxid": "@fixture:example.invalid", "device_id": "FIXTURE"}, "audience": map[string]any{"deployment_id": "fixture", "executor_id": "fixture"}, "cycle": map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": "/fixture/gh"}
 	raw, err := json.Marshal(config)
 	if err != nil {
 		t.Fatal(err)

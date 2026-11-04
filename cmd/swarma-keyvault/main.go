@@ -11,6 +11,7 @@ import (
 )
 
 const prepareUsage = "swarma-keyvault grants prepare --plan FILE|- --owner-mxid MXID --issuer-spki-der FILE"
+const localPrepareUsage = "swarma-keyvault grants local-prepare --plan FILE|- --owner-mxid MXID --issuer-spki-der FILE --requester-spki-der FILE"
 
 type onceString struct {
 	value string
@@ -29,6 +30,12 @@ func (v *onceString) Set(value string) error {
 func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) >= 2 && args[0] == "grants" && args[1] == "local-issue" {
+		return runIssueProfile(args[2:], stdin, stdout, stderr, true)
+	}
+	if len(args) >= 2 && args[0] == "grants" && args[1] == "local-prepare" {
+		return runPrepare(args[2:], stdin, stdout, stderr, true)
+	}
 	if len(args) >= 2 && args[0] == "grants" && args[1] == "issue" {
 		return runIssue(args[2:], stdin, stdout, stderr)
 	}
@@ -42,20 +49,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) < 2 || args[0] != "grants" || args[1] != "prepare" {
 		return usage()
 	}
-	var plan, owner, spki onceString
+	return runPrepare(args[2:], stdin, stdout, stderr, false)
+}
+
+func runPrepare(args []string, stdin io.Reader, stdout, stderr io.Writer, local bool) int {
+	usageText := prepareUsage
+	if local {
+		usageText = localPrepareUsage
+	}
+	usage := func() int { _, _ = fmt.Fprintln(stderr, usageText); return 2 }
+	var plan, owner, spki, requester onceString
 	flags := flag.NewFlagSet("grants prepare", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&plan, "plan", "explicit canonical draft file, or - for stdin")
 	flags.Var(&owner, "owner-mxid", "exact owner Matrix account")
 	flags.Var(&spki, "issuer-spki-der", "explicit public P-256 SPKI DER file")
-	if err := flags.Parse(args[2:]); err != nil {
+	if local {
+		flags.Var(&requester, "requester-spki-der", "explicit requester public P-256 DER file")
+	}
+	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			_, _ = fmt.Fprintln(stderr, prepareUsage)
+			_, _ = fmt.Fprintln(stderr, usageText)
 			return 0
 		}
 		return usage()
 	}
-	if flags.NArg() != 0 || !plan.set || !owner.set || !spki.set || plan.value == "" || owner.value == "" || spki.value == "" || spki.value == "-" {
+	if (local && (!requester.set || requester.value == "" || requester.value == "-")) || flags.NArg() != 0 || !plan.set || !owner.set || !spki.set || plan.value == "" || owner.value == "" || spki.value == "" || spki.value == "-" {
 		return usage()
 	}
 	draft, err := readInput(plan.value, stdin, 65536)
@@ -69,7 +88,17 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "cannot read bounded public SPKI DER")
 		return 1
 	}
-	prepared, err := grants.PrepareRepositoryCertificate(draft, owner.value, public)
+	var prepared *grants.UnsignedCertificate
+	if local {
+		requesterPublic, readErr := readInput(requester.value, nil, 1024)
+		if readErr != nil {
+			_, _ = fmt.Fprintln(stderr, "cannot read bounded requester SPKI DER")
+			return 1
+		}
+		prepared, err = grants.PrepareLocalRepositoryCertificate(draft, owner.value, public, requesterPublic)
+	} else {
+		prepared, err = grants.PrepareRepositoryCertificate(draft, owner.value, public)
+	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1

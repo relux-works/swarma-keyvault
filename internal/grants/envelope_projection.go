@@ -26,6 +26,9 @@ func parseEnvelopeProjection(raw []byte, profile wireProfile) (*envelopeProjecti
 	case certificateEnvelopeWire:
 		envelopeType, payloadType = "grants-signed-certificate-1", "grants-certificate-1"
 		payloadProfile, payloadField, domain = certificateWire, certificatePayloadField, certificateDomain
+	case localCertificateEnvelopeWire:
+		envelopeType, payloadType = "grants-signed-local-certificate-1", "grants-local-certificate-1"
+		payloadProfile, payloadField, domain = localCertificateWire, certificatePayloadField, localCertificateDomain
 	case revocationEnvelopeWire:
 		envelopeType, payloadType = "grants-signed-revocation-1", "grants-revocation-1"
 		payloadProfile, payloadField, domain = revocationWire, revocationPayloadField, revocationDomain

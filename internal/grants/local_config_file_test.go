@@ -132,6 +132,8 @@ func TestLocalStateFileTypesAndBudget(t *testing.T) {
 func TestLocalDeleteRefused(t *testing.T) {
 	f, m, p, c, _ := localMediatorFixture(t)
 	_, q := declaredMatchFixture("repository.delete", "codex-dm")
+	q["type"] = "grants-local-operation-1"
+	delete(q["subject"].(map[string]any), "device_ed25519")
 	q["target"].(map[string]any)["organization"] = LocalOrganization
 	q["target"].(map[string]any)["name"] = LocalRepository
 	f.request = q

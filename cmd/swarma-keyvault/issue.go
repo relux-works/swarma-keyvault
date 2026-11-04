@@ -11,6 +11,7 @@ import (
 )
 
 const issueUsage = "swarma-keyvault grants issue --payload FILE|- --owner-spki-der FILE"
+const localIssueUsage = "swarma-keyvault grants local-issue --payload FILE|- --owner-spki-der FILE --requester-spki-der FILE"
 
 // Constructed only after complete typed preparation. Tests replace this factory
 // with a software fixture; no real store is selected by ordinary CLI tests.
@@ -22,20 +23,32 @@ var newIssueManager = func(prompt func([]byte) string) *keyvault.Manager {
 }
 
 func runIssue(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	usage := func() int { _, _ = fmt.Fprintln(stderr, issueUsage); return 2 }
-	var payload, public onceString
+	return runIssueProfile(args, stdin, stdout, stderr, false)
+}
+
+func runIssueProfile(args []string, stdin io.Reader, stdout, stderr io.Writer, local bool) int {
+	usageText := issueUsage
+	if local {
+		usageText = localIssueUsage
+	}
+
+	usage := func() int { _, _ = fmt.Fprintln(stderr, usageText); return 2 }
+	var payload, public, requester onceString
 	flags := flag.NewFlagSet("grants issue", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.Var(&payload, "payload", "complete exact canonical certificate payload, or -")
 	flags.Var(&public, "owner-spki-der", "independently expected public owner P-256 DER")
+	if local {
+		flags.Var(&requester, "requester-spki-der", "independently expected requester P-256 DER")
+	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			_, _ = fmt.Fprintln(stderr, issueUsage)
+			_, _ = fmt.Fprintln(stderr, usageText)
 			return 0
 		}
 		return usage()
 	}
-	if flags.NArg() != 0 || !payload.set || !public.set || payload.value == "" || public.value == "" || public.value == "-" {
+	if (local && (!requester.set || requester.value == "" || requester.value == "-")) || flags.NArg() != 0 || !payload.set || !public.set || payload.value == "" || public.value == "" || public.value == "-" {
 		return usage()
 	}
 	raw, err := readInput(payload.value, stdin, 65536)
@@ -48,7 +61,17 @@ func runIssue(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "cannot read bounded public owner SPKI DER")
 		return 1
 	}
-	prepared, err := grantissuer.Prepare(raw, pin)
+	var prepared *grantissuer.Prepared
+	if local {
+		requesterPin, readErr := readInput(requester.value, nil, 1024)
+		if readErr != nil {
+			_, _ = fmt.Fprintln(stderr, "cannot read bounded requester SPKI DER")
+			return 1
+		}
+		prepared, err = grantissuer.PrepareLocal(raw, pin, requesterPin)
+	} else {
+		prepared, err = grantissuer.Prepare(raw, pin)
+	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1

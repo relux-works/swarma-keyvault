@@ -94,13 +94,29 @@ func parseCertificateProjection(raw []byte) (*certificateProjection, error) {
 	if err != nil {
 		return nil, err
 	}
+	kind, err := memberText(node, "type")
+	if err != nil || kind != "grants-certificate-1" {
+		return nil, errBadSchema
+	}
+	subject, err := parseSubjectNode(f["subject"])
+	if err != nil {
+		return nil, err
+	}
+	value, err := parseCertificateBody(raw, f)
+	if err != nil {
+		return nil, err
+	}
+	value.subject = subject
+	return value, nil
+}
+
+// Profile-neutral fields are used only after a caller enforces its own closed
+// schema and distinct subject. No Matrix subject or synthetic key is supplied.
+func parseCertificateBody(raw []byte, f map[string]*wireValue) (*certificateProjection, error) {
 	for _, name := range []string{"type", "certificate_id", "not_before", "expires_at"} {
 		if f[name] == nil || f[name].kind != stringValue {
 			return nil, errBadSchema
 		}
-	}
-	if f["type"].text != "grants-certificate-1" {
-		return nil, errBadSchema
 	}
 	id, err := parseOpaqueID(f["certificate_id"].text)
 	if err != nil {
@@ -108,10 +124,6 @@ func parseCertificateProjection(raw []byte) (*certificateProjection, error) {
 	}
 	value := &certificateProjection{certificateID: id}
 	value.issuer, err = parseIssuerNode(f["issuer"])
-	if err != nil {
-		return nil, err
-	}
-	value.subject, err = parseSubjectNode(f["subject"])
 	if err != nil {
 		return nil, err
 	}

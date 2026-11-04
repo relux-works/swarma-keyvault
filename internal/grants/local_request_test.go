@@ -27,6 +27,11 @@ func localTestFixture(t *testing.T) *localFixture {
 	owner, ownerDER, _ := certificateSignatureFixture(t)
 	requester, requesterDER, _ := certificateSignatureFixture(t)
 	c, q := declaredMatchFixture("repository.create", "codex-dm")
+	c["type"], q["type"] = "grants-local-certificate-1", "grants-local-operation-1"
+	delete(c["subject"].(map[string]any), "device_ed25519")
+	delete(q["subject"].(map[string]any), "device_ed25519")
+	requesterHash := sha256.Sum256(requesterDER)
+	c["requester_spki_sha256"] = hex.EncodeToString(requesterHash[:])
 	issuer := c["issuer"].(map[string]any)
 	issuer["owner_mxid"] = LocalOwnerMXID
 	pin := sha256.Sum256(ownerDER)
@@ -44,7 +49,7 @@ func localTestFixture(t *testing.T) *localFixture {
 		e["uses"] = []any{map[string]any{"cycle_id": "codex-dm", "operation_use_id": use}}
 	}
 	q["target"] = map[string]any{"organization": LocalOrganization, "name": LocalRepository, "visibility": "private"}
-	config := map[string]any{"type": "grants-local-enrollment-1", "owner_mxid": LocalOwnerMXID,
+	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": LocalOwnerMXID,
 		"owner_spki": base64.RawURLEncoding.EncodeToString(ownerDER), "requester_spki": base64.RawURLEncoding.EncodeToString(requesterDER),
 		"subject": q["subject"], "audience": q["audience"], "cycle": cycle, "organization": LocalOrganization, "name": LocalRepository,
 		"state_dir": t.TempDir(), "gh_path": filepath.Join(string(filepath.Separator), "fixture", "gh")}
@@ -56,13 +61,19 @@ func localTestFixture(t *testing.T) *localFixture {
 
 func (f *localFixture) envelopes(t *testing.T) ([]byte, []byte) {
 	t.Helper()
-	certificate := signedCertificateFixture(t, f.owner, f.certificate, "swarma-grants/certificate/1")
-	request := signedCertificateFixture(t, f.requester, f.request, "swarma-grants/local-request/1")
+	certificate := signedCertificateFixture(t, f.owner, f.certificate, "swarma-grants/local-certificate/1")
+	var certOuter map[string]any
+	if err := json.Unmarshal(certificate, &certOuter); err != nil {
+		t.Fatal(err)
+	}
+	certOuter["type"] = "grants-signed-local-certificate-1"
+	certificate = requestTestBytes(t, certOuter)
+	request := signedCertificateFixture(t, f.requester, f.request, "swarma-grants/local-request/2")
 	var outer map[string]any
 	if err := json.Unmarshal(request, &outer); err != nil {
 		t.Fatal(err)
 	}
-	outer["type"] = "grants-local-request-1"
+	outer["type"] = "grants-local-request-2"
 	return certificate, requestTestBytes(t, outer)
 }
 
@@ -124,11 +135,12 @@ func TestLocalCheckRefusals(t *testing.T) {
 				want = errIssuerUntrusted
 			case "requester-pin":
 				e.requesterDER = f.ownerDER
+				want = errRequesterMismatch
 			case "requester-key":
 				f.requester = f.owner
 				_, q = f.envelopes(t)
 			case "subject":
-				f.request["subject"] = map[string]any{"account_mxid": "@copied:example.invalid", "device_id": "DEVICE-A", "device_ed25519": base64.RawURLEncoding.EncodeToString(make([]byte, 32))}
+				f.request["subject"] = map[string]any{"account_mxid": "@copied:example.invalid", "device_id": "DEVICE-A"}
 				_, q = f.envelopes(t)
 				want = errSubjectMismatch
 			case "audience":
@@ -205,7 +217,7 @@ func TestLocalEnvelopeBounds(t *testing.T) {
 			case "wrong-domain":
 				raw = signedCertificateFixture(t, f.requester, f.request, "swarma-grants/request/1")
 				_ = json.Unmarshal(raw, &outer)
-				outer["type"] = "grants-local-request-1"
+				outer["type"] = "grants-local-request-2"
 				raw = requestTestBytes(t, outer)
 			}
 			if mode == "wrong-domain" {
