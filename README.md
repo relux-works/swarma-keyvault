@@ -435,8 +435,8 @@ nonrevoked grant. A short display alias cannot substitute for a full sender ID.
 The event context must come from an admitted authentic projection; caller-supplied
 JSON is not itself evidence of network origin. Verification does not reserve a
 nonce/use, authorize provider dispatch or implement a live Matrix intake.
-Durable one-use execution, authentic event projection integration and actual
-presence/provider qualification for this new profile remain separate work.
+Authentic event projection integration and actual presence/provider
+qualification for this new profile remain separate work.
 
 The internal read-only `ParseA2AObservation` adapter accepts the closed
 `a2a.event-verification-input/1` observation profile. It checks full sender,
@@ -455,3 +455,21 @@ it never trims, repairs CRLF, scans markdown fences or chooses another envelope.
 Extraction alone does not authenticate a request: the inert bad-signature
 fixture extracts but fails the public verifier. Executed conformance with an
 actual upstream formatter and a qualified live projection remains pending.
+
+The internal G2 mediator rechecks the original event before opening state,
+under its lock, and immediately before one fixed private repository CREATE.
+It uses a separate explicitly initialized state directory/epoch; execution opens
+existing files only. Initialization refuses occupied directories, and execution
+refuses missing, empty, corrupt, partial, linked or incorrectly permissioned
+state. It never initializes or repairs a replacement journal during execution.
+This profile does not open or migrate the earlier local-profile journal.
+
+Grant-use and request-nonce indexes are separate and independent of registry
+digests. Refreshing a registry cannot restore a consumed grant, and a new grant
+cannot replay an old nonce. The local journal holds the allowance through
+durable reservation, dispatch intent and validated receipt under one lock.
+Ambiguous process/receipt/outcome failures retain the use with `unknown`; there
+is no automatic retry, release, cleanup or DELETE. File checks, checksums and
+cooperating-process locks do not resist same-UID rollback or bypass. These APIs
+have isolated fake/process-fixture qualification; public CLI configuration,
+admitted live projection and actual operational acceptance remain pending.

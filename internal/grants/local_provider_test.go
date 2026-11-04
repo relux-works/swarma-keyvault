@@ -17,6 +17,9 @@ import (
 // records each process start, without opening credentials or making a network
 // call. The external docking test uses this same process boundary.
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("KEYVAULT_A2A_GH_FIXTURE"); mode != "" {
+		os.Exit(runA2AProviderFixture(mode))
+	}
 	if mode := os.Getenv("KEYVAULT_LOCAL_GH_FIXTURE"); mode != "" {
 		want := []string{"api", "--hostname", "github.com", "-X", "POST", "orgs/relux-works/repos", "--input", "-"}
 		input, err := io.ReadAll(io.LimitReader(os.Stdin, 1024))

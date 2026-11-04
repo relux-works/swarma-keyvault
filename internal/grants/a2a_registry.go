@@ -30,6 +30,7 @@ type a2aRegistryKey struct {
 type A2AReceiver struct {
 	audience, room, topic string
 	keyHash, registryHash [32]byte
+	ownerHash             [32]byte
 	keys                  map[string]a2aRegistryKey
 	grants                map[string][]*a2aCertificate
 	revoked               map[string]bool
@@ -66,7 +67,7 @@ func NewA2AReceiver(config A2AReceiverConfig) (*A2AReceiver, error) {
 	if sha256.Sum256(config.KeyRegistry) != keyHash || sha256.Sum256(config.GrantRegistry) != grantHash {
 		return nil, ErrA2ARegistryPin
 	}
-	r := &A2AReceiver{audience: config.Audience, room: config.RoomID, topic: config.Topic, keyHash: keyHash, registryHash: grantHash,
+	r := &A2AReceiver{audience: config.Audience, room: config.RoomID, topic: config.Topic, keyHash: keyHash, registryHash: grantHash, ownerHash: sha256.Sum256(config.OwnerSPKIDER),
 		keys: map[string]a2aRegistryKey{}, grants: map[string][]*a2aCertificate{}, revoked: map[string]bool{}}
 	if err := r.parseKeys(config.KeyRegistry); err != nil {
 		return nil, err

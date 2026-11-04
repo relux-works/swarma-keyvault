@@ -41,6 +41,13 @@ type localProviderReceipt struct {
 // those legitimate JSON forms while rejecting duplicate members, excessive
 // depth/tokens and ambiguous types in the four required receipt fields.
 func parseLocalProviderReceipt(raw []byte) (*localProviderReceipt, error) {
+	return parseRepositoryProviderReceipt(raw, LocalRepository)
+}
+
+func parseRepositoryProviderReceipt(raw []byte, repository string) (*localProviderReceipt, error) {
+	if repository != LocalRepository && repository != A2ARepository {
+		return nil, errLocalProvider
+	}
 	if len(raw) == 0 || len(raw) > localReceiptLimit {
 		return nil, errLocalProvider
 	}
@@ -130,7 +137,7 @@ func parseLocalProviderReceipt(raw []byte) (*localProviderReceipt, error) {
 			return nil, errLocalProvider
 		}
 	}
-	if name, ok := object["full_name"].(string); !ok || name != LocalOrganization+"/"+LocalRepository {
+	if name, ok := object["full_name"].(string); !ok || name != LocalOrganization+"/"+repository {
 		return nil, errLocalProvider
 	}
 	if private, ok := object["private"].(bool); !ok || !private {
