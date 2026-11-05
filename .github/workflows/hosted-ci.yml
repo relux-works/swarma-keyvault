@@ -1,0 +1,71 @@
+name: Hosted Linux CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hosted-linux-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Go vet and race tests (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-p=2'
+      MAC_KEYVAULT_SKIP_KEYCHAIN: '1'
+    steps:
+      - name: Check out the PR head or pushed commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go 1.26.x
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.26.x'
+          cache: false
+      - name: Vet internal packages
+        run: go vet ./internal/...
+      - name: Inventory committed MU interop cases
+        run: |
+          cases=$(find interop/multi-use-grants/cases -maxdepth 1 -type f -name '*.json' | wc -l)
+          echo "TestMUInteropVectors committed cases: $cases"
+          test "$cases" -ge 72
+      # All 17 Go packages at this source revision build on Linux; none is excluded.
+      # The keyvault/... pattern expands to internal/keyvault plus:
+      # internal/keyvault/kek, internal/keyvault/keychaingate,
+      # internal/keyvault/recordtest, internal/keyvault/signerclient,
+      # internal/keyvault/signertest, internal/keyvault/testguard.
+      # All other patterns below each name exactly one package at this base.
+      # Go excludes the Darwin-only Security.framework/Keychain cgo backend,
+      # KEK code-identity inspection, sandbox-exec and Enclave helper tests,
+      # macOS peer/publication implementations, kekclient identity tests, and
+      # grants/mu_journal_append_test.go (Darwin UF_APPEND / Chflags semantics).
+      # Non-Darwin stubs refuse native custody/identity operations. The skip
+      # environment also disables attended real-Keychain/Enclave tests.
+      # cmd/mac-keyvault-enclave is Swift/CryptoKit, not a Go package.
+      # Native custody qualification remains a separate confined macOS gate.
+      - name: Race-test every Linux-buildable Go package
+        run: |
+          # Permission-refusal fixtures create deliberately world-readable files.
+          umask 022
+          MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v \
+            ./cmd/mac-keyvault/... \
+            ./cmd/mac-keyvault-kek/... \
+            ./cmd/mu-interop-vectors/... \
+            ./cmd/swarma-keyvault/... \
+            ./internal/grantissuer/... \
+            ./internal/grantrequester/... \
+            ./internal/grants/... \
+            ./internal/keyvault/... \
+            ./internal/mugrant/... \
+            ./internal/muinterop/... \
+            ./pkg/kekclient/...
