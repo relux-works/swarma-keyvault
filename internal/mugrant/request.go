@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/relux-works/swarma-envelope/record"
@@ -56,7 +58,7 @@ func BuildRequest(spec RequestSpec) (*Request, error) {
 	if !printableToken(spec.Audience, 255) || !validMXID(spec.To) || len(spec.Room) < 2 || spec.Room[0] != '!' || !printableToken(spec.Room, 255) {
 		return nil, ErrRequestSpec
 	}
-	if spec.Text == "" || len(spec.Text) > MaxRequestText || !utf8.ValidString(spec.Text) || len(spec.Nonce) != 16 {
+	if !sendableText(spec.Text) || len(spec.Nonce) != 16 {
 		return nil, ErrRequestSpec
 	}
 	if spec.Lifetime <= 0 || spec.Lifetime > MaxMessageLifetime || spec.Lifetime%time.Second != 0 || spec.IssuedAt.Location() != time.UTC || spec.IssuedAt.Nanosecond() != 0 {
@@ -101,3 +103,23 @@ func (r *Request) Plan() *Plan { return r.plan }
 
 // Text returns the exact event text that body_sha256 binds.
 func (r *Request) Text() string { return r.text }
+
+// sendableText admits exactly the text the a2a envelope send accepts (a2a
+// #189 readEnvelopeText): valid UTF-8, not blank, LF and TAB as the only
+// controls; CR, every other control rune, U+FFFD and the bidi controls refuse.
+// The 4 KiB bound is stricter than the transport's 32 KiB.
+func sendableText(s string) bool {
+	if len(s) > MaxRequestText || !utf8.ValidString(s) || strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t':
+		case unicode.IsControl(r), r == utf8.RuneError:
+			return false
+		case r >= 0x202A && r <= 0x202E, r >= 0x2066 && r <= 0x2069, r == 0x200E, r == 0x200F, r == 0x061C:
+			return false
+		}
+	}
+	return true
+}

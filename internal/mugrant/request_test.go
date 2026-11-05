@@ -95,3 +95,29 @@ func TestBuildRequestRefusals(t *testing.T) {
 		}
 	}
 }
+
+// Claim: the request text rule equals the a2a envelope send rule (#189
+// readEnvelopeText): LF, TAB and ordinary Unicode are admitted; blank text,
+// CR (also in CRLF), other C0/DEL/C1 controls, U+FFFD and each bidi control
+// are refused, so nothing is signed that the transport would refuse.
+func TestBuildRequestTextRule(t *testing.T) {
+	for _, ok := range []string{"line one\nline two\n", "col\tcol", "задачи: проверить решение", "trailing\n"} {
+		s := requestSpec(t)
+		s.Text = ok
+		if _, err := BuildRequest(s); err != nil {
+			t.Fatalf("admissible text refused %q: %v", ok, err)
+		}
+	}
+	bad := map[string]string{
+		"blank": "   \n\t", "cr": "a\rb", "crlf": "a\r\nb", "nul": "a\x00b", "del": "a\x7fb", "c1": "a\u0085b",
+		"replacement": "a\uFFFDb", "lre": "a\u202Ab", "rlo": "a\u202Eb", "lri": "a\u2066b", "pdi": "a\u2069b",
+		"lrm": "a\u200Eb", "rlm": "a\u200Fb", "alm": "a\u061Cb",
+	}
+	for name, text := range bad {
+		s := requestSpec(t)
+		s.Text = text
+		if _, err := BuildRequest(s); !errors.Is(err, ErrRequestSpec) {
+			t.Fatal("transport-refused text admitted", name)
+		}
+	}
+}
