@@ -677,6 +677,15 @@ func TestSSHAgentGitPushOverSSH(t *testing.T) {
 				}
 				ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
 				ch.Close()
+				// Let the client close the connection first: closing it here
+				// while the client still sends its disconnect resets the
+				// connection, and ssh then fails a push that already landed.
+				go func() {
+					for extra := range channels {
+						extra.Reject(ssh.Prohibited, "one session only")
+					}
+				}()
+				connection.Wait()
 				serverDone <- err
 				return
 			}
