@@ -48,6 +48,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return runMURequestPrepare(args[2:], stdout, stderr)
 		case "mu-attestation-prepare":
 			return runMUAttestationPrepare(args[2:], stdout, stderr)
+		case "mu-issue":
+			return runMUIssue(args[2:], stdout, stderr)
 		case "mu-key-id":
 			return runMUKeyID(args[2:], stdout, stderr)
 		case "mu-assemble":
