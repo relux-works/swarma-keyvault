@@ -147,22 +147,22 @@ func TestA2ADurablePreReservationRefusals(t *testing.T) {
 			switch mode {
 			case "sender":
 				e.SenderMXID = "@other:example.invalid"
-				m.open = func(A2AStateConfig, *A2AReceiver) (*a2aState, error) {
+				m.open = func(context.Context, A2AStateConfig, *A2AReceiver) (*a2aState, error) {
 					t.Fatal("invalid request opened state")
 					return nil, ErrA2AState
 				}
 			case "missing-provider":
 				m.providerPath = filepath.Join(m.state.Directory, "missing")
 				want = ErrLocalProviderUnavailable
-				m.open = func(A2AStateConfig, *A2AReceiver) (*a2aState, error) {
+				m.open = func(context.Context, A2AStateConfig, *A2AReceiver) (*a2aState, error) {
 					t.Fatal("missing provider opened state")
 					return nil, ErrA2AState
 				}
 			case "expiry-at-lock":
 				want = ErrA2ATerm
 				original := m.open
-				m.open = func(c A2AStateConfig, r *A2AReceiver) (*a2aState, error) {
-					s, err := original(c, r)
+				m.open = func(ctx context.Context, c A2AStateConfig, r *A2AReceiver) (*a2aState, error) {
+					s, err := original(ctx, c, r)
 					m.now = func() time.Time { return f.now.Add(time.Hour) }
 					return s, err
 				}
@@ -191,8 +191,8 @@ func TestA2ADurableFaultBoundaries(t *testing.T) {
 			defer cancel()
 			original := m.open
 			writes, syncs := 0, 0
-			m.open = func(c A2AStateConfig, r *A2AReceiver) (*a2aState, error) {
-				s, err := original(c, r)
+			m.open = func(ctx context.Context, c A2AStateConfig, r *A2AReceiver) (*a2aState, error) {
+				s, err := original(ctx, c, r)
 				if err != nil {
 					return nil, err
 				}

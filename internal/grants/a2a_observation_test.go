@@ -31,7 +31,12 @@ func a2aObservedFixture(t *testing.T, reply bool) (*a2aFixture, *A2AReceiver, A2
 func a2aObservedBytes(t *testing.T, wrapper, projection map[string]any) []byte {
 	t.Helper()
 	projection["content_base64"] = base64.RawURLEncoding.EncodeToString(requestTestBytes(t, wrapper))
-	return requestTestBytes(t, projection)
+	return a2aFramed(requestTestBytes(t, projection))
+}
+
+// a2aFramed appends the single terminal LF that the Source projection emits.
+func a2aFramed(raw []byte) []byte {
+	return append(append([]byte{}, raw...), '\n')
 }
 
 // Both actual formatter shapes are admitted: explicit reply omits false;
@@ -48,8 +53,7 @@ func TestA2AObservationValidNeighbors(t *testing.T) {
 				p["room_context_source"] = "authenticated-room-scoped-endpoint"
 			}
 			want := []byte(strings.SplitN(w["body"].(string), "\n\n", 2)[1])
-			raw := append([]byte(" \n"), a2aObservedBytes(t, w, p)...)
-			raw = append(raw, '\n')
+			raw := a2aObservedBytes(t, w, p)
 			e, err := ParseA2AObservation(raw, x)
 			if err != nil || !bytes.Equal(e.Body, want) {
 				t.Fatal("valid exact extraction", err)
@@ -227,7 +231,7 @@ func TestA2AObservationBoundsAndRecords(t *testing.T) {
 		t.Fatal("bad boundary fixture")
 	}
 	p["content_base64"] = base64.RawURLEncoding.EncodeToString(content)
-	good := requestTestBytes(t, p)
+	good := a2aFramed(requestTestBytes(t, p))
 	e, err := ParseA2AObservation(good, x)
 	if err != nil {
 		t.Fatal("inclusive content limit", err)
@@ -237,12 +241,12 @@ func TestA2AObservationBoundsAndRecords(t *testing.T) {
 	}
 	for _, bad := range [][]byte{append(append([]byte{'{'}, ' '), content[1:]...), []byte("{}"), []byte("null"), []byte("[]"), []byte(""), []byte("{\"body\":\"\\ud800\"}")} {
 		p["content_base64"] = base64.RawURLEncoding.EncodeToString(bad)
-		if _, err := ParseA2AObservation(requestTestBytes(t, p), x); err == nil {
+		if _, err := ParseA2AObservation(a2aFramed(requestTestBytes(t, p)), x); err == nil {
 			t.Fatal("invalid content accepted", len(bad))
 		}
 	}
 	p["content_base64"] = base64.RawURLEncoding.EncodeToString(requestTestBytes(t, w)) + "="
-	if _, err := ParseA2AObservation(requestTestBytes(t, p), x); err == nil {
+	if _, err := ParseA2AObservation(a2aFramed(requestTestBytes(t, p)), x); err == nil {
 		t.Fatal("padded base64 accepted")
 	}
 	good = a2aObservedBytes(t, w, p)

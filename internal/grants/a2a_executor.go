@@ -169,6 +169,7 @@ func (e *A2AExecutor) observe(ctx context.Context, eventID string) (A2AEvent, er
 	cmd.Env = append(os.Environ(), "A2A_CONFIG_DIR="+e.configDir)
 	out, diag := &boundedLocalOutput{maximum: 98304}, &boundedLocalOutput{maximum: 8192}
 	cmd.Stdout, cmd.Stderr = out, diag
+	cmd.WaitDelay = subprocessWaitDelay
 	if err := cmd.Run(); err != nil || ctx.Err() != nil {
 		return A2AEvent{}, ErrA2AProjection
 	}

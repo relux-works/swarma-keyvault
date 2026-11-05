@@ -51,6 +51,8 @@ func TestMain(m *testing.M) {
 		case "failure":
 			_, _ = os.Stderr.WriteString("fixture private diagnostic must not escape")
 			os.Exit(17)
+		case "orphan-pipe":
+			holdInheritedPipes()
 		default:
 			os.Exit(95)
 		}

@@ -2,6 +2,7 @@ package grants
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -120,7 +121,7 @@ func InitializeA2AState(config A2AStateConfig, receiver *A2AReceiver) error {
 		return err
 	}
 	defer lock.Close()
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+	if err := lockStateFile(context.Background(), lock); err != nil {
 		return ErrA2AState
 	}
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
@@ -142,7 +143,7 @@ func InitializeA2AState(config A2AStateConfig, receiver *A2AReceiver) error {
 	return nil
 }
 
-func openA2AState(config A2AStateConfig, receiver *A2AReceiver) (*a2aState, error) {
+func openA2AState(ctx context.Context, config A2AStateConfig, receiver *A2AReceiver) (*a2aState, error) {
 	if receiver == nil {
 		return nil, ErrA2AState
 	}
@@ -161,7 +162,7 @@ func openA2AState(config A2AStateConfig, receiver *A2AReceiver) (*a2aState, erro
 	if err != nil {
 		return nil, err
 	}
-	if unix.Flock(int(s.lock.Fd()), unix.LOCK_EX) != nil {
+	if lockStateFile(ctx, s.lock) != nil {
 		return nil, ErrA2AState
 	}
 	s.file, err = a2aOpenFile(dir, "a2a.journal", false)

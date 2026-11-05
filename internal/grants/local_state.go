@@ -2,6 +2,7 @@ package grants
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -85,7 +86,7 @@ func openLocalState(e *LocalEnrollment) (*localState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = syscall.Flock(int(s.lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err = lockStateFile(context.Background(), s.lock); err != nil {
 		return nil, ErrLocalState
 	}
 	s.file, err = openLocalFile(filepath.Join(e.stateDir, "local.journal"))

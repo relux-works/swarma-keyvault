@@ -175,7 +175,7 @@ func runA2AExecutor(args []string, stdout, stderr io.Writer, operation string) i
 	if f.NArg() != 0 || !config.set || config.value == "" || config.value == "-" || (operation != "a2a-state-init" && (!event.set || event.value == "")) {
 		return usage()
 	}
-	raw, err := readInput(config.value, nil, 196608)
+	raw, err := grants.LoadA2AExecutorConfig(config.value)
 	if err != nil {
 		fmt.Fprintln(stderr, "cannot read bounded a2a public trust configuration")
 		return 1

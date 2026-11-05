@@ -49,6 +49,8 @@ func runA2AProjectionFixture(mode string) int {
 		_, _ = os.Stderr.Write(bytes.Repeat([]byte{'x'}, 8193))
 	case "wait":
 		time.Sleep(time.Minute)
+	case "orphan-pipe":
+		holdInheritedPipes()
 	default:
 		return 96
 	}

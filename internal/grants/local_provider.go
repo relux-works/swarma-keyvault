@@ -189,6 +189,7 @@ func (p localGHProvider) create(ctx context.Context, checked *checkedLocalCreate
 	stderr := &boundedLocalOutput{maximum: 8192}
 	command.Stdout = stdout
 	command.Stderr = stderr
+	command.WaitDelay = subprocessWaitDelay
 	if err := command.Run(); err != nil {
 		return nil, errLocalProvider
 	}

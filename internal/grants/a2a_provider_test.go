@@ -41,6 +41,8 @@ func runA2AProviderFixture(mode string) int {
 		return 17
 	case "output-limit":
 		_, _ = os.Stdout.Write(bytes.Repeat([]byte{'x'}, localReceiptLimit+1))
+	case "orphan-pipe":
+		holdInheritedPipes()
 	case "stderr-limit":
 		_, _ = os.Stderr.Write(bytes.Repeat([]byte{'x'}, 8193))
 	default:

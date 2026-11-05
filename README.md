@@ -494,13 +494,22 @@ initializes or repairs it. Execute accepts no projection-file or stdin override.
 It calls the pinned a2a binary once using its selected own stored configuration:
 `--profile CONNECTION --as IDENTITY read ROOM --event EVENT --verification-input --json`.
 A failed process, timeout, oversized output, partial JSON or mismatched observation
-cannot authorize dispatch, even if part of stdout looks valid. Subprocess raw
+cannot authorize dispatch, even if part of stdout looks valid. The observation must
+be exactly one JSON object followed by a single LF, as the a2a projection emits it;
+surrounding whitespace, CR, a missing LF or extra LFs refuse. After a provider or
+projection process exits or is killed at its deadline, its pipes are awaited at
+most one more second, so a descendant holding them cannot extend the deadline.
+A state lock held by another process is awaited only until the caller's deadline,
+and at most 30 seconds. Subprocess raw
 stderr is withheld. JSON command results go to stdout; refusals go to stderr with
 a nonzero exit. An `unknown` result retains its use; failed result publication is
 never permission to retry.
 
 The configuration is one closed JSON object, type
-`grants-a2a-executor-config-1`, at most 196608 bytes. Every field is a string:
+`grants-a2a-executor-config-1`, at most 196608 bytes. The file is the executor's
+root of trust: it must be a regular file (not a symlink), owned by the current user
+and not writable by group or others; owner-only and read-only modes such as 0600,
+0644, 0400 and 0444 are accepted. Every field is a string:
 
 | Fields | Meaning |
 | --- | --- |
@@ -512,7 +521,7 @@ The configuration is one closed JSON object, type
 | `grant_registry`, `grant_registry_sha256` | Exact signed-grant registry bytes and independent digest |
 | `state_dir`, `state_epoch` | Separate absolute private directory and nonzero independent 32-byte epoch |
 | `a2a_path`, `a2a_sha256` | Absolute admitted projection executable and exact file digest |
-| `a2a_identity`, `a2a_connection`, `a2a_config_dir` | Own identity, named connection and absolute existing configuration root |
+| `a2a_identity`, `a2a_connection`, `a2a_config_dir` | Own identity, named connection, and the a2a configuration root passed as `A2A_CONFIG_DIR`; the parser checks only that it is an absolute clean path, not that it exists |
 | `gh_path`, `gh_sha256` | Absolute admitted provider executable and exact file digest |
 
 Binary strings use canonical unpadded base64url; digests and epoch use 64 lowercase

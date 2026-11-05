@@ -36,7 +36,11 @@ func ParseA2AObservation(raw []byte, expected A2AObservationContext) (A2AEvent, 
 	if _, err := parseOpaqueID(expected.Topic); err != nil {
 		return refuse()
 	}
-	n, err := strictA2AJSON(raw, 98304)
+	record, ok := a2aRecordFrame(raw)
+	if !ok {
+		return refuse()
+	}
+	n, err := strictA2AJSON(record, 98304)
 	if err != nil {
 		return refuse()
 	}
@@ -310,4 +314,18 @@ func a2aScalarStrings(raw []byte) bool {
 		}
 	}
 	return true
+}
+
+// a2aRecordFrame admits exactly the Source projection framing: one compact
+// JSON object followed by a single terminal LF. Leading or trailing
+// whitespace, CR, a missing LF and additional LFs refuse before parsing.
+func a2aRecordFrame(raw []byte) ([]byte, bool) {
+	if len(raw) < 3 || raw[len(raw)-1] != '\n' {
+		return nil, false
+	}
+	body := raw[:len(raw)-1]
+	if body[0] != '{' || body[len(body)-1] != '}' {
+		return nil, false
+	}
+	return body, true
 }

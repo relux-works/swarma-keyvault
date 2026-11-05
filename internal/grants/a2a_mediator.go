@@ -31,7 +31,7 @@ type A2AMediator struct {
 	providerPath string
 	provider     a2aProvider
 	now          func() time.Time
-	open         func(A2AStateConfig, *A2AReceiver) (*a2aState, error)
+	open         func(context.Context, A2AStateConfig, *A2AReceiver) (*a2aState, error)
 }
 
 // NewA2AMediator does not initialize state, open credentials or call a provider.
@@ -73,7 +73,7 @@ func (m *A2AMediator) Execute(ctx context.Context, event A2AEvent) (*A2AOutcome,
 	if err := checkLocalProviderExecutable(m.providerPath); err != nil {
 		return nil, err
 	}
-	s, err := m.open(m.state, m.receiver)
+	s, err := m.open(ctx, m.state, m.receiver)
 	if err != nil {
 		return nil, ErrA2AState
 	}
@@ -161,6 +161,7 @@ func (p a2aGHProvider) create(ctx context.Context, checked *a2aCheckedCreate) ([
 	stderr := &boundedLocalOutput{maximum: 8192}
 	command.Stdout = stdout
 	command.Stderr = stderr
+	command.WaitDelay = subprocessWaitDelay
 	if err := command.Run(); err != nil {
 		return nil, errLocalProvider
 	}

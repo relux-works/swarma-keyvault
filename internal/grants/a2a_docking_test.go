@@ -60,7 +60,7 @@ func TestA2AFormatterDocking(t *testing.T) {
 			}
 			f, r, x, p := a2aDockingReceiver(t)
 			p["content_base64"] = base64.RawURLEncoding.EncodeToString(raw)
-			e, err := ParseA2AObservation(requestTestBytes(t, p), x)
+			e, err := ParseA2AObservation(a2aFramed(requestTestBytes(t, p)), x)
 			inert := []byte(`{"payload":"e30","request":"e30","signature":"AA","type":"grants-a2a-envelope-1"}`)
 			if err != nil || !bytes.Equal(e.Body, inert) {
 				t.Fatal("actual formatter extraction", err)
