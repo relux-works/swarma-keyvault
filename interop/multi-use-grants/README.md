@@ -84,6 +84,7 @@ controls stop an implementation that refuses everything from passing.
 | `M-P-text-tab` | text containing TAB | `succeeded` |
 | `M-P-future-then-fresh` | a validly signed snapshot dated 10 minutes ahead, then a fresh one | `key_binding_unavailable`, then `succeeded` |
 | `M-P-incomplete-then-older` | a publisher-signed snapshot with `complete` false, then an older complete one | `key_binding_unavailable`, then `succeeded` |
+| `M-P-oversize-then-older` | a publisher-signed, well-formed snapshot of 64 record entries over 8192 bytes, then an older one without them | `key_binding_invalid`, then `succeeded` |
 | `M-N-refused-then-older-mark` | a request for another audience with a fresh snapshot, then a request with an older snapshot that drops nothing | `audience_mismatch`, then `mu-revocation-snapshot-rollback` |
 | `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
@@ -137,6 +138,7 @@ Not committed, run by hand against the real code: these known-violation plants e
 - the snapshot high-water check switched off;
 - the owner-root revocations ignored.
 - the snapshot shape check left out of pre-verification recording;
+- the 8192-byte snapshot bound left out of pre-verification recording;
 - the mark raise left out of pre-verification recording.
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh

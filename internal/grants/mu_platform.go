@@ -352,6 +352,10 @@ func (p *MUPlatform) VerifiedSnapshots(ev MUEvent) ([]MUSnapshot, error) {
 // muVerifiedSnapshot admits a swarm-envelope/2 revocation/1 only when its
 // issuer and single author signature are key and the content id matches.
 func muVerifiedSnapshot(raw []byte, key string) (MUSnapshot, error) {
+	// The platform verifier refuses evidence over 8192 bytes before parsing.
+	if len(raw) > muMaxSnapshotBytes {
+		return MUSnapshot{}, ErrMUState
+	}
 	e, err := muParseEnvelope(raw)
 	if err != nil || len(e) != 4 || e["version"] != "swarm-envelope/2" {
 		return MUSnapshot{}, ErrMUState
@@ -384,6 +388,10 @@ func muVerifiedSnapshot(raw []byte, key string) (MUSnapshot, error) {
 	}
 	return MUSnapshot{Signer: key, IssuedAt: at, Entries: entries}, nil
 }
+
+// muMaxSnapshotBytes is the pinned verifier's bound on a signed evidence
+// record such as a revocation snapshot.
+const muMaxSnapshotBytes = 8192
 
 // muSnapshotShaped applies the static revocation/1 body rules that the
 // platform verifier enforces before it judges age or entries: exactly the

@@ -2,6 +2,7 @@ package grants
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,5 +88,43 @@ func TestMUVerifiedSnapshotShape(t *testing.T) {
 		if sn, err := muVerifiedSnapshot(signedSnapshotBody(t, pub, body), pub.id); err == nil {
 			t.Error("malformed snapshot admitted", name, sn)
 		}
+	}
+}
+
+// Claim: pre-absorption applies the verifier's 8192-byte bound on a signed
+// snapshot. Of two well-formed snapshots signed by the pinned key that
+// differ only in their number of record entries, the largest one within
+// 8192 bytes is admitted (positive control) and the smallest one over it is
+// refused, although its shape is valid.
+func TestMUVerifiedSnapshotSizeBound(t *testing.T) {
+	pub := newMUKey(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	var within, over []byte
+	var entries []mugrant.SnapshotEntry
+	for i := 0; i < mugrant.MaxSnapshotEntries && over == nil; i++ {
+		id, err := record.ContentID("revocation/1", map[string]any{"type": "revocation/1", "issuer": strings.Repeat("x", i+1)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, mugrant.SnapshotEntry{Kind: "record", ID: id, From: "2026-11-05T11:00:00Z"})
+		p, err := mugrant.BuildSnapshot(pub.id, at, entries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire := pub.sign(t, p)
+		if len(wire) <= muMaxSnapshotBytes {
+			within = wire
+		} else {
+			over = wire
+		}
+	}
+	if within == nil || over == nil {
+		t.Fatal("no boundary pair within the entry cap")
+	}
+	if _, err := muVerifiedSnapshot(within, pub.id); err != nil {
+		t.Fatal("snapshot within 8192 bytes refused", len(within), err)
+	}
+	if sn, err := muVerifiedSnapshot(over, pub.id); err == nil {
+		t.Fatal("snapshot over 8192 bytes admitted", len(over), len(sn.Entries))
 	}
 }

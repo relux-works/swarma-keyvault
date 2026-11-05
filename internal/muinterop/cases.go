@@ -251,6 +251,21 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	var bulk []mugrant.SnapshotEntry
+	for i := 0; i < mugrant.MaxSnapshotEntries; i++ {
+		id, err := record.ContentID("revocation/1", map[string]any{"type": "revocation/1", "issuer": strings.Repeat("x", i+1)})
+		if err != nil {
+			return nil, err
+		}
+		bulk = append(bulk, mugrant.SnapshotEntry{Kind: "record", ID: id, From: stamp(T0.Add(-time.Minute))})
+	}
+	oversize, err := w.snapshot(T0, bulk)
+	if err != nil {
+		return nil, err
+	}
+	if len(oversize) <= 8192 {
+		return nil, errBuild
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -318,6 +333,9 @@ func MacFamily() ([]Case, error) {
 		{Format: Format, ID: "M-P-incomplete-then-older", Claim: "A publisher-signed snapshot with complete false is not a verified snapshot: the request it accompanies refuses, it raises no high-water mark, and a later request with an older complete snapshot is admitted.",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(incomplete), Expected: "key_binding_unavailable"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "succeeded"}}},
+		{Format: Format, ID: "M-P-oversize-then-older", Claim: "A publisher-signed, well-formed snapshot over the verifier's 8192-byte bound is not a verified snapshot: the request it accompanies refuses, its entries join no union and it raises no high-water mark, so a later request with an older snapshot without those entries is admitted.",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(oversize), Expected: "key_binding_invalid"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "succeeded"}}},
 		{Format: Format, ID: "M-N-refused-then-older-mark", Claim: "A verified snapshot raises the high-water mark even when the request it accompanies refuses for another reason: a later request with an older snapshot that drops nothing refuses as rollback.", PositiveControl: "M-P-until-expiry-second-use",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", mutatedReq["audience"], text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "audience_mismatch"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},
