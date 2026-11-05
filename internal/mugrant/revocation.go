@@ -57,5 +57,5 @@ func BuildSnapshot(publisher string, issuedAt time.Time, entries []SnapshotEntry
 	if err != nil {
 		return nil, ErrSnapshotSpec
 	}
-	return Prepare("revocation/1", publisher, body)
+	return PrepareFor("revocation/1", publisher, body)
 }

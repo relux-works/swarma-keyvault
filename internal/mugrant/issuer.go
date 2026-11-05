@@ -76,6 +76,13 @@ type GrantSpec struct {
 	// SubjectAttestation is the owner-root Mac agent attestation of Subject;
 	// the grantee MXID shown and put into the reason is taken from it.
 	SubjectAttestation []byte
+	// For an Ed25519 (Linux) grantee, SubjectAttestation is its Keymaker v0
+	// agent attestation under ServiceRoot, which must be current at IssuedAt
+	// and carry the uid and registration number of SubjectRegistry; the MXID
+	// comes from SubjectRegistry (contract D3).
+	ServiceRoot     string
+	SubjectRegistry *RegistryIdentity
+	IssuedAt        time.Time
 	// PublisherAttestation is the owner-root grant revocation publisher
 	// attestation; its key is shown in the rendering (r5 constraint 6).
 	PublisherAttestation []byte
@@ -91,6 +98,7 @@ type Grant struct {
 	spec             GrantSpec
 	plan             *Plan
 	agent, publisher *AttestedKey
+	keymaker         *KeymakerAgent // set for an Ed25519 grantee
 }
 
 func wireTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
@@ -145,9 +153,25 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 	// The grantee MXID comes from the verified attestation of the subject key
 	// (contract section 5); a different expected MXID refuses. Both
 	// attestations must cover the whole grant interval.
-	agent, err := VerifyMacAgentAttestation(spec.SubjectAttestation, spec.Issuer)
-	if err != nil || agent.Key != spec.Subject || agent.MXID != spec.SubjectMXID || !agent.covers(spec.NotBefore, spec.Expires) {
-		return nil, ErrGrantSpec
+	var (
+		agent    *AttestedKey
+		keymaker *KeymakerAgent
+		err      error
+	)
+	if alg, _, kerr := record.KeyBytes(spec.Subject); kerr == nil && alg == "ed25519" {
+		reg := spec.SubjectRegistry
+		keymaker, err = VerifyKeymakerAttestation(spec.SubjectAttestation, spec.ServiceRoot)
+		if err != nil || reg == nil || !validMXID(reg.MXID) || reg.MXID != spec.SubjectMXID || keymaker.Key != spec.Subject ||
+			keymaker.Binding.UID != reg.UID || keymaker.Binding.RegistrationNumber != reg.RegistrationNumber ||
+			spec.IssuedAt.IsZero() || spec.IssuedAt.Before(keymaker.NotBefore) || !spec.IssuedAt.Before(keymaker.Expires) {
+			return nil, ErrGrantSpec
+		}
+		agent = &AttestedKey{Key: keymaker.Key, ContentID: keymaker.ContentID, MXID: reg.MXID, NotBefore: keymaker.NotBefore, Expires: keymaker.Expires, Fingerprint: keymaker.Fingerprint}
+	} else {
+		agent, err = VerifyMacAgentAttestation(spec.SubjectAttestation, spec.Issuer)
+		if err != nil || agent.Key != spec.Subject || agent.MXID != spec.SubjectMXID || !agent.covers(spec.NotBefore, spec.Expires) {
+			return nil, ErrGrantSpec
+		}
 	}
 	publisher, err := VerifyPublisherAttestation(spec.PublisherAttestation, spec.Issuer)
 	if err != nil || publisher.Key == spec.Subject || !publisher.covers(spec.NotBefore, spec.Expires) {
@@ -206,7 +230,7 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Grant{spec: spec, plan: plan, agent: agent, publisher: publisher}, nil
+	return &Grant{spec: spec, plan: plan, agent: agent, publisher: publisher, keymaker: keymaker}, nil
 }
 
 // Plan returns the grant's signing plan.
@@ -277,9 +301,15 @@ func (g *Grant) Rendering() string {
 	d := g.plan.Digest()
 	fmt.Fprintf(&b, "grant/1 owner grant, to be signed under Touch ID\n")
 	fmt.Fprintf(&b, "issuer: %s\n", g.spec.Issuer)
-	fmt.Fprintf(&b, "grantee: %s (generation %d, from attestation %s)\n", g.agent.MXID, g.agent.Generation, g.agent.ContentID)
-	fmt.Fprintf(&b, "grantee key: %s\n", g.spec.Subject)
-	fmt.Fprintf(&b, "grantee key fingerprint (as mac-keyvault prints it): %s\n", g.agent.Fingerprint)
+	if k := g.keymaker; k != nil {
+		fmt.Fprintf(&b, "grantee: %s (Linux agent; registry uid %d, registration %d; Keymaker attestation %s, current at issuance)\n", g.agent.MXID, k.Binding.UID, k.Binding.RegistrationNumber, k.ContentID)
+		fmt.Fprintf(&b, "grantee key: %s\n", g.spec.Subject)
+		fmt.Fprintf(&b, "grantee key fingerprint (SHA-256 of the raw Ed25519 public key): %s\n", k.Fingerprint)
+	} else {
+		fmt.Fprintf(&b, "grantee: %s (generation %d, from attestation %s)\n", g.agent.MXID, g.agent.Generation, g.agent.ContentID)
+		fmt.Fprintf(&b, "grantee key: %s\n", g.spec.Subject)
+		fmt.Fprintf(&b, "grantee key fingerprint (as mac-keyvault prints it): %s\n", g.agent.Fingerprint)
+	}
 	fmt.Fprintf(&b, "revocation publisher key: %s (attestation %s)\n", g.publisher.Key, g.publisher.ContentID)
 	fmt.Fprintf(&b, "revocation publisher key fingerprint (as mac-keyvault prints it): %s\n", g.publisher.Fingerprint)
 	fmt.Fprintf(&b, "audience: %s\n", g.spec.Audience)

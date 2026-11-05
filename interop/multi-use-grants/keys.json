@@ -33,5 +33,33 @@
     "KeyID": "p256:AtKJrhFwoO2g_dEf0Vvu2V1cInU5WQXtF7K6bbA3_TOw",
     "SeedHex": "b6a5f2db0d6be709709b65b47acdcd43a4122ef27c0ef94680e34ab063a8d3c2",
     "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004d289ae1170a0eda0fdd11fd15beed95d5c2275395905ed17b2ba6db037fd33b011656450cc10803df210af0da228bbd4d35147a138ade826d99e009b50213e84"
+  },
+  {
+    "Name": "linux-agent",
+    "Algorithm": "Ed25519",
+    "KeyID": "ed25519:YQ9j3W0PPFOuGQJg4HyvDTeMNODNdzkakBHY7Svo36U",
+    "SeedHex": "b667b1b90069cfd95850920441f81c8ef849ee56a6dfe17e8cc9b48faae28129",
+    "SPKIHex": "610f63dd6d0f3c53ae190260e07caf0d378c34e0cd77391a9011d8ed2be8dfa5"
+  },
+  {
+    "Name": "linux-stranger",
+    "Algorithm": "Ed25519",
+    "KeyID": "ed25519:id8BFi_5GusphLkqdmVa244NCtnrFMgnDMHrQCpYbLs",
+    "SeedHex": "b7196354997229ed7b2289e1b72efe1a4a4032a9131f76af4c5f2132536f49d4",
+    "SPKIHex": "89df01162ff91aeb2984b92a76655adb8e0d0ad9eb14c8270cc1eb402a586cbb"
+  },
+  {
+    "Name": "keymaker-service-root",
+    "Algorithm": "Ed25519",
+    "KeyID": "ed25519:uxB6PugIJegpB6pq9adXrocdpMJ50FdMsxLBxlhDbJ0",
+    "SeedHex": "0425af592bb5cabc0c88e412931a9c490588e1e8233b6ae364a3695cd45dcb4b",
+    "SPKIHex": "bb107a3ee80825e82907aa6af5a757ae871da4c279d0574cb312c1c658436c9d"
+  },
+  {
+    "Name": "agent-revocation",
+    "Algorithm": "Ed25519",
+    "KeyID": "ed25519:HTKprxyrH3pqWICWw3dZGl4ZNs6Rs3xqzPQ-RtQnYDU",
+    "SeedHex": "a1c52866df51c4bd2c4ec693a259396fe5f13272f943d03408092298f6507bba",
+    "SPKIHex": "1d32a9af1cab1f7a6a588096c377591a5e1936ce91b37c6accf43e46d4276035"
   }
 ]

@@ -41,6 +41,11 @@ func write(dir string) error {
 	if err != nil {
 		return err
 	}
+	linux, err := muinterop.LinuxFamily()
+	if err != nil {
+		return err
+	}
+	cases = append(cases, linux...)
 	if err := os.Mkdir(filepath.Join(dir, "cases"), 0o755); err != nil {
 		return err
 	}
@@ -59,6 +64,13 @@ func write(dir string) error {
 			return err
 		}
 		keys = append(keys, keyFile{name, "P-256", k.ID, hex.EncodeToString(k.Seed), hex.EncodeToString(k.SPKI)})
+	}
+	for _, name := range muinterop.EdKeyNames {
+		k, err := muinterop.Ed25519(name)
+		if err != nil {
+			return err
+		}
+		keys = append(keys, keyFile{name, "Ed25519", k.ID, hex.EncodeToString(k.Seed), hex.EncodeToString(k.Public)})
 	}
 	return writeJSON(filepath.Join(dir, "keys.json"), keys)
 }

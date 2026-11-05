@@ -48,12 +48,30 @@ type Plan struct {
 // Prepare checks that body is already canonical CCJ-1, that its type matches
 // kind, that key is a valid p256 key id, and derives the content id, signing
 // preimage and digest through the platform library.
-func Prepare(kind, key string, body []byte) (*Plan, error) {
+func Prepare(kind, key string, body []byte) (*Plan, error) { return prepare(kind, key, body, "p256") }
+
+// PrepareEd25519 is Prepare for an Ed25519 signer (a Linux agent key). The
+// signer signs Preimage() directly; there is no digest step.
+func PrepareEd25519(kind, key string, body []byte) (*Plan, error) {
+	return prepare(kind, key, body, "ed25519")
+}
+
+// PrepareFor prepares a plan for whichever signer algorithm the key id names:
+// P-256 (digest signing) or Ed25519 (preimage signing).
+func PrepareFor(kind, key string, body []byte) (*Plan, error) {
+	alg, _, err := record.KeyBytes(key)
+	if err != nil {
+		return nil, ErrPlan
+	}
+	return prepare(kind, key, body, alg)
+}
+
+func prepare(kind, key string, body []byte, wantAlg string) (*Plan, error) {
 	role, ok := roles[kind]
 	if !ok || len(body) == 0 || len(body) > MaxEnvelopeBytes {
 		return nil, ErrPlan
 	}
-	if alg, _, err := record.KeyBytes(key); err != nil || alg != "p256" || record.ValidateKey(key) != nil {
+	if alg, _, err := record.KeyBytes(key); err != nil || alg != wantAlg || record.ValidateKey(key) != nil {
 		return nil, ErrPlan
 	}
 	parsed, err := record.Parse(body, MaxEnvelopeBytes, 16)
@@ -113,6 +131,36 @@ func AssembleNative(p *Plan, der []byte) ([]byte, error) {
 	wire, err := record.Canonical(map[string]any{
 		"body": parsed, "id": p.contentID, "version": "swarm-envelope/2",
 		"signatures": []any{map[string]any{"key": p.key, "role": p.role, "sig": base64.RawURLEncoding.EncodeToString(raw[:])}},
+	})
+	if err != nil || len(wire) > MaxEnvelopeBytes {
+		return nil, ErrAssembly
+	}
+	if err := recheck(p, wire); err != nil {
+		return nil, ErrAssembly
+	}
+	return wire, nil
+}
+
+// AssembleEd25519 binds a raw 64-byte Ed25519 signature over Preimage() for a
+// plan prepared by PrepareEd25519, verifies it with the platform library and
+// returns the canonical swarm-envelope/2 wire bytes, rechecked.
+func AssembleEd25519(p *Plan, sig []byte) ([]byte, error) {
+	if p == nil || len(sig) != 64 {
+		return nil, ErrAssembly
+	}
+	if alg, _, err := record.KeyBytes(p.key); err != nil || alg != "ed25519" {
+		return nil, ErrAssembly
+	}
+	if record.VerifySignature(p.key, sig, p.preimage) != nil {
+		return nil, ErrAssembly
+	}
+	parsed, err := record.Parse(p.body, MaxEnvelopeBytes, 16)
+	if err != nil {
+		return nil, ErrAssembly
+	}
+	wire, err := record.Canonical(map[string]any{
+		"body": parsed, "id": p.contentID, "version": "swarm-envelope/2",
+		"signatures": []any{map[string]any{"key": p.key, "role": p.role, "sig": base64.RawURLEncoding.EncodeToString(sig)}},
 	})
 	if err != nil || len(wire) > MaxEnvelopeBytes {
 		return nil, ErrAssembly

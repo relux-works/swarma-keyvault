@@ -64,3 +64,41 @@ func TestMacFamilyShape(t *testing.T) {
 		t.Fatal("family shrank", len(cases))
 	}
 }
+
+// Claim: the Linux family has unique ids distinct from the Mac family, Linux
+// pins and registry evidence on every case, an agent snapshot on every step,
+// and every negative names a positive control present in the family.
+func TestLinuxFamilyShape(t *testing.T) {
+	mac, err := MacFamily()
+	if err != nil {
+		t.Fatal(err)
+	}
+	linux, err := LinuxFamily()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]bool{}
+	for _, c := range mac {
+		ids[c.ID] = true
+	}
+	own := map[string]bool{}
+	for _, c := range linux {
+		if ids[c.ID] || own[c.ID] || c.Pins.Linux == nil || c.Registry == nil || len(c.Steps) == 0 {
+			t.Fatal("bad linux case", c.ID)
+		}
+		own[c.ID] = true
+		for _, s := range c.Steps {
+			if s.AgentSnapshot == "" || s.Expected == "" {
+				t.Fatal("incomplete linux step", c.ID)
+			}
+		}
+	}
+	for _, c := range linux {
+		if c.PositiveControl != "" && !own[c.PositiveControl] {
+			t.Fatal("missing positive control", c.ID)
+		}
+	}
+	if len(linux) < 10 {
+		t.Fatal("linux family shrank", len(linux))
+	}
+}

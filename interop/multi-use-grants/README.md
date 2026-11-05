@@ -12,7 +12,7 @@ Pins:
 ## Keys
 
 `keys.json` lists the test keys. Each private scalar is
-`SHA-256("swarma-keyvault mu-interop seed/1 " + name)`, used as a raw P-256 private key.
+`SHA-256("swarma-keyvault mu-interop seed/1 " + name)`, used as a raw P-256 private scalar or as an Ed25519 seed, per the key's algorithm.
 These are test keys only. Never use them for anything else.
 
 | Name | Role |
@@ -22,6 +22,10 @@ These are test keys only. Never use them for anything else.
 | `mac-agent` | Mac agent key under profile `mac-se-1` (the requester) |
 | `stranger` | a key that signs where it must not |
 | `publisher` | grant revocation publisher (`grant-revocation-1`) |
+| `linux-agent` | Ed25519 Linux agent key (Keymaker v0 attestation) |
+| `linux-stranger` | an Ed25519 key that signs where it must not |
+| `keymaker-service-root` | Keymaker signing-service root (purpose 5) |
+| `agent-revocation` | registry revocation key for agent keys |
 
 ## Case format (`swarma-keyvault/mu-interop-case/1`)
 
@@ -72,7 +76,24 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-use-refill` | `once` grant, second request | `succeeded`, then `mu-grant-use-already-held` |
 | `M-N-snapshot-rollback` | newer snapshot drops a held revocation | `succeeded`, then `mu-revocation-snapshot-rollback` |
 
-The Linux-authored (Ed25519) family follows once contract decision D1 is agreed.
+Linux-authored (Ed25519) family:
+- Mac-issued grants name the Linux agent's Ed25519 key.
+- The case adds `pins.linux` (service root, agent revocation key, registry identity).
+- `registry` holds the attestations served by content id and the current active generation.
+- Each step carries `agent_snapshot`.
+
+| Case | Fact changed | Expected |
+| --- | --- | --- |
+| `L-P-accept` | none | `succeeded`, one effect |
+| `L-N-wrong-key` | Ed25519 signature by another key | `envelope_signature_invalid` |
+| `L-N-wrong-action` | action not in the grant | `mu-no-applicable-grant` |
+| `L-N-attestation-expired` | Keymaker attestation expired, grant still valid | `key_binding_invalid` |
+| `L-N-attestation-unavailable` | registry does not serve the referenced attestation | `key_binding_unavailable` |
+| `L-N-generation-moved` | registry's active generation differs | `key_binding_invalid` |
+| `L-N-agent-revoked` | fresh agent revocation snapshot revokes the key | `revoked` |
+| `L-N-stale-agent-snapshot` | agent revocation snapshot 61 s old | `key_binding_unavailable` |
+| `L-N-sender-not-registered` | sender MXID without a registry identity | `mu-sender-not-attested` |
+| `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
 ## Checking
 
@@ -93,7 +114,8 @@ Not committed, run by hand against the real code: these known-violation plants e
 - edited event text in a positive case;
 - an unknown member in a case file;
 - the receiver's nonce check switched off;
-- the receiver's text rule switched off.
+- the receiver's text rule switched off;
+- the agent revocation snapshot left out of the receiver's evidence.
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.

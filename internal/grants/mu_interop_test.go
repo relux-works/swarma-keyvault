@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 	"github.com/relux-works/swarma-keyvault/internal/muinterop"
 )
 
@@ -43,11 +44,36 @@ func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]st
 	for _, e := range c.Events {
 		events[e.ID] = MUEnvelopeEvent{Sender: c.Pins.SenderMXID, Receiver: c.Pins.ReceiverMXID, Room: c.Pins.Room, EventID: e.ID, Envelope: dec(e.Envelope), Text: dec(e.Text)}
 	}
-	var snapshot []byte
-	platform := NewMUPlatform(MUPlatformConfig{GrantRoot: c.Pins.GrantRoot, Audience: c.Pins.Audience, Grants: grants,
-		Agents:    map[string]MUMacAgent{c.Pins.SenderMXID: {Key: c.Pins.AgentKey, Attestation: dec(c.Records.AgentAttestation), Generation: c.Pins.AgentGeneration}},
+	var snapshot, agentSnapshot []byte
+	cfg := MUPlatformConfig{GrantRoot: c.Pins.GrantRoot, Audience: c.Pins.Audience, Grants: grants,
 		Publisher: dec(c.Records.PublisherAttestation), PublisherKey: c.Pins.PublisherKey, TimeAuthority: 5 * time.Minute,
-		Snapshot: func() ([]byte, error) { return snapshot, nil }},
+		Snapshot: func() ([]byte, error) { return snapshot, nil }}
+	registryKey := c.Pins.AgentKey
+	if l := c.Pins.Linux; l != nil {
+		registryKey = l.AgentKey
+		served := map[string][]byte{}
+		var gen muinterop.ActiveGeneration
+		if c.Registry != nil {
+			for id, b := range c.Registry.Attestations {
+				served[id] = dec(b)
+			}
+			gen = c.Registry.ActiveGeneration
+		}
+		cfg.Linux = map[string]MULinuxAgent{l.AgentMXID: {Key: l.AgentKey, UID: l.UID, RegistrationNumber: l.RegistrationNumber}}
+		cfg.Registry = MURegistryEvidence{ServiceRoot: l.ServiceRoot, AgentRevocationKey: l.AgentRevocationKey,
+			Attestation: func(id string) ([]byte, error) {
+				b, ok := served[id]
+				if !ok {
+					return nil, errors.New("not served")
+				}
+				return b, nil
+			},
+			ActiveGeneration: func(string) (mugrant.KeymakerBinding, error) { return gen.Binding(), nil },
+			AgentSnapshot:    func() ([]byte, error) { return agentSnapshot, nil }}
+	} else {
+		cfg.Agents = map[string]MUMacAgent{c.Pins.SenderMXID: {Key: c.Pins.AgentKey, Attestation: dec(c.Records.AgentAttestation), Generation: c.Pins.AgentGeneration}}
+	}
+	platform := NewMUPlatform(cfg,
 		func(id string) (MUEnvelopeEvent, error) {
 			e, ok := events[id]
 			if !ok {
@@ -75,7 +101,7 @@ func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]st
 	}
 	r := NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: c.Pins.Owner, RoomScope: c.Pins.RoomScope, Modules: modules, Paused: map[string]bool{},
 		RootRevocations: func() ([]MURevocation, error) { return nil, nil }},
-		verifier, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: c.Pins.AgentKey}, owners: c.Pins.RegistryOwners},
+		verifier, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: registryKey}, owners: c.Pins.RegistryOwners},
 		map[string]MUEffect{"work.assign": effect, "account.manage": effect})
 	var got []string
 	for _, s := range c.Steps {
@@ -85,6 +111,10 @@ func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]st
 		}
 		r.now = func() time.Time { return at }
 		snapshot = dec(s.Snapshot)
+		agentSnapshot = nil
+		if s.AgentSnapshot != "" {
+			agentSnapshot = dec(s.AgentSnapshot)
+		}
 		out, err := r.Handle(context.Background(), MUEvent{SenderMXID: c.Pins.SenderMXID, RoomID: c.Pins.Room, EventID: s.Event})
 		switch {
 		case err == nil && out != nil:
@@ -171,6 +201,11 @@ func TestMUInteropFresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	linux, err := muinterop.LinuxFamily()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases, linux...)
 	for _, c := range cases {
 		got, calls := muInteropRun(t, c)
 		t.Logf("%s: got %v effects %d", c.ID, got, calls)

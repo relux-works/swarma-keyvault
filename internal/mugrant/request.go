@@ -91,7 +91,7 @@ func BuildRequest(spec RequestSpec) (*Request, error) {
 	if err != nil {
 		return nil, ErrRequestSpec
 	}
-	plan, err := Prepare("message/1", spec.Author, canonical)
+	plan, err := PrepareFor("message/1", spec.Author, canonical)
 	if err != nil {
 		return nil, err
 	}
