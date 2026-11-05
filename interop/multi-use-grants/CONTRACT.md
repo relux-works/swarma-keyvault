@@ -145,7 +145,7 @@ The refusal vocabulary is the platform codes (spec) plus the receiver codes list
 - **D2. Publisher snapshots to the Linux receiver.** Decided:
   - the Mac publisher posts each snapshot as an envelope into a dedicated a2a room whose only members are the publisher and the receivers, every **30 s**;
   - the L receiver uses the newest snapshot that is at most 60 s old by its trusted clock, and otherwise refuses;
-  - open: the room name and its provisioning.
+  - the room, its poster and its members are fixed in the deployment configuration of both receivers, not in this contract.
 - **D3. Grants for Linux agents** are issued at an owner sitting on the Mac, with the Linux agent's Ed25519 key id as `subject`.
   - A Keymaker attestation lives at most 86 400 s, so the whole-interval cover rule of §2.1 applies only to `mac-se-1` grantees.
   - For an Ed25519 grantee, the issuer verifies at issuance a current Keymaker attestation of that key and its registry identity (`uid`, `registration_number`). It shows the owner the MXID of that registry identity, and refuses on any mismatch.
