@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sort"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -61,6 +63,7 @@ type muState struct {
 	allowances, nonces    map[[32]byte]*muReservation
 	reservations          map[uint64]*muReservation
 	revoked               map[MURevocation]bool // monotonic union (r5 constraint 2)
+	highWater             map[string]time.Time  // newest accepted snapshot issued_at per signer
 	write                 func(*os.File, []byte) (int, error)
 	sync                  func(*os.File) error
 }
@@ -141,7 +144,7 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 		return nil, ErrMUState
 	}
 	s := &muState{directory: dir, binding: binding, link: journalFrameLink{sequence: 1, epoch: config.Epoch},
-		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{},
+		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{}, highWater: map[string]time.Time{},
 		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }, sync: func(f *os.File) error { return f.Sync() }}
 	ready := false
 	defer func() {
@@ -235,6 +238,15 @@ func (s *muState) replay(f *journalFrame) error {
 			s.allowances[r.allowance] = r
 		}
 		s.reservations[r.sequence] = r
+	case journalSnapshotMark:
+		key, at, ok := decodeMUSnapshotMark(f.body)
+		if !ok {
+			return ErrMUState
+		}
+		if hw, seen := s.highWater[key]; seen && !at.After(hw) {
+			return ErrMUState
+		}
+		s.highWater[key] = at
 	case journalRevocation:
 		entries, ok := decodeMURevocations(f.body)
 		if !ok {
@@ -454,4 +466,49 @@ func (s *muState) absorbRevocations(entries []MURevocation) error {
 // refuses truncation, rewrite and rename by a same-user process.
 func muOpenJournal(dir *os.File, create bool) (*os.File, error) {
 	return a2aOpenFileWith(dir, "mu.journal", create, unix.O_APPEND)
+}
+
+// markSnapshots durably records each snapshot issued_at that is newer than the
+// signer's high-water mark. Equal marks are not rewritten.
+func (s *muState) markSnapshots(marks map[string]time.Time) error {
+	keys := make([]string, 0, len(marks))
+	for k := range marks {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		at := marks[k].UTC()
+		if hw, ok := s.highWater[k]; ok && !at.After(hw) {
+			continue
+		}
+		body, ok := encodeMUSnapshotMark(k, at)
+		if !ok {
+			return ErrMUState
+		}
+		if err := s.append(journalSnapshotMark, body); err != nil {
+			return ErrMUState
+		}
+		s.highWater[k] = at
+	}
+	return nil
+}
+
+func encodeMUSnapshotMark(key string, at time.Time) ([]byte, bool) {
+	if key == "" || len(key) > 255 || at.Unix() <= 0 {
+		return nil, false
+	}
+	b := append([]byte("MUH1"), make([]byte, 8)...)
+	binary.BigEndian.PutUint64(b[4:12], uint64(at.Unix()))
+	return append(b, key...), true
+}
+
+func decodeMUSnapshotMark(b []byte) (string, time.Time, bool) {
+	if len(b) < 13 || len(b) > 12+255 || string(b[:4]) != "MUH1" {
+		return "", time.Time{}, false
+	}
+	sec := int64(binary.BigEndian.Uint64(b[4:12]))
+	if sec <= 0 {
+		return "", time.Time{}, false
+	}
+	return string(b[12:]), time.Unix(sec, 0).UTC(), true
 }

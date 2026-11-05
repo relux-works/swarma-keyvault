@@ -98,8 +98,10 @@ Domain tags, exactly as `record.Tag` gives them (r5):
   - a snapshot is admitted only when `issued_at` is not in the future and the age is at most 60 s, inclusive;
   - without such a snapshot every request refuses; there is no grace period.
 - Entries are `{kind,id,from}`.
-- Receivers keep a durable, monotonic union of revocations. A snapshot that drops a known entry is refused as rollback.
-- A revocation signed by the owner root wins at any age.
+- Receivers keep a durable, monotonic union of all revocations. A snapshot that drops a known entry is refused as rollback.
+- `issued_at` is the per-signer sequence of snapshots (no extra member). Each receiver keeps, durably, the newest `issued_at` it has accepted per signer. A snapshot older than that refuses as rollback with `mu-revocation-snapshot-rollback`, even when it is fresh and drops nothing; an equal `issued_at` is admitted.
+- A receiver restored from a backup re-initialises its journal under a new state epoch and re-applies the owner-root revocations before it admits any request. A restored journal can lack revocations, and no local mark detects that.
+- A revocation signed by the owner root wins at any age. Owner-root revocations reach each receiver out of band, into its protected configuration; they never pass through the publisher, so a publisher that keeps signing fresh snapshots without an entry cannot hide one. The issuer prepares them with `mu-root-revocation-prepare`, and the owner signs them under Touch ID.
 - A revoked publisher fails closed.
 
 ## 3. Receiver pipeline (both platforms, in this order) (r5)
