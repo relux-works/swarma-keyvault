@@ -1,4 +1,4 @@
-# Multi-use owner grants: cross-platform interop contract (r2, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r3, agreed)
 
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
@@ -44,7 +44,8 @@ Content id = `sha256:` + hex(SHA-256(tag LF CCJ-1(body))). The signing preimage 
   - `account.manage` applies to `account-scope`, and `room.membership` to `room-scope`.
   - A target id is an exact name with at most one `owner:` qualifier. Patterns are refused.
 - Issuer-side binding (not a verifier rule):
-  - the issuer refuses unless the grantee has a verified attestation under the expected root that covers the whole interval;
+  - for a `mac-se-1` grantee, the issuer refuses unless the grantee has a verified attestation under the grant root that covers the whole interval;
+  - for an Ed25519 grantee, the whole-interval cover does not apply (a Keymaker attestation lives at most 86 400 s); the issuer applies the rule of §6 D3 instead;
   - the issuer refuses unless the publisher attestation for the domain exists and covers the interval;
   - the grantee MXID shown to the owner comes from that attestation.
 
