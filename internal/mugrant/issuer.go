@@ -235,7 +235,12 @@ func (g *Grant) Reason() (string, error) {
 		labels = append(labels, a.Short)
 	}
 	d := g.plan.Digest()
-	r := fmt.Sprintf("%s · %s · %s · %s · SHA256 %x", policyLabel(g.spec.Use), g.spec.SubjectMXID, mskInterval(g.spec.NotBefore, g.spec.Expires), strings.Join(labels, ", "), d[26:])
+	return checkReason(fmt.Sprintf("%s · %s · %s · %s · SHA256 %x", policyLabel(g.spec.Use), g.spec.SubjectMXID, mskInterval(g.spec.NotBefore, g.spec.Expires), strings.Join(labels, ", "), d[26:]))
+}
+
+// checkReason admits a Touch ID reason within ReasonLimit scalars with no
+// control or format character; it never truncates.
+func checkReason(r string) (string, error) {
 	if !utf8.ValidString(r) || utf8.RuneCountInString(r) > ReasonLimit {
 		return "", ErrReasonOverflow
 	}

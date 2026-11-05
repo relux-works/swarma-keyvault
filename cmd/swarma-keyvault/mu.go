@@ -117,6 +117,33 @@ func muSpecArg(name string, args []string, stderr io.Writer) (string, int) {
 	return spec.value, -1
 }
 
+// muGrantFromSpec builds a grant/1 plan from a strict specification with a
+// fresh CSPRNG nonce; the message is safe to print.
+func muGrantFromSpec(raw []byte) (*mugrant.Grant, string, error) {
+	var s muGrantSpecFile
+	if err := muStrictJSON(raw, &s); err != nil {
+		return nil, "", fmt.Errorf("grant specification refused: %w", err)
+	}
+	nb, err1 := muTime(s.NotBefore)
+	ex, err2 := muTime(s.Expires)
+	if err1 != nil || err2 != nil {
+		return nil, "", errors.New("grant interval refused: times must be exactly YYYY-MM-DDTHH:MM:SSZ")
+	}
+	nonce, err := muNonce()
+	if err != nil {
+		return nil, "", errors.New("nonce unavailable")
+	}
+	spec := mugrant.GrantSpec{Issuer: s.Issuer, Subject: s.Subject, SubjectMXID: s.SubjectMXID, Audience: s.Audience, NotBefore: nb, Expires: ex, Use: s.Use, Nonce: nonce}
+	for _, e := range s.Entries {
+		spec.Entries = append(spec.Entries, mugrant.Entry{Action: e.Action, Target: mugrant.Target{Kind: e.Kind, ID: e.ID}})
+	}
+	g, err := mugrant.BuildGrant(spec)
+	if err != nil {
+		return nil, "", err
+	}
+	return g, s.Issuer, nil
+}
+
 func runMUGrantPrepare(args []string, stdout, stderr io.Writer) int {
 	path, code := muSpecArg("mu-grant-prepare", args, stderr)
 	if code >= 0 {
@@ -127,27 +154,7 @@ func runMUGrantPrepare(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "cannot read bounded grant specification")
 		return 1
 	}
-	var s muGrantSpecFile
-	if err := muStrictJSON(raw, &s); err != nil {
-		fmt.Fprintln(stderr, "grant specification refused:", err)
-		return 1
-	}
-	nb, err1 := muTime(s.NotBefore)
-	ex, err2 := muTime(s.Expires)
-	if err1 != nil || err2 != nil {
-		fmt.Fprintln(stderr, "grant interval refused: times must be exactly YYYY-MM-DDTHH:MM:SSZ")
-		return 1
-	}
-	nonce, err := muNonce()
-	if err != nil {
-		fmt.Fprintln(stderr, "nonce unavailable")
-		return 1
-	}
-	spec := mugrant.GrantSpec{Issuer: s.Issuer, Subject: s.Subject, SubjectMXID: s.SubjectMXID, Audience: s.Audience, NotBefore: nb, Expires: ex, Use: s.Use, Nonce: nonce}
-	for _, e := range s.Entries {
-		spec.Entries = append(spec.Entries, mugrant.Entry{Action: e.Action, Target: mugrant.Target{Kind: e.Kind, ID: e.ID}})
-	}
-	g, err := mugrant.BuildGrant(spec)
+	g, issuer, err := muGrantFromSpec(raw)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -159,7 +166,7 @@ func runMUGrantPrepare(args []string, stdout, stderr io.Writer) int {
 	}
 	d := g.Plan().Digest()
 	return muWrite(stdout, map[string]string{
-		"type": "mu-grant-prepared-1", "kind": "grant/1", "key": s.Issuer,
+		"type": "mu-grant-prepared-1", "kind": "grant/1", "key": issuer,
 		"body": base64.RawURLEncoding.EncodeToString(g.Plan().Body()), "content_id": g.Plan().ContentID(),
 		"digest_sha256": hex.EncodeToString(d[:]), "reason": reason, "rendering": g.Rendering(),
 	})

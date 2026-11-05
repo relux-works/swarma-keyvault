@@ -4,6 +4,7 @@ import (
 	"crypto/elliptic"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
@@ -68,4 +69,20 @@ func BuildMacAgentAttestation(root string, agentSPKI []byte, mxid string, genera
 func BuildPublisherAttestation(root string, publisherSPKI []byte, nb, ex time.Time) (*Plan, string, error) {
 	return buildAttestation(root, publisherSPKI, nb, ex, "revocation-publisher", "grant-revocation", []any{"revocation.sign"},
 		map[string]any{"profile": "grant-revocation-1", "domain": root})
+}
+
+// MacAgentAttestationReason is the Touch ID reason for the owner-root
+// signature of a Mac agent attestation (decision 154 applied to X9): agent
+// MXID, generation, window in MSK and the digest tail. It refuses instead of
+// truncating.
+func MacAgentAttestationReason(p *Plan, mxid string, generation int64, nb, ex time.Time) (string, error) {
+	d := p.Digest()
+	return checkReason(fmt.Sprintf("ключ агента · %s · поколение %d · %s · SHA256 %x", mxid, generation, mskInterval(nb, ex), d[26:]))
+}
+
+// PublisherAttestationReason is the Touch ID reason for the owner-root
+// signature of the grant revocation publisher attestation (r5).
+func PublisherAttestationReason(p *Plan, nb, ex time.Time) (string, error) {
+	d := p.Digest()
+	return checkReason(fmt.Sprintf("ключ отзыва грантов · %s · SHA256 %x", mskInterval(nb, ex), d[26:]))
 }
