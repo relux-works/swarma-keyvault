@@ -125,6 +125,8 @@ Ed25519 publisher family (r8): a Mac-authored grant whose revocation publisher i
 | `P2-N-issued-by-service-root` | `grant-revocation-2` attestation issued and signed by the signing-service root | `key_binding_invalid` |
 | `P2-N-snapshot-older` | older Ed25519 publisher snapshot after a newer one | `succeeded`, then `mu-revocation-snapshot-rollback` |
 
+The three P2 negatives that expect `key_binding_invalid` would get the same code from a verifier that does not know `grant-revocation-2`. They show that profile 2 refuses what it must only together with `P2-P-accept`, which such a verifier refuses.
+
 ## Checking
 
 ```sh

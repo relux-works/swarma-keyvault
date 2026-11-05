@@ -280,6 +280,11 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 // rollback; the snapshot's own entries then join the union. The union only
 // grows and survives restarts.
 func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
+	// Each signer keeps its own union and mark; one key in both roles would
+	// merge them. The platform verifier refuses that pair too.
+	if d.PublisherKey != "" && d.PublisherKey == d.AgentRevocationKey {
+		return ErrMUState
+	}
 	var root []MURevocation
 	if r.config.RootRevocations != nil {
 		var err error
