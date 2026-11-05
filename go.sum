@@ -1,5 +1,5 @@
-github.com/relux-works/swarma-envelope v0.0.0-20261105133600-939750828554 h1:ce7oosvW5HozTeB3UZVkqxFtWEDWjPKrsaiNFiEWOB8=
-github.com/relux-works/swarma-envelope v0.0.0-20261105133600-939750828554/go.mod h1:N9T1gQU4MBLIj/LyFBeT+betwul46G4bYluVc546jnY=
+github.com/relux-works/swarma-envelope v0.0.0-20261105191315-6c71e5226416 h1:Pc5gxPMahW5OUkC1N+Z7r2e3O1pIxinQBV2eja+7+7s=
+github.com/relux-works/swarma-envelope v0.0.0-20261105191315-6c71e5226416/go.mod h1:N9T1gQU4MBLIj/LyFBeT+betwul46G4bYluVc546jnY=
 github.com/relux-works/swarma-registrar v0.0.0-20261023164451-5f44ebf3f788 h1:5PY0Ri0qGh43ImOMK0Y5pMJoq8ZcT6yAGT3oVjUjJSQ=
 github.com/relux-works/swarma-registrar v0.0.0-20261023164451-5f44ebf3f788/go.mod h1:4bnxh4kC6jNAovfx5i8t1OdnhytaM/ZeD/zXoQQTKwA=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
