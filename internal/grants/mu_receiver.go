@@ -238,11 +238,6 @@ func (r *MUReceiver) Handle(ctx context.Context, ev MUEvent) (*MUOutcome, error)
 	return &MUOutcome{State: "succeeded", Receipt: receipt}, nil
 }
 
-// revocations applies the consumer obligations of r5 option A under the lock:
-// owner-root revocations join the union at any age and always win; a revoked
-// publisher fails closed; a snapshot that drops anything in the union is a
-// rollback; the snapshot's own entries then join the union. The union only
-// grows and survives restarts.
 // absorbSnapshots records the entries and issued_at of every verified
 // snapshot for this event before verification, so that a snapshot which
 // refuses the request is not forgotten. Errors are left to the checks that
@@ -279,6 +274,11 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 	}
 }
 
+// revocations applies the consumer obligations of r5 option A under the lock:
+// owner-root revocations join the union at any age and always win; a revoked
+// publisher fails closed; a snapshot that drops anything in the union is a
+// rollback; the snapshot's own entries then join the union. The union only
+// grows and survives restarts.
 func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 	var root []MURevocation
 	if r.config.RootRevocations != nil {

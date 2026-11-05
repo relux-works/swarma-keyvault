@@ -239,6 +239,18 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	incompleteBody, err := recordCanonical(map[string]any{"type": "revocation/1", "issuer": w.publisher.ID, "issued_at": stamp(T0), "complete": false, "entries": []any{}})
+	if err != nil {
+		return nil, err
+	}
+	incompleteP, err := mugrant.PrepareFor("revocation/1", w.publisher.ID, incompleteBody)
+	if err != nil {
+		return nil, err
+	}
+	incomplete, err := w.publisher.Sign(incompleteP)
+	if err != nil {
+		return nil, err
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -303,6 +315,12 @@ func MacFamily() ([]Case, error) {
 		{Format: Format, ID: "M-P-future-then-fresh", Claim: "A validly signed snapshot dated in the future does not raise the high-water mark: the request it accompanies refuses, and a later fresh snapshot is admitted.",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(future), Expected: "key_binding_unavailable"}, {Event: "$second", Now: later, Snapshot: B64(freshLater), Expected: "succeeded"}}},
+		{Format: Format, ID: "M-P-incomplete-then-older", Claim: "A publisher-signed snapshot with complete false is not a verified snapshot: the request it accompanies refuses, it raises no high-water mark, and a later request with an older complete snapshot is admitted.",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(incomplete), Expected: "key_binding_unavailable"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "succeeded"}}},
+		{Format: Format, ID: "M-N-refused-then-older-mark", Claim: "A verified snapshot raises the high-water mark even when the request it accompanies refuses for another reason: a later request with an older snapshot that drops nothing refuses as rollback.", PositiveControl: "M-P-until-expiry-second-use",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", mutatedReq["audience"], text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "audience_mismatch"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},
 		{Format: Format, ID: "M-N-snapshot-older", Claim: "A publisher snapshot older than one already accepted refuses as rollback, even though it is under 60 s old and drops nothing.", PositiveControl: "M-P-until-expiry-second-use",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},

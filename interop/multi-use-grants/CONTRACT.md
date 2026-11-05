@@ -1,6 +1,6 @@
-# Multi-use owner grants: cross-platform interop contract (r6, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r7, draft for agreement)
 
-Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. Every changed rule is marked "(r5)" or "(r6)". Linux builds start from r6 once both sides accept it.
+Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7 states which snapshots count as verified for the revocation duties and adds two vectors. Every changed rule is marked "(r5)", "(r6)" or "(r7)". Linux builds start from r6 once both sides accept it.
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
 
@@ -105,6 +105,12 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 - Entries are `{kind,id,from}`.
 - (r6) Every snapshot a receiver verifies for an event is recorded before the request is judged, whatever the outcome. Its entries join a durable, monotonic union kept per signer: the publisher, and for a Linux author the agent revocation root. Its `issued_at` raises that signer's high-water mark only when it is not in the future by the trusted clock, the same test freshness applies; the entries of a future-dated snapshot still join the union, but the snapshot cannot lock out later correct ones. A snapshot that refuses a request as `revoked` is therefore remembered. A later snapshot without the entry, whether older or with the same `issued_at`, cannot let the grant or key act (`mu-grant-revoked`).
 - A snapshot that drops an entry its own signer published before is refused as rollback.
+- (r7) A verified snapshot is one signed by its pinned signer whose body also has the static shape the platform verifier enforces before it judges age or entries:
+  - exactly the members `complete`, `entries`, `issued_at`, `issuer` and `type`;
+  - `complete` is `true`, and `issued_at` is an exact UTC time;
+  - each entry has exactly `kind`, `id` and `from`, where `kind` is `key` (with a valid key id) or `record` (with a content id) and `from` is an exact UTC time.
+
+  A signed snapshot without that shape refuses the request it accompanies and is not recorded: its entries do not join the union, and its `issued_at` raises no mark. The sorting and `from <= issued_at` constraints above are publisher obligations; the pinned verifier does not enforce them, so they do not decide whether a snapshot is recorded.
 - (r6) Revocation entries recorded before per-signer unions existed carry no signer: they still revoke, but they are never compared for rollback.
 - `issued_at` is the per-signer sequence of snapshots (no extra member). Each receiver keeps, durably, the newest `issued_at` it has accepted per signer. A snapshot older than that refuses as rollback with `mu-revocation-snapshot-rollback`, even when it is fresh and drops nothing; an equal `issued_at` is admitted.
 - A receiver restored from a backup re-initialises its journal under a new state epoch and re-applies the owner-root revocations before it admits any request. A restored journal can lack revocations, and no local mark detects that.

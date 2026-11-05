@@ -322,8 +322,6 @@ func muRecordID(raw []byte, kind string) (string, error) {
 	return id, nil
 }
 
-// muSnapshotEntries returns the entries of a snapshot the verifier already
-// accepted in the same call.
 // MUPlatform hands the receiver its verified snapshots before verification.
 var _ MUSnapshotSource = (*MUPlatform)(nil)
 
@@ -360,7 +358,7 @@ func muVerifiedSnapshot(raw []byte, key string) (MUSnapshot, error) {
 	}
 	b, ok := e["body"].(map[string]any)
 	sigs, _ := e["signatures"].([]any)
-	if !ok || b["type"] != "revocation/1" || b["issuer"] != key || len(sigs) != 1 {
+	if !ok || b["type"] != "revocation/1" || b["issuer"] != key || len(sigs) != 1 || !muSnapshotShaped(b) {
 		return MUSnapshot{}, ErrMUState
 	}
 	sig, _ := sigs[0].(map[string]any)
@@ -387,6 +385,50 @@ func muVerifiedSnapshot(raw []byte, key string) (MUSnapshot, error) {
 	return MUSnapshot{Signer: key, IssuedAt: at, Entries: entries}, nil
 }
 
+// muSnapshotShaped applies the static revocation/1 body rules that the
+// platform verifier enforces before it judges age or entries: exactly the
+// members type, issuer, issued_at, complete and entries; complete true; an
+// exact UTC issued_at; and entries of exactly kind, id and from, where kind
+// is key (a valid key id) or record (a content id) and from is an exact UTC
+// time. A snapshot that fails them is not a verified snapshot, so
+// pre-absorption records neither its entries nor its mark.
+func muSnapshotShaped(b map[string]any) bool {
+	list, ok := b["entries"].([]any)
+	if !ok || len(b) != 5 || b["complete"] != true || !muExactStamp(b["issued_at"]) {
+		return false
+	}
+	for _, x := range list {
+		m, ok := x.(map[string]any)
+		if !ok || len(m) != 3 || !muExactStamp(m["from"]) {
+			return false
+		}
+		id, _ := m["id"].(string)
+		switch m["kind"] {
+		case "key":
+			if _, _, err := record.KeyBytes(id); err != nil {
+				return false
+			}
+		case "record":
+			if !record.IsContentID(id) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// muExactStamp reports whether v is an exact second-precision UTC time.
+func muExactStamp(v any) bool {
+	s, ok := v.(string)
+	if !ok || len(s) != 20 {
+		return false
+	}
+	t, err := time.Parse("2006-01-02T15:04:05Z", s)
+	return err == nil && t.Year() >= 1970 && t.Format("2006-01-02T15:04:05Z") == s
+}
+
 // muSnapshotIssuedAt returns a verified snapshot's issued_at.
 func muSnapshotIssuedAt(raw []byte) (time.Time, error) {
 	e, err := muParseEnvelope(raw)
@@ -402,6 +444,8 @@ func muSnapshotIssuedAt(raw []byte) (time.Time, error) {
 	return t.UTC(), nil
 }
 
+// muSnapshotEntries returns the entries of a snapshot the verifier already
+// accepted in the same call.
 func muSnapshotEntries(raw []byte) ([]MURevocation, error) {
 	e, err := muParseEnvelope(raw)
 	if err != nil {
