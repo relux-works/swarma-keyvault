@@ -17,8 +17,9 @@ migration or installed binary replacement.
 
 ## Tools and local build
 
-The initial custody target is macOS with Go 1.25.5 or later, cgo and the Apple
-Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired
+The initial custody target is macOS with Go 1.26.0 or later (go.mod pins
+toolchain go1.26.10; older installs download it or need it preinstalled), cgo and
+the Apple Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired
 CryptoKit helper, and macOS `sandbox-exec` confines fake-backed test processes.
 From this directory, build only new local artifacts:
 
