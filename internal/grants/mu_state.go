@@ -62,8 +62,9 @@ type muState struct {
 	binding               MUBinding
 	allowances, nonces    map[[32]byte]*muReservation
 	reservations          map[uint64]*muReservation
-	revoked               map[MURevocation]bool // monotonic union (r5 constraint 2)
-	highWater             map[string]time.Time  // newest accepted snapshot issued_at per signer
+	revoked               map[MURevocation]bool            // monotonic union (r5 constraint 2)
+	highWater             map[string]time.Time             // newest accepted snapshot issued_at per signer
+	unions                map[string]map[MURevocation]bool // durable union per snapshot signer
 	write                 func(*os.File, []byte) (int, error)
 	sync                  func(*os.File) error
 }
@@ -144,7 +145,7 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 		return nil, ErrMUState
 	}
 	s := &muState{directory: dir, binding: binding, link: journalFrameLink{sequence: 1, epoch: config.Epoch},
-		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{}, highWater: map[string]time.Time{},
+		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{}, highWater: map[string]time.Time{}, unions: map[string]map[MURevocation]bool{},
 		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }, sync: func(f *os.File) error { return f.Sync() }}
 	ready := false
 	defer func() {
@@ -238,6 +239,23 @@ func (s *muState) replay(f *journalFrame) error {
 			s.allowances[r.allowance] = r
 		}
 		s.reservations[r.sequence] = r
+	case journalSignerRevocation:
+		signer, entries, ok := decodeMUSignerRevocations(f.body)
+		if !ok {
+			return ErrMUState
+		}
+		u := s.unions[signer]
+		if u == nil {
+			u = map[MURevocation]bool{}
+			s.unions[signer] = u
+		}
+		for _, e := range entries {
+			if u[e] {
+				return ErrMUState
+			}
+			u[e] = true
+			s.revoked[e] = true
+		}
 	case journalSnapshotMark:
 		key, at, ok := decodeMUSnapshotMark(f.body)
 		if !ok {
@@ -511,4 +529,66 @@ func decodeMUSnapshotMark(b []byte) (string, time.Time, bool) {
 		return "", time.Time{}, false
 	}
 	return string(b[12:]), time.Unix(sec, 0).UTC(), true
+}
+
+// MUOwnerRootSigner labels the owner-root revocation set in the journal. It
+// cannot equal a key id, so the root set never joins a snapshot signer's
+// union and is never compared for rollback.
+const MUOwnerRootSigner = "owner-root"
+
+// absorbSigned durably adds each entry not yet in signer's union; every
+// entry also joins the revoked set. Unions only grow.
+func (s *muState) absorbSigned(signer string, entries []MURevocation) error {
+	if signer == "" || len(signer) > 255 {
+		return ErrMUState
+	}
+	u := s.unions[signer]
+	var fresh []MURevocation
+	seen := map[MURevocation]bool{}
+	for _, e := range entries {
+		if !validMURevocation(e) {
+			return ErrMUState
+		}
+		if !u[e] && !seen[e] {
+			fresh = append(fresh, e)
+			seen[e] = true
+		}
+	}
+	for len(fresh) > 0 {
+		chunk := fresh
+		if len(chunk) > 64 {
+			chunk = chunk[:64]
+		}
+		if len(s.revoked)+len(chunk) > muMaxRevocations {
+			return ErrMUState
+		}
+		body := append(append([]byte("MUS1"), byte(len(signer))), signer...)
+		if err := s.append(journalSignerRevocation, append(body, encodeMURevocations(chunk)...)); err != nil {
+			return ErrMUState
+		}
+		if s.unions[signer] == nil {
+			s.unions[signer] = map[MURevocation]bool{}
+		}
+		for _, e := range chunk {
+			s.unions[signer][e] = true
+			s.revoked[e] = true
+		}
+		fresh = fresh[len(chunk):]
+	}
+	return nil
+}
+
+func decodeMUSignerRevocations(b []byte) (string, []MURevocation, bool) {
+	if len(b) < 6 || string(b[:4]) != "MUS1" {
+		return "", nil, false
+	}
+	n := int(b[4])
+	if n == 0 || len(b) < 5+n {
+		return "", nil, false
+	}
+	entries, ok := decodeMURevocations(b[5+n:])
+	if !ok || len(entries) == 0 {
+		return "", nil, false
+	}
+	return string(b[5 : 5+n]), entries, true
 }

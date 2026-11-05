@@ -25,6 +25,7 @@ const (
 	journalRevocation
 	journalBlocked
 	journalSnapshotMark
+	journalSignerRevocation
 )
 
 var (
@@ -67,6 +68,8 @@ func journalBodyLimit(kind journalFrameKind) int {
 		return 71
 	case journalSnapshotMark:
 		return 300
+	case journalSignerRevocation:
+		return 18800
 	default:
 		return 0
 	}

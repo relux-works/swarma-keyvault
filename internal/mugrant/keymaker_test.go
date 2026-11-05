@@ -135,7 +135,9 @@ func TestKeymakerAttestation(t *testing.T) {
 		t.Error("attestation admitted under another root")
 	}
 	// Signed by the service root over a body the builder never emits, but
-	// carrying the legitimate record's id: only the exact-body check refuses.
+	// carrying the legitimate record's id. Both the exact-body check and the
+	// signature check over the builder's preimage refuse it; neither alone is
+	// observable here.
 	parsed, err := record.Parse(wire, MaxEnvelopeBytes, 16)
 	if err != nil {
 		t.Fatal(err)

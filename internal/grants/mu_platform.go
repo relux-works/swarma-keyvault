@@ -222,6 +222,14 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	if err != nil {
 		return MUDecision{}, ErrMUState
 	}
+	var agentKey string
+	var agentEntries []MURevocation
+	if agentSnapBytes != nil {
+		agentKey = p.config.Registry.AgentRevocationKey
+		if agentEntries, err = muSnapshotEntries(agentSnapBytes); err != nil {
+			return MUDecision{}, ErrMUState
+		}
+	}
 	marks := map[string]time.Time{}
 	if marks[p.config.PublisherKey], err = muSnapshotIssuedAt(snap); err != nil {
 		return MUDecision{}, ErrMUState
@@ -235,7 +243,8 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	aud, _ := body["aud"].(string)
 	return MUDecision{GrantRoot: p.config.GrantRoot, GrantID: grantID, Use: r.Plan.Use, Author: author, Audience: aud, Nonce: nonce,
 		Action: action, TargetKind: kind, TargetID: id, Arguments: args, AuthorAttestation: attID, Expires: exp,
-		RequestHash: sha256.Sum256(pe.Envelope), PublisherKey: p.config.PublisherKey, Revocations: entries, SnapshotMarks: marks}, nil
+		RequestHash: sha256.Sum256(pe.Envelope), PublisherKey: p.config.PublisherKey, Revocations: entries, SnapshotMarks: marks,
+		AgentRevocationKey: agentKey, AgentRevocations: agentEntries}, nil
 }
 
 func strOr(v any) string { s, _ := v.(string); return s }
@@ -315,6 +324,66 @@ func muRecordID(raw []byte, kind string) (string, error) {
 
 // muSnapshotEntries returns the entries of a snapshot the verifier already
 // accepted in the same call.
+// VerifiedSnapshots returns the snapshots this event would be judged against,
+// each verified as an exact revocation/1 signed by its pinned signer: the
+// publisher snapshot, and for a Linux author the agent revocation snapshot.
+// A snapshot that does not verify is left out; verification then refuses.
+func (p *MUPlatform) VerifiedSnapshots(ev MUEvent) ([]MUSnapshot, error) {
+	if p == nil || p.config.Snapshot == nil {
+		return nil, ErrMUState
+	}
+	var out []MUSnapshot
+	if raw, err := p.config.Snapshot(); err == nil {
+		if sn, err := muVerifiedSnapshot(raw, p.config.PublisherKey); err == nil {
+			out = append(out, sn)
+		}
+	}
+	if _, linux := p.config.Linux[ev.SenderMXID]; linux && p.config.Registry.AgentSnapshot != nil && p.config.Registry.AgentRevocationKey != "" {
+		if raw, err := p.config.Registry.AgentSnapshot(); err == nil {
+			if sn, err := muVerifiedSnapshot(raw, p.config.Registry.AgentRevocationKey); err == nil {
+				out = append(out, sn)
+			}
+		}
+	}
+	return out, nil
+}
+
+// muVerifiedSnapshot admits a swarm-envelope/2 revocation/1 only when its
+// issuer and single author signature are key and the content id matches.
+func muVerifiedSnapshot(raw []byte, key string) (MUSnapshot, error) {
+	e, err := muParseEnvelope(raw)
+	if err != nil || len(e) != 4 || e["version"] != "swarm-envelope/2" {
+		return MUSnapshot{}, ErrMUState
+	}
+	b, ok := e["body"].(map[string]any)
+	sigs, _ := e["signatures"].([]any)
+	if !ok || b["type"] != "revocation/1" || b["issuer"] != key || len(sigs) != 1 {
+		return MUSnapshot{}, ErrMUState
+	}
+	sig, _ := sigs[0].(map[string]any)
+	text, _ := sig["sig"].(string)
+	raw64, err := record.DecodeBase64(text, 64)
+	if err != nil || len(sig) != 3 || sig["key"] != key || sig["role"] != "author" {
+		return MUSnapshot{}, ErrMUState
+	}
+	if id, err := record.ContentID("revocation/1", b); err != nil || id != e["id"] {
+		return MUSnapshot{}, ErrMUState
+	}
+	pre, err := record.SigningPreimage("revocation/1", key, "author", b)
+	if err != nil || record.VerifySignature(key, raw64, pre) != nil {
+		return MUSnapshot{}, ErrMUState
+	}
+	entries, err := muSnapshotEntries(raw)
+	if err != nil {
+		return MUSnapshot{}, err
+	}
+	at, err := muSnapshotIssuedAt(raw)
+	if err != nil {
+		return MUSnapshot{}, err
+	}
+	return MUSnapshot{Signer: key, IssuedAt: at, Entries: entries}, nil
+}
+
 // muSnapshotIssuedAt returns a verified snapshot's issued_at.
 func muSnapshotIssuedAt(raw []byte) (time.Time, error) {
 	e, err := muParseEnvelope(raw)

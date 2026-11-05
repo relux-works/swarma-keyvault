@@ -152,6 +152,10 @@ func LinuxFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	rSecondL, err := request(agent, agent.ID, attID, "work.assign", "second", T0.Add(-time.Second))
+	if err != nil {
+		return nil, err
+	}
 	late := T0.Add(21 * time.Hour) // after the attestation, inside the grant
 	rLate, err := request(agent, agent.ID, attID, "work.assign", "late", late.Add(-time.Second))
 	if err != nil {
@@ -173,6 +177,28 @@ func LinuxFamily() ([]Case, error) {
 		return nil, err
 	}
 	agentRevoking, err := snap(agentRev, T0.Add(-5*time.Second), []mugrant.SnapshotEntry{{Kind: "key", ID: agent.ID, From: stamp(T0.Add(-time.Minute))}})
+	if err != nil {
+		return nil, err
+	}
+	agentOlder, err := snap(agentRev, T0.Add(-30*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
+	// Cross-algorithm: the registry maps the Linux MXID to the Mac agent's
+	// P-256 key and serves its mac-se-1 attestation.
+	macAtt, _, err := w.attestations(w.root)
+	if err != nil {
+		return nil, err
+	}
+	macAttID, err := contentID(macAtt)
+	if err != nil {
+		return nil, err
+	}
+	macGrant, err := w.grant(grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: assign, nonceTag: "cross-algorithm"})
+	if err != nil {
+		return nil, err
+	}
+	macReq, err := w.request(w.agent, macAttID, "work.assign", "product", product, args, text, "cross-algorithm", T0.Add(-time.Second))
 	if err != nil {
 		return nil, err
 	}
@@ -231,6 +257,31 @@ func LinuxFamily() ([]Case, error) {
 			registry(served, gen), linuxMXID, ev("$l-stale", rAccept, text), now, pubFresh, agentStale, "key_binding_unavailable"),
 		one("L-N-sender-not-registered", "An event from an MXID with no registry identity refuses before verification.", "L-P-accept",
 			registry(served, gen), "@unregistered:interop.invalid", ev("$l-sender", rAccept, text), now, pubFresh, agentFresh, "mu-sender-not-attested"),
+		{Format: Format, ID: "L-N-agent-revoked-then-older", Claim: "An agent revocation snapshot that refused a request is remembered: a later, older agent snapshot without the entry does not let the key act.", PositiveControl: "L-P-accept",
+			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-first", rAccept, text), ev("$l-second", rSecondL, text)},
+			Steps: []Step{{Event: "$l-first", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentRevoking), Expected: "revoked"},
+				{Event: "$l-second", Now: later, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentOlder), Expected: "mu-grant-revoked"}}},
+		{Format: Format, ID: "L-N-agent-revoked-then-equal", Claim: "An agent revocation snapshot that refused a request is remembered: an agent snapshot with the same issued_at but without the entry does not let the key act.", PositiveControl: "L-P-accept",
+			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-first", rAccept, text), ev("$l-second", rSecondL, text)},
+			Steps: []Step{{Event: "$l-first", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentRevoking), Expected: "revoked"},
+				{Event: "$l-second", Now: later, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "mu-grant-revoked"}}},
+		func() Case {
+			c := one("L-N-registry-uid-mismatch", "A registry identity whose uid differs from the current active generation refuses.", "L-P-accept",
+				registry(served, gen), linuxMXID, ev("$l-uid", rAccept, text), now, pubFresh, agentFresh, "key_binding_unavailable")
+			l := *c.Pins.Linux
+			l.UID = gen.UID + 1
+			c.Pins.Linux = &l
+			return c
+		}(),
+		func() Case {
+			c := one("L-N-cross-algorithm", "A Linux registry identity that names a P-256 Mac agent key and its mac-se-1 attestation refuses: Keymaker evidence does not fit that profile.", "L-P-accept",
+				registry(map[string][]byte{macAttID: macAtt}, gen), linuxMXID, ev("$l-cross", macReq, text), now, pubFresh, agentFresh, "key_binding_invalid")
+			l := *c.Pins.Linux
+			l.AgentKey = w.agent.ID
+			c.Pins.Linux = &l
+			c.Records = Records{Grants: []string{B64(macGrant)}, PublisherAttestation: records.PublisherAttestation}
+			return c
+		}(),
 		{Format: Format, ID: "L-N-replay", Claim: "The same Linux request event handled twice executes once; the second refuses on the held nonce.", PositiveControl: "L-P-accept",
 			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-accept", rAccept, text)},
 			Steps: []Step{{Event: "$l-accept", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
