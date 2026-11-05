@@ -129,6 +129,39 @@ func TestMULegacyC0146D26FixtureReplay(t *testing.T) {
 	}
 }
 
+// Claim: the historical once allowance refuses a fresh nonce and request hash,
+// including after another reopen. A different target is a distinct allowance.
+func TestMULegacyC0146D26FixtureOnceAllowance(t *testing.T) {
+	c, b := muLegacyFixture(t, false)
+	s := muOpen(t, c, b)
+	defer func() { s.close() }()
+	for _, phase := range []string{"replay", "reopen"} {
+		u := MUUse{Once: true, GrantRoot: b.GrantRoot, GrantID: "synthetic-reserved-grant",
+			Action: "work.assign", TargetKind: "product", TargetID: "synthetic-product",
+			Requester: "p256:synthetic-requester", Nonce: "synthetic-fresh-" + phase, Audience: b.Audience,
+			RequestHash: sha256.Sum256([]byte("synthetic-fresh-request/" + phase))}
+		before, err := os.ReadFile(filepath.Join(c.Directory, "mu.journal"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seq, err := s.reserve(u); !errors.Is(err, ErrMUUseHeld) || seq != 0 {
+			t.Fatalf("%s: historical once allowance refilled: sequence %d, error %v", phase, seq, err)
+		}
+		after, err := os.ReadFile(filepath.Join(c.Directory, "mu.journal"))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatal("refusal changed historical journal", err)
+		}
+		// The refused attempt must not consume its fresh nonce, and changing
+		// the target must select a new allowance rather than blanket refusal.
+		u.TargetID = "synthetic-other-product-" + phase
+		if _, err := s.reserve(u); err != nil {
+			t.Fatal("distinct allowance with the refused attempt's nonce rejected", err)
+		}
+		s.close()
+		s = muOpen(t, c, b)
+	}
+}
+
 func TestMULegacyC0146D26FixtureCorruption(t *testing.T) {
 	c, b := muLegacyFixture(t, true)
 	s, err := openMUState(context.Background(), c, b)

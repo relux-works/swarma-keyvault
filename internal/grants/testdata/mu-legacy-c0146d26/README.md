@@ -2,7 +2,10 @@
 
 Writer revision: `c0146d2610cf9d2ea277479d4afd64b720d63c4a` (the full
 `c0146d26` commit). `generate_test.go` is a test-only driver copied into that
-revision's `internal/grants` package. It invokes that revision's actual
+revision's `internal/grants` package. Go excludes `testdata` directories from
+`go test ./...`; the driver does not run in the current package's tests.
+It runs only when explicitly copied into the historical package as shown below.
+It invokes that revision's actual
 `InitializeMUState`, `reserve`, and `absorbRevocations` implementations.
 The generator does not encode frames itself or use the current writer.
 
@@ -65,7 +68,8 @@ go test -p 2 -race -count=1 -run '^TestMULegacyC0146D26Fixture' -v ./internal/gr
 The replay test copies both files into a private directory with mode 0700 and
 files mode 0600; checkout permissions are not state admission permissions.
 It pins the journal checksum and frame sequence, verifies both reservations,
-refuses both held nonces, applies both revocations with `ErrMURevoked`, and
+refuses both held nonces and a fresh nonce against the held once allowance
+(`ErrMUUseHeld`, also after another reopen), applies both revocations with `ErrMURevoked`, and
 checks that legacy entries acquire neither signer attribution nor a mark.
 A publisher snapshot omitting them succeeds and records its own union and
 mark; that behavior survives another reopen.
