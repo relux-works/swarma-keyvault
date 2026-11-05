@@ -103,12 +103,22 @@ func TestMUServiceSitting(t *testing.T) {
 
 // Claim: the configuration is refused for an unknown field, a wrong type,
 // a relative path, a bad epoch, a time authority outside 1..300 s, a
-// duplicate agent, a root revocation not signed by the pinned root, and an
-// audience carrying the TEST marker prefix "test:".
+// duplicate agent, a root revocation not signed by the pinned root, an
+// audience carrying the TEST marker prefix "test:", and an audience the
+// issuer cannot mint (whitespace, non-ASCII, over 255 bytes). Positive
+// controls: the fixture configuration, a 255-byte audience, and "TEST:"
+// in upper case, which is not the case-sensitive marker.
 func TestMUServiceConfigRefusals(t *testing.T) {
 	g, cfg, _ := muServiceRig(t)
 	if _, err := muServiceFrom(t, cfg); err != nil {
 		t.Fatal("valid control refused", err)
+	}
+	for _, aud := range []string{strings.Repeat("a", 255), "TEST:grant-service"} {
+		_, c2, _ := muServiceRig(t)
+		c2["audience"] = aud
+		if _, err := muServiceFrom(t, c2); err != nil {
+			t.Fatal("admissible audience refused", aud, err)
+		}
 	}
 	other := newMUKey(t)
 	p, err := mugrant.BuildSnapshot(other.id, g.now, nil)
@@ -128,8 +138,11 @@ func TestMUServiceConfigRefusals(t *testing.T) {
 			c["agents"] = append(a, a[0])
 		},
 		"foreign-root-revocation": func(c map[string]any) { c["root_revocations"] = []string{foreign} },
-		// A2-261105-037: a production receiver refuses the TEST audience marker.
-		"test-audience": func(c map[string]any) { c["audience"] = "test:grant-service" },
+		"test-audience":           func(c map[string]any) { c["audience"] = "test:grant-service" },
+		"audience-space":          func(c map[string]any) { c["audience"] = "grant service" },
+		"audience-zwsp-test":      func(c map[string]any) { c["audience"] = "\u200btest:grant-service" },
+		"audience-fullwidth":      func(c map[string]any) { c["audience"] = "test\uff1agrant-service" },
+		"audience-256":            func(c map[string]any) { c["audience"] = strings.Repeat("a", 256) },
 	}
 	for name, mutate := range mutations {
 		_, cfg2, _ := muServiceRig(t)

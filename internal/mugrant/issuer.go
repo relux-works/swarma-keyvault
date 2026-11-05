@@ -103,6 +103,10 @@ type Grant struct {
 
 func wireTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
 
+// ValidAudience reports whether s is a grant audience the issuer can mint:
+// 1 to 255 bytes of printable ASCII (0x21 to 0x7e).
+func ValidAudience(s string) bool { return printableToken(s, 255) }
+
 func printableToken(s string, max int) bool {
 	if s == "" || len(s) > max {
 		return false
@@ -138,7 +142,7 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 	if spec.Issuer == spec.Subject || record.ValidateKey(spec.Issuer) != nil || record.ValidateKey(spec.Subject) != nil {
 		return nil, ErrGrantSpec
 	}
-	if !validMXID(spec.SubjectMXID) || !printableToken(spec.Audience, 255) || len(spec.Nonce) != 16 {
+	if !validMXID(spec.SubjectMXID) || !ValidAudience(spec.Audience) || len(spec.Nonce) != 16 {
 		return nil, ErrGrantSpec
 	}
 	if spec.Use != UseOnce && spec.Use != UseUntilExpiry {

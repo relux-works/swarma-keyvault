@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
 // ErrMUConfig refuses a multi-use receiver configuration.
@@ -115,9 +117,10 @@ func ParseMUService(raw []byte) (*MUService, error) {
 			return nil, ErrMUConfig
 		}
 	}
-	// A production receiver never serves TEST records: the TEST marker is the
-	// signed audience prefix "test:" (A2-261105-037).
-	if strings.HasPrefix(c.Audience, "test:") {
+	// The audience is one the issuer can mint (printable ASCII, 1 to 255
+	// bytes). A production receiver never serves TEST records: the TEST
+	// marker is the signed, case-sensitive audience prefix "test:".
+	if !mugrant.ValidAudience(c.Audience) || strings.HasPrefix(c.Audience, "test:") {
 		return nil, ErrMUConfig
 	}
 	if c.TimeAuthoritySeconds < 1 || c.TimeAuthoritySeconds > 300 {
