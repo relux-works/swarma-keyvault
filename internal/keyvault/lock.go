@@ -30,10 +30,15 @@ func (l FileLock) Lock() (func(), error) {
 }
 
 // LockContext creates the lock file and directory and waits for ownership until
-// ctx is done or the fallback bound expires. A failed acquisition closes its file.
+// ctx is done or the fallback bound expires. A done ctx refuses before any
+// attempt, so a canceled caller never takes the lock. A failed acquisition
+// closes its file.
 func (l FileLock) LockContext(ctx context.Context) (func(), error) {
 	if l.Path == "" {
 		return nil, fmt.Errorf("keyvault: lock path is empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("keyvault: flock %s: %w", l.Path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(l.Path), 0o700); err != nil {
 		return nil, fmt.Errorf("keyvault: lock dir: %w", err)

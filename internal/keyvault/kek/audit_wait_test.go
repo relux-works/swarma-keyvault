@@ -120,3 +120,39 @@ func TestServerAuditUsesRequestDeadline(t *testing.T) {
 		t.Fatalf("recovery after contention: %s", raw)
 	}
 }
+
+// Claim: a peer that connects and sends nothing is refused at the request
+// deadline, and that refusal is still written to the audit log while the
+// log is uncontended: the expired request context bounds only waiting for
+// the audit lock. The log verifies with one refused entry. Paired with
+// TestServerAuditUsesRequestDeadline, where a held audit lock at the deadline
+// leaves the log unchanged.
+func TestServerAuditRecordsIdlePeerRefusal(t *testing.T) {
+	f := newFixture(t, nil)
+	sock := filepath.Join(privateTemp(t), "s")
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	s := &Server{Vault: f.manager, Inspector: f.inspect, Audit: f.audit, Op: kekclient.OpUnwrap, Address: address, Timeout: 100 * time.Millisecond}
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(listener) }()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	err = <-done
+	if err == nil || strings.Contains(err.Error(), "audit:") {
+		t.Fatalf("idle peer not refused, or its refusal not audited: %v", err)
+	}
+	n, _, verr := f.audit.Verify()
+	if verr != nil || n != 1 {
+		t.Fatalf("audit log after idle-peer refusal: %d entries, %v", n, verr)
+	}
+	data, err := os.ReadFile(f.audit.Path)
+	if err != nil || !strings.Contains(string(data), `"refused"`) {
+		t.Fatalf("idle-peer refusal not recorded as refused: %q, %v", data, err)
+	}
+}

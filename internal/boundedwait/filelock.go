@@ -15,20 +15,23 @@ import (
 const LockWait = 45 * time.Second
 
 // LockFile takes an exclusive flock, retrying contention and interrupted calls
-// while ctx is live, for at most LockWait. The caller owns and closes f,
-// including on failure; closing a successfully locked descriptor releases it.
+// while ctx is live, for at most LockWait. A done ctx bounds only waiting: an
+// uncontended lock is still taken by the first attempt, so a refusal reached
+// at its deadline can still be written to an audit log. The caller owns and
+// closes f, including on failure; closing a successfully locked descriptor
+// releases it.
 func LockFile(ctx context.Context, f *os.File) error {
 	ctx, cancel := context.WithTimeout(ctx, LockWait)
 	defer cancel()
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			return nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		timer := time.NewTimer(5 * time.Millisecond)
