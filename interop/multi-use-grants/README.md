@@ -5,7 +5,7 @@ These vectors fix how a receiver on any platform must judge multi-use
 interaction contract is [CONTRACT.md](CONTRACT.md).
 
 Pins:
-- swarma-envelope `939750828554`: records and the platform verifier;
+- swarma-envelope `6c71e5226416`: records and the platform verifier, with publisher profile `grant-revocation-2`;
 - a2a #189 `25f1e44b002b`: event projection;
 - the `internal/mugrant` builders of this repository.
 
@@ -26,6 +26,7 @@ These are test keys only. Never use them for anything else.
 | `linux-stranger` | an Ed25519 key that signs where it must not |
 | `keymaker-service-root` | Keymaker signing-service root (purpose 5) |
 | `agent-revocation` | registry revocation key for agent keys |
+| `publisher-ed25519` | Ed25519 grant revocation publisher (`grant-revocation-2`) |
 
 ## Case format (`swarma-keyvault/mu-interop-case/1`)
 
@@ -114,7 +115,7 @@ Linux-authored (Ed25519) family:
 | `L-N-agent-rollback-older-mark` | older agent snapshot after a newer one, revoking nothing | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
-Ed25519 publisher family (r8): a Mac-authored grant whose revocation publisher is an Ed25519 key appointed by the owner grant root (`grant-revocation-2`). The pins name that key and the records carry its attestation.
+Ed25519 publisher family (r8): grants whose revocation publisher is an Ed25519 key appointed by the owner grant root (`grant-revocation-2`). The pins name that key and the records carry its attestation. The family has 11 cases with 12 steps, 8 Mac-authored and 3 Linux-authored; the whole set has 83 cases with 100 steps.
 
 | Case | Fact changed | Expected |
 | --- | --- | --- |
@@ -124,8 +125,13 @@ Ed25519 publisher family (r8): a Mac-authored grant whose revocation publisher i
 | `P2-N-profile-2-p256-subject` | root-signed `grant-revocation-2` attestation over a P-256 key | `key_binding_invalid` |
 | `P2-N-issued-by-service-root` | `grant-revocation-2` attestation issued and signed by the signing-service root | `key_binding_invalid` |
 | `P2-N-snapshot-older` | older Ed25519 publisher snapshot after a newer one | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `P2-N-profile-1-ed25519-subject` | root-signed `grant-revocation-1` attestation over an Ed25519 key | `key_binding_invalid` |
+| `P2-N-unknown-profile` | root-signed publisher attestation of an unknown profile | `key_binding_invalid` |
+| `P2-L-P-accept` | Linux author: fresh Ed25519 publisher and agent revocation snapshots | `succeeded` |
+| `P2-L-N-revoked` | Linux author: the Ed25519 publisher snapshot lists the grant | `revoked` |
+| `P2-L-N-publisher-is-agent-revocation-root` | Linux author: the publisher attestation's subject is the agent revocation root | `revocation_invalid` |
 
-The three P2 negatives that expect `key_binding_invalid` would get the same code from a verifier that does not know `grant-revocation-2`. They show that profile 2 refuses what it must only together with `P2-P-accept`, which such a verifier refuses.
+The P2 negatives that expect `key_binding_invalid` (Mac author) or `revocation_invalid` (Linux author) would get the same code from a verifier that does not know `grant-revocation-2`. They show that profile 2 refuses what it must only together with `P2-P-accept` and `P2-L-P-accept`, which such a verifier refuses. A receiver that validates the pinned publisher attestation at configuration load meets the invalid-attestation cases by refusing that configuration (CONTRACT, publisher profiles).
 
 ## Checking
 
@@ -153,7 +159,7 @@ Not committed, run by hand against the real code: these known-violation plants e
 - the snapshot shape check left out of pre-verification recording;
 - the 8192-byte snapshot bound left out of pre-verification recording;
 - the mark raise left out of pre-verification recording.
-- the pinned verifier set back to one without `grant-revocation-2` (`P2-P-accept`, `P2-N-revoked` and `P2-N-snapshot-older` fail).
+- the pinned verifier set back to one without `grant-revocation-2` (`P2-P-accept`, `P2-N-revoked`, `P2-N-snapshot-older`, `P2-L-P-accept` and `P2-L-N-revoked` fail).
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.
