@@ -30,7 +30,7 @@ func TestLocalRequesterPinSubstitutionPreState(t *testing.T) {
 			c, q := f.envelopes(t)
 			opened := 0
 			original := m.open
-			m.open = func(e *LocalEnrollment) (*localState, error) { opened++; return original(e) }
+			m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) { opened++; return original(ctx, e) }
 			if out, err := m.Execute(context.Background(), c, q); out != nil || !errors.Is(err, errRequesterMismatch) || opened != 0 || p.calls != 0 {
 				t.Fatal("requester substitution", out, err, opened, p.calls)
 			}

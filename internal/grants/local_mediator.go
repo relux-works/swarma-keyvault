@@ -21,7 +21,7 @@ type LocalMediator struct {
 	enrollment *LocalEnrollment
 	provider   localProvider
 	now        func() time.Time
-	open       func(*LocalEnrollment) (*localState, error)
+	open       func(context.Context, *LocalEnrollment) (*localState, error)
 }
 
 func NewLocalMediator(e *LocalEnrollment) *LocalMediator {
@@ -48,7 +48,7 @@ func (m *LocalMediator) Execute(ctx context.Context, certificate, request []byte
 	if err := checkLocalProviderExecutable(m.enrollment.ghPath); err != nil {
 		return nil, err
 	}
-	state, err := m.open(m.enrollment)
+	state, err := m.open(ctx, m.enrollment)
 	if err != nil {
 		return nil, ErrLocalState
 	}

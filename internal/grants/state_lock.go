@@ -15,8 +15,10 @@ import (
 const subprocessWaitDelay = time.Second
 
 // stateLockWait bounds the wait for another holder of a grant state lock when
-// the caller's context carries no earlier deadline.
-const stateLockWait = 30 * time.Second
+// the caller's context carries no earlier deadline. A holder keeps the lock
+// through one provider call (30s) plus subprocessWaitDelay and journal writes,
+// so the cap is set above that; it still fails closed if exceeded.
+const stateLockWait = 45 * time.Second
 
 // stateLockPoll is the retry interval while another process holds the lock.
 const stateLockPoll = 5 * time.Millisecond

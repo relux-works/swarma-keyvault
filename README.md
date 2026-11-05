@@ -500,7 +500,7 @@ surrounding whitespace, CR, a missing LF or extra LFs refuse. After a provider o
 projection process exits or is killed at its deadline, its pipes are awaited at
 most one more second, so a descendant holding them cannot extend the deadline.
 A state lock held by another process is awaited only until the caller's deadline,
-and at most 30 seconds. Subprocess raw
+and at most 45 seconds (longer than one holder's provider call); then it refuses. Subprocess raw
 stderr is withheld. JSON command results go to stdout; refusals go to stderr with
 a nonzero exit. An `unknown` result retains its use; failed result publication is
 never permission to retry.
@@ -508,7 +508,7 @@ never permission to retry.
 The configuration is one closed JSON object, type
 `grants-a2a-executor-config-1`, at most 196608 bytes. The file is the executor's
 root of trust: it must be a regular file (not a symlink), owned by the current user
-and not writable by group or others; owner-only and read-only modes such as 0600,
+or root and not writable by group or others; owner-only and read-only modes such as 0600,
 0644, 0400 and 0444 are accepted. Every field is a string:
 
 | Fields | Meaning |

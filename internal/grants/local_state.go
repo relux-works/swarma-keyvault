@@ -62,7 +62,7 @@ func openLocalFile(path string) (*os.File, error) {
 
 // The directory must be explicitly provisioned, owned and private. This local
 // lock/epoch protects cooperating callers; it is not same-UID tamper resistance.
-func openLocalState(e *LocalEnrollment) (*localState, error) {
+func openLocalState(ctx context.Context, e *LocalEnrollment) (*localState, error) {
 	st, err := os.Lstat(e.stateDir)
 	if err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
 		return nil, ErrLocalState
@@ -86,7 +86,7 @@ func openLocalState(e *LocalEnrollment) (*localState, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = lockStateFile(context.Background(), s.lock); err != nil {
+	if err = lockStateFile(ctx, s.lock); err != nil {
 		return nil, ErrLocalState
 	}
 	s.file, err = openLocalFile(filepath.Join(e.stateDir, "local.journal"))

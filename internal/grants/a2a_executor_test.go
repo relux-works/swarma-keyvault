@@ -238,8 +238,10 @@ func TestA2AExecutorProviderPinDrift(t *testing.T) {
 	}
 }
 
-// These neighboring observations are syntactically complete but carry no valid
-// authority. Every refusal preserves an initialized journal and provider count.
+// These neighboring observations are syntactically complete and correctly
+// framed but carry no valid authority. Each refuses for its own predicate (the
+// framing check is asserted to pass first; for event/room the unmutated record
+// parses). Every refusal preserves an initialized journal and provider count.
 func TestA2AExecutorUntrustedEventRefusals(t *testing.T) {
 	for _, mode := range []string{"sender", "event", "room", "signature", "scope"} {
 		t.Run(mode, func(t *testing.T) {
@@ -284,11 +286,23 @@ func TestA2AExecutorUntrustedEventRefusals(t *testing.T) {
 				w["body"] = strings.SplitN(w["body"].(string), "\n\n", 2)[0] + "\n\n" + body
 				p["content_base64"] = base64.RawURLEncoding.EncodeToString(requestTestBytes(t, w))
 			}
-			if err := os.WriteFile(path, requestTestBytes(t, p), 0600); err != nil {
+			written := a2aFramed(requestTestBytes(t, p))
+			if _, ok := a2aRecordFrame(written); !ok {
+				t.Fatal("control refused by framing, not by its own predicate")
+			}
+			if err := os.WriteFile(path, written, 0600); err != nil {
 				t.Fatal(err)
 			}
-			if out, err := e.Execute(context.Background(), "$fixture-event"); err == nil || out != nil {
-				t.Fatal("untrusted event accepted", out, err)
+			want := map[string]error{"sender": ErrA2ANoGrant, "event": ErrA2AContext, "room": ErrA2AContext, "signature": errSignatureInvalid, "scope": errResourceMismatch}[mode]
+			if out, err := e.Execute(context.Background(), "$fixture-event"); !errors.Is(err, want) || out != nil {
+				t.Fatal("untrusted event accepted or refused for another reason", out, err, "wanted", want)
+			}
+			if mode == "event" || mode == "room" {
+				expected := e.observation
+				expected.EventID = "$fixture-event"
+				if _, err := ParseA2AObservation(raw, expected); err != nil {
+					t.Fatal("unmutated neighbor refused", err)
+				}
 			}
 			if !bytes.Equal(before, a2aJournalBytes(t, m)) {
 				t.Fatal("refusal changed journal")

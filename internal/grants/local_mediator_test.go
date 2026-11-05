@@ -82,7 +82,7 @@ func TestLocalMediatorDurableAndReplay(t *testing.T) {
 	if _, err := m.Execute(context.Background(), c, changed); !errors.Is(err, ErrLocalUseHeld) || p.calls != 1 {
 		t.Fatal("request ID replenished use", err, p.calls)
 	}
-	s, err := openLocalState(m.enrollment)
+	s, err := openLocalState(context.Background(), m.enrollment)
 	if err != nil {
 		t.Fatal("replay failed", err)
 	}
@@ -129,7 +129,7 @@ func TestLocalMediatorRejectsBeforeState(t *testing.T) {
 			}
 			opened := 0
 			original := m.open
-			m.open = func(e *LocalEnrollment) (*localState, error) { opened++; return original(e) }
+			m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) { opened++; return original(ctx, e) }
 			if out, err := m.Execute(context.Background(), c, q); !errors.Is(err, want) || out != nil || p.calls != 0 || opened != 0 {
 				t.Fatal("authority refusal touched state/provider", out, err, p.calls, opened)
 			}
@@ -158,8 +158,8 @@ func TestLocalMediatorFaults(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			original := m.open
-			m.open = func(e *LocalEnrollment) (*localState, error) {
-				s, err := original(e)
+			m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) {
+				s, err := original(ctx, e)
 				if err != nil {
 					t.Fatal("fault fixture could not open valid state", err)
 				}

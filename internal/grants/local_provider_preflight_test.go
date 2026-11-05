@@ -60,7 +60,7 @@ func TestLocalProviderExecutableRefusesBeforeState(t *testing.T) {
 			changeLocalExecutableFixture(t, m.enrollment.ghPath, mode)
 			opened := 0
 			original := m.open
-			m.open = func(e *LocalEnrollment) (*localState, error) { opened++; return original(e) }
+			m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) { opened++; return original(ctx, e) }
 			out, err := m.Execute(context.Background(), c, q)
 			if out != nil || !errors.Is(err, ErrLocalProviderUnavailable) || opened != 0 || p.calls != 0 {
 				t.Fatal("provider metadata pre-state refusal", out, err, opened, p.calls)
@@ -84,7 +84,7 @@ func TestLocalProviderExecutableRecheckedUnderLock(t *testing.T) {
 	for _, mode := range []string{"missing", "not-executable", "symlink"} {
 		t.Run(mode, func(t *testing.T) {
 			_, m, p, c, q := localMediatorFixture(t)
-			seed, err := openLocalState(m.enrollment)
+			seed, err := openLocalState(context.Background(), m.enrollment)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -96,8 +96,8 @@ func TestLocalProviderExecutableRecheckedUnderLock(t *testing.T) {
 			}
 			opened, writes := 0, 0
 			original := m.open
-			m.open = func(e *LocalEnrollment) (*localState, error) {
-				s, err := original(e)
+			m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) {
+				s, err := original(ctx, e)
 				if err != nil {
 					return nil, err
 				}
@@ -115,7 +115,7 @@ func TestLocalProviderExecutableRecheckedUnderLock(t *testing.T) {
 			if err != nil || !bytes.Equal(before, after) {
 				t.Fatal("pre-reservation refusal changed journal", err)
 			}
-			state, err := openLocalState(m.enrollment)
+			state, err := openLocalState(context.Background(), m.enrollment)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -146,8 +146,8 @@ func TestLocalProviderExecutableDisappearsAfterIntent(t *testing.T) {
 	m.provider = localGHProvider{path: path}
 	original := m.open
 	syncs := 0
-	m.open = func(e *LocalEnrollment) (*localState, error) {
-		s, err := original(e)
+	m.open = func(ctx context.Context, e *LocalEnrollment) (*localState, error) {
+		s, err := original(ctx, e)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +168,7 @@ func TestLocalProviderExecutableDisappearsAfterIntent(t *testing.T) {
 	if !errors.Is(err, ErrLocalUnknown) || got == nil || got.State != "unknown" || syncs != 2 {
 		t.Fatal("post-intent missing path", got, err, syncs)
 	}
-	state, err := openLocalState(m.enrollment)
+	state, err := openLocalState(context.Background(), m.enrollment)
 	if err != nil {
 		t.Fatal(err)
 	}

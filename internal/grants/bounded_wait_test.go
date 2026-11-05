@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -28,8 +29,28 @@ func holdInheritedPipes() {
 	if holder.Start() != nil {
 		os.Exit(97)
 	}
+	if path := os.Getenv("KEYVAULT_ORPHAN_PID_FILE"); path != "" {
+		_ = os.WriteFile(path, []byte(strconv.Itoa(holder.Process.Pid)), 0600)
+	}
 	time.Sleep(time.Minute)
 	os.Exit(98)
+}
+
+// reapOrphanHolder makes the fixture record its grandchild's PID and kills
+// exactly that PID when the test ends, so no sleep process outlives the test.
+func reapOrphanHolder(t *testing.T) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "orphan.pid")
+	t.Setenv("KEYVAULT_ORPHAN_PID_FILE", path)
+	t.Cleanup(func() {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return
+		}
+		if pid, err := strconv.Atoi(string(raw)); err == nil && pid > 1 {
+			_ = unix.Kill(pid, unix.SIGKILL)
+		}
+	})
 }
 
 // Claim: a G2 provider child killed at the caller's deadline returns within a
@@ -37,6 +58,7 @@ func holdInheritedPipes() {
 // held as UNKNOWN and is never dispatched twice. Limit: one grandchild, macOS
 // /bin/sleep; it does not prove the descendant itself is reaped.
 func TestA2AProviderOrphanPipeBounded(t *testing.T) {
+	reapOrphanHolder(t)
 	_, m, _, e := a2aMediatorFixture(t)
 	calls := filepath.Join(t.TempDir(), "calls")
 	t.Setenv("KEYVAULT_A2A_GH_FIXTURE", "orphan-pipe")
@@ -64,6 +86,7 @@ func TestA2AProviderOrphanPipeBounded(t *testing.T) {
 // Claim: the same bound holds for the G local provider adapter (same failure
 // class as the G2 site). Limit as above.
 func TestLocalProviderOrphanPipeBounded(t *testing.T) {
+	reapOrphanHolder(t)
 	f := localTestFixture(t)
 	c, q := f.envelopes(t)
 	enrollment, err := ParseLocalEnrollment(requestTestBytes(t, f.config))
@@ -97,6 +120,7 @@ func TestLocalProviderOrphanPipeBounded(t *testing.T) {
 // refusal within a bounded time despite a grandchild holding its pipes, with no
 // provider call and no state change. Limit as above.
 func TestA2AExecutorOrphanPipeBounded(t *testing.T) {
+	reapOrphanHolder(t)
 	_, e, _, _, providerCalls := a2aExecutorFixture(t)
 	if err := e.InitializeState(); err != nil {
 		t.Fatal(err)
@@ -186,5 +210,38 @@ func TestA2AExecuteLockWaitHonorsContext(t *testing.T) {
 	}
 	if !bytes.Equal(before, a2aJournalBytes(t, m)) {
 		t.Fatal("state written under held lock")
+	}
+}
+
+// Claim: a G local execution whose context ends while another process holds
+// the local state lock refuses with ErrLocalState, starts no provider and
+// writes no journal frame (N1: the G lock honors the caller's deadline too).
+func TestLocalExecuteLockWaitHonorsContext(t *testing.T) {
+	_, m, p, c, q := localMediatorFixture(t)
+	lockPath := filepath.Join(m.enrollment.stateDir, "local.lock")
+	holder, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	if err := unix.Flock(int(holder.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	journal := filepath.Join(m.enrollment.stateDir, "local.journal")
+	before, _ := os.ReadFile(journal)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := m.Execute(ctx, c, q); !errors.Is(err, ErrLocalState) {
+		t.Fatal("local execute under held lock", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatal("local lock wait ignored context", elapsed)
+	}
+	if p.calls != 0 {
+		t.Fatal("provider started under held lock")
+	}
+	if after, _ := os.ReadFile(journal); !bytes.Equal(before, after) {
+		t.Fatal("journal written under held lock")
 	}
 }
