@@ -60,6 +60,14 @@ func TestMUProjectionParse(t *testing.T) {
 			t.Error("framing admitted", name)
 		}
 	}
+	// A duplicated member (here the sender) refuses, whichever value is last.
+	dup := bytes.Replace(good, []byte(`{"body_text_base64"`), []byte(`{"sender_mxid":"@other:gr.relux.works","body_text_base64"`), 1)
+	if bytes.Equal(dup, good) {
+		t.Fatal("fixture")
+	}
+	if _, err := ParseMUProjection(dup, muDockRoom, "$e"); !errors.Is(err, ErrMUProjection) {
+		t.Error("duplicate member admitted")
+	}
 	if _, err := ParseMUProjection(good, muDockRoom, "$other"); !errors.Is(err, ErrMUProjection) {
 		t.Error("record for another requested event admitted")
 	}

@@ -28,6 +28,11 @@ func ParseMUProjection(raw []byte, room, eventID string) (MUEnvelopeEvent, error
 	if !ok {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
+	// The duplicate-free platform reader first: encoding/json would keep the
+	// last of two equal members.
+	if _, err := record.Parse(frame, 196608, 4); err != nil {
+		return MUEnvelopeEvent{}, ErrMUProjection
+	}
 	d := json.NewDecoder(bytes.NewReader(frame))
 	d.DisallowUnknownFields()
 	var m map[string]any

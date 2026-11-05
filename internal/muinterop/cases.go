@@ -39,7 +39,7 @@ func MacFamily() ([]Case, error) {
 		return nil, err
 	}
 	assign := []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: product}}}
-	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:alexis"}}
+	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:test-owner"}}
 	current := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
 	once := grantSpec{root: w.root, use: mugrant.UseOnce, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: assign, nonceTag: "once"}
 	expired := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-31 * 24 * time.Hour), ex: T0.Add(-24 * time.Hour), entries: assign, nonceTag: "expired"}
@@ -62,8 +62,8 @@ func MacFamily() ([]Case, error) {
 		return nil, err
 	}
 	pins := Pins{GrantRoot: w.root.ID, Audience: audience, PublisherKey: w.publisher.ID, Room: room, ReceiverMXID: receiverMXID, SenderMXID: senderMXID,
-		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: "owner:alexis", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
-		RegistryOwners: map[string]string{"@own-agent:interop.invalid": "owner:alexis", "@other-owner-agent:interop.invalid": "owner:other"}}
+		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: "owner:test-owner", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
+		RegistryOwners: map[string]string{"@own-agent:interop.invalid": "owner:test-owner", "@other-owner-agent:interop.invalid": "owner:other"}}
 	records := func(grants ...[]byte) Records {
 		r := Records{AgentAttestation: B64(agentAtt), PublisherAttestation: B64(publisherAtt)}
 		for _, g := range grants {
@@ -116,7 +116,7 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
-	rIvan, err := req(w.agent, "account.manage", "account-scope", "owner:alexis", map[string]string{"account": "@other-owner-agent:interop.invalid"}, "Retire an account another owner holds", "other-owner")
+	rIvan, err := req(w.agent, "account.manage", "account-scope", "owner:test-owner", map[string]string{"account": "@other-owner-agent:interop.invalid"}, "Retire an account another owner holds", "other-owner")
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +151,19 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	type textCase struct{ id, claim, text string }
+	var textCases []textCase
+	for _, tc := range []textCase{
+		{"nul", "NUL (U+0000)", "Assign\x00text"}, {"del", "DEL (U+007F)", "Assign\x7ftext"}, {"c1", "C1 control U+0085", "Assign\u0085text"},
+		{"fffd", "U+FFFD", "Assign\ufffdtext"}, {"invalid-utf8", "invalid UTF-8", "Assign\xfftext"},
+		{"blank", "only ASCII white space", "  \n\t "}, {"ideographic-space", "only non-ASCII white space (U+3000)", "\u3000\u3000"},
+		{"bidi-061c", "U+061C", "Assign\u061ctext"}, {"bidi-200e", "U+200E", "Assign\u200etext"}, {"bidi-200f", "U+200F", "Assign\u200ftext"},
+		{"bidi-202a", "U+202A", "Assign\u202atext"}, {"bidi-202b", "U+202B", "Assign\u202btext"}, {"bidi-202c", "U+202C", "Assign\u202ctext"},
+		{"bidi-202d", "U+202D", "Assign\u202dtext"}, {"bidi-202e", "U+202E", "Assign\u202etext"}, {"bidi-2066", "U+2066", "Assign\u2066text"},
+		{"bidi-2067", "U+2067", "Assign\u2067text"}, {"bidi-2068", "U+2068", "Assign\u2068text"}, {"bidi-2069", "U+2069", "Assign\u2069text"},
+	} {
+		textCases = append(textCases, tc)
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -182,6 +195,7 @@ func MacFamily() ([]Case, error) {
 			records(gCurrent), ev("$over", rOver, overText), fresh, "mu-request-text-refused"),
 		one("M-N-text-cr", "Event text containing CR refuses on receipt even when the signed body_sha256 binds it.", "M-P-accept",
 			records(gCurrent), ev("$cr", rCR, crText), fresh, "mu-request-text-refused"),
+		// Text rule, one class per case; each is signed (body_sha256 binds it).
 		one("M-N-body-hash", "Delivered text that differs from the signed body_sha256 refuses.", "M-P-accept",
 			records(gCurrent), ev("$text", rAccept, text+" (edited)"), fresh, "message_text_mismatch"),
 		{Format: Format, ID: "M-N-replay", Claim: "The same request event handled twice executes once; the second refuses on the held nonce.", PositiveControl: "M-P-accept",
@@ -196,6 +210,14 @@ func MacFamily() ([]Case, error) {
 		{Format: Format, ID: "M-N-snapshot-rollback", Claim: "A newer publisher snapshot that drops a revocation the receiver already holds refuses as rollback.", PositiveControl: "M-P-accept",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(withEntry), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-revocation-snapshot-rollback"}}},
+	}
+	for _, tc := range textCases {
+		r, err := w.rehashed(rAccept, tc.text)
+		if err != nil {
+			return nil, err
+		}
+		cases = append(cases, one("M-N-text-"+tc.id, "Event text containing "+tc.claim+" refuses on receipt even when the signed body_sha256 binds it.", "M-P-accept",
+			records(gCurrent), ev("$text-"+tc.id, r, tc.text), fresh, "mu-request-text-refused"))
 	}
 	return cases, nil
 }

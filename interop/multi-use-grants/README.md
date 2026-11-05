@@ -59,6 +59,7 @@ controls stop an implementation that refuses everything from passing.
 | `M-P-text-at-limit` | text of exactly 4096 bytes | `succeeded` |
 | `M-N-text-over-limit` | text of 4097 bytes, bound by the signature | `mu-request-text-refused` |
 | `M-N-text-cr` | text with CR, bound by the signature | `mu-request-text-refused` |
+| `M-N-text-<class>` | one forbidden class each, bound by the signature: `nul`, `del`, `c1`, `fffd`, `invalid-utf8`, `blank`, `ideographic-space`, and every bidi control `bidi-061c`, `bidi-200e`, `bidi-200f`, `bidi-202a` … `bidi-202e`, `bidi-2066` … `bidi-2069` | `mu-request-text-refused` |
 | `M-N-body-hash` | delivered text edited | `message_text_mismatch` |
 | `M-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 | `M-N-use-refill` | `once` grant, second request | `succeeded`, then `mu-grant-use-already-held` |
