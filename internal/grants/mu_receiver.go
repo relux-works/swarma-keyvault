@@ -109,6 +109,12 @@ type MUReceiverConfig struct {
 	Signers map[string]bool
 }
 
+// unpinned reports whether key is a snapshot signer this receiver does not
+// pin; the journal is judged once, by foreignSigner, before recording.
+func (r *MUReceiver) unpinned(key string) bool {
+	return r.config.Signers != nil && !r.config.Signers[key]
+}
+
 // foreignSigner reports whether the journal or the decision names a snapshot
 // signer this receiver does not pin.
 func (r *MUReceiver) foreignSigner(s *muState, keys ...string) bool {
@@ -302,7 +308,7 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 	}
 	now := r.now()
 	for _, sn := range snaps {
-		if sn.Signer == MUOwnerRootSigner || r.foreignSigner(s, sn.Signer) || s.absorbSigned(sn.Signer, sn.Entries) != nil {
+		if sn.Signer == MUOwnerRootSigner || r.unpinned(sn.Signer) || s.absorbSigned(sn.Signer, sn.Entries) != nil {
 			return
 		}
 		// Entries always join the union, but only a snapshot that is not

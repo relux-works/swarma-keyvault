@@ -209,3 +209,31 @@ func TestMUAbsorbSkipsUnpinnedJournalSigner(t *testing.T) {
 		})
 	}
 }
+
+// Claim: pre-verification recording stops at a snapshot whose signer the
+// receiver does not pin, even with an empty journal, so neither it nor any
+// later snapshot of the event is recorded. This witnesses the per-snapshot
+// check apart from the journal check. Positive control: the same pinned
+// snapshot alone is recorded.
+func TestMUAbsorbStopsAtUnpinnedSnapshotSigner(t *testing.T) {
+	c, b := muFixture(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	entry := []MURevocation{{"record", "revoked-id"}}
+	pins := map[string]bool{"ed25519:publisher": true}
+	run := func(snaps ...MUSnapshot) *muState {
+		r := NewMUReceiver(MUReceiverConfig{State: c, Binding: b, Signers: pins}, muSnapshotsOnly{snaps}, nil, nil)
+		r.now = func() time.Time { return at.Add(time.Minute) }
+		r.absorbSnapshots(context.Background(), MUEvent{})
+		return muOpen(t, c, b)
+	}
+	s := run(MUSnapshot{Signer: "ed25519:unpinned", IssuedAt: at, Entries: entry}, MUSnapshot{Signer: "ed25519:publisher", IssuedAt: at, Entries: entry})
+	if len(s.unions) != 0 || len(s.highWater) != 0 || len(s.revoked) != 0 {
+		t.Fatal("unpinned snapshot signer recorded", s.unions, s.highWater)
+	}
+	s.close()
+	s = run(MUSnapshot{Signer: "ed25519:publisher", IssuedAt: at, Entries: entry})
+	defer s.close()
+	if !s.unions["ed25519:publisher"][entry[0]] || !s.highWater["ed25519:publisher"].Equal(at) {
+		t.Fatal("pinned snapshot not recorded", s.unions, s.highWater)
+	}
+}

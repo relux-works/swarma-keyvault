@@ -78,6 +78,15 @@ func TestLockFileRetriesInterruptedAttempt(t *testing.T) {
 		if err := lockFile(ctx, f, flock); err != nil || calls != interruptions+1 {
 			t.Fatal("free lock not taken at first successful attempt", interruptions, calls, err)
 		}
+		// The lock is really held: another descriptor cannot take it.
+		other, err := os.OpenFile(f.Name(), os.O_RDWR, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := syscall.Flock(int(other.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); !errors.Is(err, syscall.EWOULDBLOCK) {
+			t.Fatal("lock not held after an interrupted retry", interruptions, err)
+		}
+		other.Close()
 	}
 }
 
