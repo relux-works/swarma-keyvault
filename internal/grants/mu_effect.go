@@ -118,3 +118,10 @@ func muContentID(s string) bool {
 	}
 	return true
 }
+
+// CheckPinnedExecutable admits an absolute, regular, executable file owned by
+// the caller or root, not writable by group or others, whose SHA-256 equals
+// the pinned lowercase hex digest. It is the same check the G2 executor uses.
+func CheckPinnedExecutable(path, sha256Hex string) error {
+	return checkA2APinnedExecutable(path, sha256Hex)
+}
