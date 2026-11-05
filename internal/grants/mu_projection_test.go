@@ -43,7 +43,9 @@ func TestMUProjectionParse(t *testing.T) {
 		"room-mismatch":  func(m map[string]any) { m["returned_room_id"] = "!other:gr.relux.works" },
 		"event-mismatch": func(m map[string]any) { m["returned_event_id"] = "$other" },
 		"padded-base64":  func(m map[string]any) { m["body_text_base64"] = "dGV4dA==" },
-		"empty-text":     func(m map[string]any) { m["body_text_base64"] = "" },
+		// "dGV4dB" decodes to "text" only if non-zero trailing bits are ignored.
+		"noncanonical-base64": func(m map[string]any) { m["body_text_base64"] = "dGV4dB" },
+		"empty-text":          func(m map[string]any) { m["body_text_base64"] = "" },
 		"not-an-envelope": func(m map[string]any) {
 			m["envelope_base64"] = base64.RawURLEncoding.EncodeToString([]byte("{not json"))
 		},

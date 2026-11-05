@@ -40,7 +40,8 @@ func MacFamily() ([]Case, error) {
 	}
 	assign := []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: product}}}
 	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:test-owner"}}
-	current := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
+	rooms := []mugrant.Entry{{Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "swarma-space"}}, {Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "other-space"}}}
+	current := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(append(assign, account), rooms...), nonceTag: "until-expiry"}
 	once := grantSpec{root: w.root, use: mugrant.UseOnce, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
 	expired := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-31 * 24 * time.Hour), ex: T0.Add(-24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
 	foreign := grantSpec{root: w.other, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
@@ -211,6 +212,25 @@ func MacFamily() ([]Case, error) {
 	}
 	unmirrored := records(gCurrent)
 	unmirrored.RootRevocations = []string{B64(unrelated)}
+	rModule, err := req(w.agent, "work.assign", "product", product, map[string]string{"module": "other-module", "title": "Interop acceptance"}, text, "accept")
+	if err != nil {
+		return nil, err
+	}
+	roomArgs := map[string]string{"room": "!member-room:interop.invalid", "account": "@own-agent:interop.invalid"}
+	const roomText = "Add an agent to a room"
+	rRoom, err := req(w.agent, "room.membership", "room-scope", "swarma-space", roomArgs, roomText, "room")
+	if err != nil {
+		return nil, err
+	}
+	rRoomOther, err := req(w.agent, "room.membership", "room-scope", "other-space", roomArgs, roomText, "room")
+	if err != nil {
+		return nil, err
+	}
+	const tabText = "Assign:\tinterop acceptance"
+	rTab, err := req(w.agent, "work.assign", "product", product, args, tabText, "tab")
+	if err != nil {
+		return nil, err
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -244,6 +264,14 @@ func MacFamily() ([]Case, error) {
 			records(gCurrent), ev("$over", rOver, overText), fresh, "mu-request-text-refused"),
 		one("M-N-text-cr", "Event text containing CR refuses on receipt even when the signed body_sha256 binds it.", "M-P-accept",
 			records(gCurrent), ev("$cr", rCR, crText), fresh, "mu-request-text-refused"),
+		one("M-N-module-outside", "work.assign naming a module outside the receiver's modules refuses by owner scope; only the module argument differs.", "M-P-accept",
+			records(gCurrent), ev("$module", rModule, text), fresh, "mu-request-out-of-owner-scope"),
+		one("M-P-room-membership", "room.membership in the receiver's room scope, for an account the owner holds, is admitted and executed once.", "",
+			records(gCurrent), ev("$room", rRoom, roomText), fresh, "succeeded"),
+		one("M-N-room-outside-scope", "room.membership on a room scope the grant lists but the receiver does not serve refuses by owner scope; only the target id differs.", "M-P-room-membership",
+			records(gCurrent), ev("$room-other", rRoomOther, roomText), fresh, "mu-request-out-of-owner-scope"),
+		one("M-P-text-tab", "Event text containing TAB is admitted.", "",
+			records(gCurrent), ev("$tab", rTab, tabText), fresh, "succeeded"),
 		// Text rule, one class per case; each is signed (body_sha256 binds it).
 		one("M-N-body-hash", "Delivered text that differs from the signed body_sha256 refuses.", "M-P-accept",
 			records(gCurrent), ev("$text", rAccept, text+" (edited)"), fresh, "message_text_mismatch"),

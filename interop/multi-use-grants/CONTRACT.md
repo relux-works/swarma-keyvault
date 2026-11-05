@@ -54,7 +54,7 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 - Vocabulary v2 is a closed allowlist.
   - Actions `work.assign`, `work.require`, `work.contract`, `work.prioritize`, `work.land-order` and `work.accept` apply to kind `product`.
   - `account.manage` applies to `account-scope`, and `room.membership` to `room-scope`.
-  - A target id is an exact name with at most one `owner:` qualifier. Patterns are refused.
+  - A target id follows the spec grammar: lowercase `a-z`, `0-9` and `-`, optionally qualified once as `qualifier:name`; no `/` and no patterns (spec §3.5). (r6) The KV issuer additionally uses only the `owner:` qualifier, for `account-scope`; this is issuer policy, not a verifier rule.
 - Issuer-side binding. These are issuance rules; a receiver cannot observe them (r5, see D3):
   - for a `mac-se-1` grantee, the issuer refuses unless the grantee has a verified attestation under the grant root that covers the whole interval;
   - for an Ed25519 grantee, the whole-interval cover does not apply (a Keymaker attestation lives at most 86 400 s); the issuer applies D3 instead;
@@ -92,7 +92,12 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 
 ### 2.4 revocation/1
 
-- A publisher snapshot has a body of exactly `{complete, entries, issued_at, issuer, type}` and is signed by the publisher key.
+- A publisher snapshot has a body of exactly `{complete, entries, issued_at, issuer, type}` and is signed by the publisher key. (r6) Its constraints:
+  - `complete` is `true`;
+  - `entries` are unique and sorted by `kind`, then `id`;
+  - `kind` is `record` or `key`;
+  - `from` is an exact UTC time no later than `issued_at`.
+- (r6) Carriage: the Mac receiver reads the newest snapshot the publisher job writes to an owner-private file. The L receiver reads the newest snapshot posted to the dedicated room (D2). When no snapshot can be read, the request refuses with `revocation_unavailable`.
 - Freshness (r5):
   - age = trusted receiver now − `issued_at`;
   - a snapshot is admitted only when `issued_at` is not in the future and the age is at most 60 s, inclusive;
@@ -119,7 +124,10 @@ Domain tags, exactly as `record.Tag` gives them (r5):
    - the request has not expired;
    - the grant is not locally paused (`mu-grant-locally-paused`);
    - the action is not grant authority (`mu-request-widens-authority`);
-   - the target is in owner scope: the module for `product`, the account owner for `account.manage`, the room scope and account owner for `room.membership` (`mu-request-out-of-owner-scope`).
+   - the target is in owner scope (`mu-request-out-of-owner-scope`). (r6) The argument keys are:
+     - `product` actions: `module`, which must be one of the receiver's modules (`work.assign` also carries `title`);
+     - `account.manage`: `account`, an MXID that the registry maps to the receiver's owner;
+     - `room.membership`: the target id must equal the receiver's room scope; `room` must be a non-empty room id, and `account` an MXID the registry maps to the receiver's owner.
 9. Under the journal lock, re-run steps 5 to 8, then apply the revocation duties of §2.4 (`mu-grant-revoked`, `mu-revocation-snapshot-rollback`).
 10. Durable accounting before any effect:
     - nonce key = requester key + nonce + audience, held for every request (`mu-request-nonce-already-held`);
@@ -128,7 +136,7 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 
 ### 3.1 Refusal vocabulary (r5)
 
-Platform codes are returned unchanged from the pinned verifier. The vectors exercise these:
+Platform codes are returned unchanged from the pinned verifier. (r6) Among them, the vectors include these; any other platform code is possible and means what the spec says:
 
 | Code | Meaning in the vectors |
 | --- | --- |
@@ -141,6 +149,7 @@ Platform codes are returned unchanged from the pinned verifier. The vectors exer
 | `revoked` | a fresh snapshot revokes the grant or the agent key |
 | `key_binding_unavailable` | required evidence is missing or stale: no binding for the grant issuer, attestation not served, snapshot over 60 s |
 | `key_binding_invalid` | evidence does not match: an expired Keymaker attestation, a generation that moved |
+| `revocation_unavailable` | no revocation snapshot could be read (r6) |
 | `message_text_mismatch` | the delivered text does not hash to `body_sha256` |
 
 Receiver codes:
@@ -160,6 +169,8 @@ Receiver codes:
 | `mu-request-nonce-already-held` | replay |
 | `mu-grant-use-already-held` | a `once` grant already used |
 | `mu-required-state-unavailable` | the journal or required evidence is unavailable |
+| `mu-effect-refused` | no effect is registered for the action; refused before any reservation (r6) |
+| `mu-receiver-config-refused` | the receiver configuration is not admitted (r6) |
 | `mu-dispatch-outcome-unknown-use-held` | the effect outcome is unknown; the use stays held |
 
 ## 4. Transport: a2a #189
@@ -167,7 +178,7 @@ Receiver codes:
 - Send: `a2a post <room> --topic T --envelope @record.json @text`. The text bytes are exactly the ones hashed in `body_sha256`.
 - Read: `a2a read <room id> --event <id> --envelope-input --json`.
   - It returns one JSON object plus LF. (r5) The object has exactly nine members with no duplicates, all strings: `type` (`a2a.event-envelope-input/1`), `sender_mxid`, `receiver_mxid`, `requested_room_id`, `requested_event_id`, `returned_room_id`, `returned_event_id`, `envelope_base64` and `body_text_base64`.
-  - Both payloads are unpadded base64url.
+  - Both payloads are canonical unpadded base64url: padding, other alphabets and non-zero trailing bits refuse (r6). The envelope is 1 to 65 536 bytes and the text 1 to 32 768 bytes after decoding (the §2.2 rule then applies its 4096-byte limit). Anything else refuses with `mu-envelope-projection-refused`.
 - Event key: (room id, event id). The request hash is SHA-256 of the exact envelope bytes.
 
 ## 5. Vectors

@@ -78,6 +78,10 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-revoked-then-older` | revoking snapshot, then an older one without the entry | `revoked`, then `mu-grant-revoked` |
 | `M-N-revoked-then-equal` | revoking snapshot, then one with the same `issued_at` without the entry | `revoked`, then `mu-grant-revoked` |
 | `M-P-root-revocation-unmirrored` | an unrelated owner-root revocation the publisher does not mirror | `succeeded` |
+| `M-N-module-outside` | only the module argument: outside the receiver's modules | `mu-request-out-of-owner-scope` |
+| `M-P-room-membership` | none: `room.membership` in the receiver's room scope | `succeeded` |
+| `M-N-room-outside-scope` | only the target id: a room scope the receiver does not serve | `mu-request-out-of-owner-scope` |
+| `M-P-text-tab` | text containing TAB | `succeeded` |
 | `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
 
@@ -119,7 +123,7 @@ step. When it disagrees, the spec decides.
 
 Committed: `TestMUInteropRejectsDegenerate` shows that the set rejects degenerate implementations. A verifier that refuses everything fails every positive step; one that accepts everything fails every negative step that expects a verifier, text or grant-selection refusal.
 
-Not committed, run by hand against the real code: these known-violation plants each make `TestMUInteropVectors` fail at the intended case, and their logs are kept in the task scratch:
+Not committed, run by hand against the real code: these known-violation plants each make `TestMUInteropVectors` fail at the intended case:
 - edited event text in a positive case;
 - an unknown member in a case file;
 - the receiver's nonce check switched off;
