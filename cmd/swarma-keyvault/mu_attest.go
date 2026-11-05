@@ -106,8 +106,16 @@ func muAttestationFromSpec(raw, spki []byte) (*muAttestation, error) {
 		if err == nil {
 			a.reason, err = mugrant.PublisherAttestationReason(a.plan, nb, ex)
 		}
+	case "publisher-ed25519":
+		if s.MXID != "" || s.Generation != 0 {
+			return nil, errors.New("attestation specification refused: a publisher attestation has no mxid or generation")
+		}
+		a.plan, a.subject, err = mugrant.BuildEd25519PublisherAttestation(s.Issuer, spki, nb, ex)
+		if err == nil {
+			a.reason, err = mugrant.Ed25519PublisherAttestationReason(a.plan, nb, ex)
+		}
 	default:
-		return nil, errors.New("attestation specification refused: kind must be mac-agent or publisher")
+		return nil, errors.New("attestation specification refused: kind must be mac-agent, publisher or publisher-ed25519")
 	}
 	if err != nil {
 		return nil, err

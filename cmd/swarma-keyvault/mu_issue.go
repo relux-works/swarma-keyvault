@@ -11,7 +11,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
-const muIssueUsage = "swarma-keyvault grants mu-issue --kind grant|mac-agent|publisher --spec FILE --owner-spki-der FILE (--subject-spki-der FILE | --subject-attestation FILE --publisher-attestation FILE)"
+const muIssueUsage = "swarma-keyvault grants mu-issue --kind grant|mac-agent|publisher|publisher-ed25519 --spec FILE --owner-spki-der FILE (--subject-spki-der FILE | --subject-attestation FILE --publisher-attestation FILE)"
 
 // muOwnerAddress is the owner grant root: the same Secure Enclave key, with
 // Touch ID presence, that the existing owner issuance route signs with.
@@ -33,7 +33,7 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 	f := flag.NewFlagSet("mu-issue", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var kind, spec, owner, subject, agentAtt, publisherAtt onceString
-	f.Var(&kind, "kind", "grant, mac-agent or publisher")
+	f.Var(&kind, "kind", "grant, mac-agent, publisher or publisher-ed25519")
 	f.Var(&spec, "spec", "JSON specification file")
 	f.Var(&owner, "owner-spki-der", "independently expected owner root public key, SPKI DER")
 	f.Var(&subject, "subject-spki-der", "attested key, SPKI DER (attestations only)")
@@ -46,7 +46,7 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 		}
 		return usage()
 	}
-	attestation := kind.value == "mac-agent" || kind.value == "publisher"
+	attestation := kind.value == "mac-agent" || kind.value == "publisher" || kind.value == "publisher-ed25519"
 	if f.NArg() != 0 || !kind.set || !spec.set || !owner.set || spec.value == "" || spec.value == "-" || owner.value == "" || owner.value == "-" ||
 		(kind.value != "grant" && !attestation) || subject.set != attestation || (attestation && (subject.value == "" || subject.value == "-")) ||
 		agentAtt.set == attestation || publisherAtt.set == attestation ||

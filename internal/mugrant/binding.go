@@ -72,13 +72,25 @@ func AttestationRendering(p *Plan) (string, error) {
 	if p == nil || json.Unmarshal(p.Body(), &b) != nil || b.Type != "attestation/1" {
 		return "", ErrAttestation
 	}
-	compressed, err := record.DecodeBase64(b.Subject.PublicBytes, 33)
-	if err != nil {
-		return "", ErrAttestation
-	}
-	spki, err := spkiFromCompressed(compressed)
-	if err != nil {
-		return "", err
+	var spki []byte
+	fingerprintLabel := "subject key fingerprint (as mac-keyvault prints it): "
+	if b.Binding.Profile == "grant-revocation-2" {
+		raw, err := record.DecodeBase64(b.Subject.PublicBytes, ed25519.PublicKeySize)
+		if err != nil {
+			return "", ErrAttestation
+		}
+		if spki, err = x509.MarshalPKIXPublicKey(ed25519.PublicKey(raw)); err != nil {
+			return "", ErrAttestation
+		}
+		fingerprintLabel = "subject key fingerprint (SHA-256 of the Ed25519 SPKI DER): "
+	} else {
+		compressed, err := record.DecodeBase64(b.Subject.PublicBytes, 33)
+		if err != nil {
+			return "", ErrAttestation
+		}
+		if spki, err = spkiFromCompressed(compressed); err != nil {
+			return "", err
+		}
 	}
 	nb, err1 := time.Parse("2006-01-02T15:04:05Z", b.IAT)
 	ex, err2 := time.Parse("2006-01-02T15:04:05Z", b.EXP)
@@ -99,6 +111,11 @@ func AttestationRendering(p *Plan) (string, error) {
 			"attestation/1 grant revocation publisher key (profile grant-revocation-1), to be signed by the owner root under Touch ID",
 			"may sign: revocation.sign (revocation snapshots for grants of this root only)",
 		}
+	case "grant-revocation-2":
+		lines = []string{
+			"attestation/1 Ed25519 grant revocation publisher key (profile grant-revocation-2), held by a signing service, to be signed by the owner root under Touch ID",
+			"may sign: revocation.sign (revocation snapshots for grants of this root only)",
+		}
 	default:
 		return "", ErrAttestation
 	}
@@ -106,7 +123,7 @@ func AttestationRendering(p *Plan) (string, error) {
 	lines = append(lines,
 		"issuer: "+b.Issuer,
 		"subject key: "+b.Subject.KeyID,
-		"subject key fingerprint (as mac-keyvault prints it): "+Fingerprint(spki),
+		fingerprintLabel+Fingerprint(spki),
 		"window UTC: "+b.IAT+" – "+b.EXP,
 		"window MSK: "+mskInterval(nb.UTC(), ex.UTC()),
 		"content id: "+p.ContentID(),
