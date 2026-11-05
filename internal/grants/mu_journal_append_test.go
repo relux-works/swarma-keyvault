@@ -1,6 +1,9 @@
+//go:build darwin
+
 package grants
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,9 +12,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Claim: with the BSD append-only flag (user variant uappnd, same open
+// Claim (darwin): with the BSD append-only flag (user variant uappnd, same open
 // semantics as the root-set sappnd) on mu.journal, the receiver still replays
-// and appends: two in-scope requests succeed and the journal only grows. The
+// and appends: two in-scope requests succeed and the journal grows with its
+// prior bytes unchanged. The
 // same flag refuses a truncating open and a rename of the journal, so the
 // fixture really is append-only. Limit: uappnd stands in for sappnd; a root
 // process can still clear either flag.
@@ -26,7 +30,8 @@ func TestMUJournalAppendOnlyFlag(t *testing.T) {
 		t.Skip("cannot set uappnd here:", err)
 	}
 	t.Cleanup(func() { _ = unix.Chflags(path, 0) })
-	before := len(g.journal(t))
+	prefix := g.journal(t)
+	before := len(prefix)
 	if f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0); err == nil {
 		f.Close()
 		t.Fatal("append-only fixture admitted a truncating open")
@@ -38,8 +43,8 @@ func TestMUJournalAppendOnlyFlag(t *testing.T) {
 	if out, err := g.handle("$2"); err != nil || out.State != "succeeded" {
 		t.Fatal("receiver failed on an append-only journal", out, err)
 	}
-	if after := len(g.journal(t)); after <= before {
-		t.Fatal("journal did not grow", before, after)
+	if now := g.journal(t); len(now) <= before || !bytes.Equal(now[:before], prefix) {
+		t.Fatal("journal did not grow by appending only", before, len(now))
 	}
 	g.v.decisions["$3"] = muDecision("grant-U", "a2", "until_expiry")
 	if _, err := g.handle("$3"); !errors.Is(err, ErrMUNonceHeld) {
