@@ -17,7 +17,7 @@ migration or installed binary replacement.
 
 ## Tools and local build
 
-Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses Go 1.26.x on `ubuntu-latest` for internal `go vet` and all 17 Linux-buildable Go packages with `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1`; it requires at least 72 committed interop vectors and lists the exact packages and Darwin-only exclusions; native custody still requires the confined macOS gate.
+Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned by `go.mod` on `ubuntu-latest`, lists every Linux-buildable Go package, and runs `go vet ./...` and `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v ./...`; it requires at least 72 committed interop vectors and cancels superseded PR runs only; native custody still requires the confined macOS gate.
 
 The initial custody target is macOS with Go 1.26.0 or later (go.mod pins
 toolchain go1.26.10; older installs download it or need it preinstalled), cgo and
