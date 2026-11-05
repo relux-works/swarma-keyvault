@@ -261,9 +261,17 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 		return
 	}
 	defer s.close()
+	now := r.now()
 	for _, sn := range snaps {
 		if sn.Signer == MUOwnerRootSigner || s.absorbSigned(sn.Signer, sn.Entries) != nil {
 			return
+		}
+		// Entries always join the union, but only a snapshot that is not
+		// dated in the future by the trusted clock may raise the mark;
+		// otherwise one future-dated snapshot would lock out every later
+		// correct one (the verifier applies the same test).
+		if sn.IssuedAt.After(now) {
+			continue
 		}
 		if s.markSnapshots(map[string]time.Time{sn.Signer: sn.IssuedAt}) != nil {
 			return

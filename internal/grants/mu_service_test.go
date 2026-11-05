@@ -139,3 +139,17 @@ func TestMUServiceConfigRefusals(t *testing.T) {
 		}
 	}
 }
+
+// Claim (wiring): the configured service's receiver verifies through a
+// platform adapter that hands over its snapshots before verification, so
+// pre-absorption is active in production rather than a silent no-op.
+func TestMUServiceSnapshotSourceWired(t *testing.T) {
+	_, cfg, _ := muServiceRig(t)
+	svc, err := muServiceFrom(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := svc.receiver.verifier.(MUSnapshotSource); !ok {
+		t.Fatal("service receiver verifier does not supply verified snapshots")
+	}
+}

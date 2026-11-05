@@ -184,6 +184,11 @@ func LinuxFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	unrelatedKey := []mugrant.SnapshotEntry{{Kind: "key", ID: stranger.ID, From: stamp(T0.Add(-time.Hour))}}
+	agentUnrelatedOld, err := snap(agentRev, T0.Add(-30*time.Second), unrelatedKey)
+	if err != nil {
+		return nil, err
+	}
 	// Cross-algorithm: the registry maps the Linux MXID to the Mac agent's
 	// P-256 key and serves its mac-se-1 attestation.
 	macAtt, _, err := w.attestations(w.root)
@@ -274,7 +279,7 @@ func LinuxFamily() ([]Case, error) {
 			return c
 		}(),
 		func() Case {
-			c := one("L-N-cross-algorithm", "A Linux registry identity that names a P-256 Mac agent key and its mac-se-1 attestation refuses: Keymaker evidence does not fit that profile.", "L-P-accept",
+			c := one("L-N-cross-algorithm", "A Linux registry identity that names a P-256 Mac agent key refuses. Its referenced attestation is a mac-se-1 attestation issued by the grant root, not a Keymaker attestation by the service root, and the Keymaker active-generation evidence does not fit that profile.", "L-P-accept",
 				registry(map[string][]byte{macAttID: macAtt}, gen), linuxMXID, ev("$l-cross", macReq, text), now, pubFresh, agentFresh, "key_binding_invalid")
 			l := *c.Pins.Linux
 			l.AgentKey = w.agent.ID
@@ -282,6 +287,14 @@ func LinuxFamily() ([]Case, error) {
 			c.Records = Records{Grants: []string{B64(macGrant)}, PublisherAttestation: records.PublisherAttestation}
 			return c
 		}(),
+		{Format: Format, ID: "L-N-agent-rollback-drops-unrelated", Claim: "A newer agent revocation snapshot that drops an entry its signer published before, here an unrelated key, refuses as rollback.", PositiveControl: "L-P-accept",
+			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-first", rAccept, text), ev("$l-second", rSecondL, text)},
+			Steps: []Step{{Event: "$l-first", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentUnrelatedOld), Expected: "succeeded"},
+				{Event: "$l-second", Now: later, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "mu-revocation-snapshot-rollback"}}},
+		{Format: Format, ID: "L-N-agent-rollback-older-mark", Claim: "An agent revocation snapshot older than one already accepted refuses as rollback, even though it revokes nothing and is under 60 s old.", PositiveControl: "L-P-accept",
+			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-first", rAccept, text), ev("$l-second", rSecondL, text)},
+			Steps: []Step{{Event: "$l-first", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
+				{Event: "$l-second", Now: later, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentOlder), Expected: "mu-revocation-snapshot-rollback"}}},
 		{Format: Format, ID: "L-N-replay", Claim: "The same Linux request event handled twice executes once; the second refuses on the held nonce.", PositiveControl: "L-P-accept",
 			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-accept", rAccept, text)},
 			Steps: []Step{{Event: "$l-accept", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
