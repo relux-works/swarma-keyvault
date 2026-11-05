@@ -53,6 +53,20 @@ jobs:
       # environment also disables attended real-Keychain/Enclave tests.
       # cmd/mac-keyvault-enclave is Swift/CryptoKit, not a Go package.
       # Native custody qualification remains a separate confined macOS gate.
+      # THROWAWAY NEGATIVE CONTROL ONLY. Never merge this branch.
+      # Plant exactly one failing test in the ephemeral runner workspace;
+      # no production/test source file or interop vector is committed here.
+      - name: Plant one deliberate failing test (negative control only)
+        run: |
+          cat > internal/muinterop/hosted_ci_negative_control_test.go <<'GO'
+          package muinterop
+
+          import "testing"
+
+          func TestHostedCINegativeControl(t *testing.T) {
+              t.Fatal("deliberate hosted CI negative control; never merge")
+          }
+          GO
       - name: Race-test every Linux-buildable Go package
         run: |
           # Permission-refusal fixtures create deliberately world-readable files.
