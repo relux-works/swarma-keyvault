@@ -54,3 +54,29 @@ func TestMULegacyRevocationReplay(t *testing.T) {
 		t.Fatal("publisher entries or mark not recorded", s.unions, s.highWater)
 	}
 }
+
+// Claim: a decision whose revocation publisher key is also its agent
+// revocation key refuses before any state change: no root, union or mark
+// entry is written. Positive control: the same decision with distinct keys
+// is judged and records the publisher's mark.
+func TestMURevocationsRefuseSharedSignerKey(t *testing.T) {
+	c, b := muFixture(t)
+	s := muOpen(t, c, b)
+	defer s.close()
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	r := &MUReceiver{}
+	shared := MUDecision{GrantID: "grant-id", Author: "p256:author", PublisherKey: "ed25519:shared", AgentRevocationKey: "ed25519:shared",
+		SnapshotMarks: map[string]time.Time{"ed25519:shared": at}}
+	if err := r.revocations(s, shared); !errors.Is(err, ErrMUState) {
+		t.Fatal("shared publisher and agent revocation key admitted", err)
+	}
+	if len(s.unions) != 0 || len(s.highWater) != 0 || len(s.revoked) != 0 {
+		t.Fatal("refusal changed state", s.unions, s.highWater, s.revoked)
+	}
+	distinct := shared
+	distinct.AgentRevocationKey = "ed25519:agent-revocation"
+	distinct.SnapshotMarks = map[string]time.Time{"ed25519:shared": at}
+	if err := r.revocations(s, distinct); err != nil || !s.highWater["ed25519:shared"].Equal(at) {
+		t.Fatal("distinct keys refused or mark not recorded", err, s.highWater)
+	}
+}
