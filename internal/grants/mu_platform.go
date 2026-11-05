@@ -35,6 +35,26 @@ type MUPlatformConfig struct {
 	PublisherKey  string
 	Snapshot      func() ([]byte, error) // latest publisher snapshot bytes
 	TimeAuthority time.Duration          // how long the local clock is asserted trusted
+	// Linux agents (contract D1/D4): Ed25519 keys attested by the Keymaker
+	// signing service; evidence comes from the registry, by id.
+	Linux    map[string]MULinuxAgent // by full MXID (registry identity)
+	Registry MURegistryEvidence
+}
+
+// MULinuxAgent is the registry identity of a Linux (Ed25519) agent.
+type MULinuxAgent struct {
+	Key                     string // ed25519 key id
+	UID, RegistrationNumber int64
+}
+
+// MURegistryEvidence supplies the protected Keymaker evidence for Linux
+// authors. Every source is consulted per request; an error refuses.
+type MURegistryEvidence struct {
+	ServiceRoot        string                                            // Keymaker signing-service root (purpose 5)
+	AgentRevocationKey string                                            // registry revocation key for agent keys
+	Attestation        func(contentID string) ([]byte, error)            // exact attestation bytes by id
+	ActiveGeneration   func(key string) (mugrant.KeymakerBinding, error) // current active generation of the key
+	AgentSnapshot      func() ([]byte, error)                            // latest agent revocation snapshot
 }
 
 // MUEnvelopeEvent is the a2a envelope projection of one authenticated event.
@@ -68,8 +88,9 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	if err != nil || pe.Sender != ev.SenderMXID || pe.EventID != ev.EventID || pe.Room == "" {
 		return MUDecision{}, ErrMUState
 	}
-	agent, ok := p.config.Agents[pe.Sender]
-	if !ok {
+	agent, mac := p.config.Agents[pe.Sender]
+	linux, isLinux := p.config.Linux[pe.Sender]
+	if !mac && !isLinux {
 		return MUDecision{}, ErrMUSender
 	}
 	// The same text rule the requester enforces before signing, so both
@@ -81,25 +102,69 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	if err != nil {
 		return MUDecision{}, &ErrMUPlatform{"revocation_unavailable"}
 	}
-	attID, err := muRecordID(agent.Attestation, "attestation/1")
-	if err != nil {
-		return MUDecision{}, ErrMUState
+	revocations := map[string]any{p.config.PublisherKey: map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": snap}}
+	var linuxRoots map[string]any
+	var (
+		authorKey, attID string
+		attestation      []byte
+		active           map[string]any
+	)
+	if mac {
+		authorKey, attestation = agent.Key, agent.Attestation
+		if attID, err = muRecordID(attestation, "attestation/1"); err != nil {
+			return MUDecision{}, ErrMUState
+		}
+		// The MXID is filled from the authenticated sender, never the request.
+		active = map[string]any{"profile": "mac-se-1", "mxid": pe.Sender, "generation": agent.Generation, "active": true}
+	} else {
+		reg := p.config.Registry
+		if reg.Attestation == nil || reg.ActiveGeneration == nil || reg.AgentSnapshot == nil || reg.ServiceRoot == "" || reg.AgentRevocationKey == "" {
+			return MUDecision{}, ErrMUState
+		}
+		body, err := muMessageBody(pe.Envelope)
+		if err != nil {
+			return MUDecision{}, err
+		}
+		// The attestation is resolved by the signed content id, never as
+		// "the current attestation for this key".
+		attID, _ = body["author_attestation"].(string)
+		authorKey = linux.Key
+		if attestation, err = reg.Attestation(attID); err != nil {
+			return MUDecision{}, &ErrMUPlatform{"key_binding_unavailable"}
+		}
+		gen, err := reg.ActiveGeneration(linux.Key)
+		if err != nil || gen.UID != linux.UID || gen.RegistrationNumber != linux.RegistrationNumber {
+			return MUDecision{}, &ErrMUPlatform{"key_binding_unavailable"}
+		}
+		active = gen.Map()
+		active["active"] = true
+		agentSnap, err := reg.AgentSnapshot()
+		if err != nil {
+			return MUDecision{}, &ErrMUPlatform{"revocation_unavailable"}
+		}
+		revocations[reg.AgentRevocationKey] = map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": agentSnap}
+		linuxRoots = map[string]any{
+			"service_root":          map[string]any{"key": reg.ServiceRoot, "purpose": int64(5)},
+			"agent_revocation_root": map[string]any{"attestation_root": reg.ServiceRoot, "key": reg.AgentRevocationKey, "purpose": "registry-revocation"},
+		}
 	}
 	nowText := now.UTC().Format("2006-01-02T15:04:05Z")
 	facts := map[string]any{
-		"audience": p.config.Audience, "required_roles": []any{"author"}, "known_keys": []any{agent.Key},
-		"root": p.config.GrantRoot, "attestations": map[string]any{attID: agent.Attestation},
-		"agent_attestation_ids": map[string]any{agent.Key: attID},
-		// The MXID is filled from the authenticated sender, never the request.
-		"active_generations": map[string]any{agent.Key: map[string]any{"profile": "mac-se-1", "mxid": pe.Sender, "generation": agent.Generation, "active": true}},
-		"revocations":        map[string]any{p.config.PublisherKey: map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": snap}},
-		"time":               map[string]any{"trusted": true, "fresh": true, "authority_until": now.UTC().Add(p.config.TimeAuthority).Format("2006-01-02T15:04:05Z")},
-		"now":                nowText, "watermark_available": true, "watermark": nowText,
+		"audience": p.config.Audience, "required_roles": []any{"author"}, "known_keys": []any{authorKey},
+		"root": p.config.GrantRoot, "attestations": map[string]any{attID: attestation},
+		"agent_attestation_ids": map[string]any{authorKey: attID},
+		"active_generations":    map[string]any{authorKey: active},
+		"revocations":           revocations,
+		"time":                  map[string]any{"trusted": true, "fresh": true, "authority_until": now.UTC().Add(p.config.TimeAuthority).Format("2006-01-02T15:04:05Z")},
+		"now":                   nowText, "watermark_available": true, "watermark": nowText,
 		"id_journal_available": true, "seen": map[string]any{}, "replay_available": true, "used_actions": []any{},
 		"assurance": map[string]any{"level": "A2", "presence": false},
 		// No operator devices take part: an explicit empty collection, never absence.
 		"operator_attestations": map[string]any{},
 		"delivery":              map[string]any{"room": pe.Room, "to": pe.Receiver, "text": pe.Text},
+	}
+	for k, v := range linuxRoots {
+		facts[k] = v
 	}
 	c, err := muContext(facts, p.config.Publisher)
 	if err != nil {
@@ -118,7 +183,7 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	kind, _ := target["kind"].(string)
 	id, _ := target["id"].(string)
 	author, _ := body["author"].(string)
-	if author != agent.Key {
+	if author != authorKey {
 		return MUDecision{}, ErrMUSender
 	}
 	grant, err := muSelectGrant(p.config.Grants, author, action, kind, id)
@@ -177,6 +242,15 @@ func muContext(f map[string]any, publisher []byte) (verifier.Context, error) {
 			return c, err
 		}
 		*slot = e
+	}
+	for name, slot := range map[string]*verifier.Evidence{"service_root": &c.ServiceRoot, "agent_revocation_root": &c.AgentRevocationRoot} {
+		if v, ok := f[name]; ok {
+			e, err := verifier.Present(v)
+			if err != nil {
+				return c, err
+			}
+			*slot = e
+		}
 	}
 	if publisher != nil {
 		e, err := verifier.Present(publisher)

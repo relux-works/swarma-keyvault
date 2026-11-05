@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/relux-works/swarma-envelope/record"
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
@@ -80,6 +81,7 @@ type Pins struct {
 	RoomScope       string            `json:"room_scope"`
 	Modules         []string          `json:"modules"`
 	RegistryOwners  map[string]string `json:"registry_owners"`
+	Linux           *LinuxPins        `json:"linux,omitempty"`
 }
 
 // Records are the exact signed records, unpadded base64url.
@@ -98,22 +100,24 @@ type Event struct {
 
 // Step handles one event at one trusted time with one publisher snapshot.
 type Step struct {
-	Event    string `json:"event"`
-	Now      string `json:"now"`
-	Snapshot string `json:"snapshot"`
-	Expected string `json:"expected"`
+	Event         string `json:"event"`
+	Now           string `json:"now"`
+	Snapshot      string `json:"snapshot"`
+	AgentSnapshot string `json:"agent_snapshot,omitempty"`
+	Expected      string `json:"expected"`
 }
 
 // Case is one vector file.
 type Case struct {
-	Format          string  `json:"format"`
-	ID              string  `json:"id"`
-	Claim           string  `json:"claim"`
-	PositiveControl string  `json:"positive_control,omitempty"`
-	Pins            Pins    `json:"pins"`
-	Records         Records `json:"records"`
-	Events          []Event `json:"events"`
-	Steps           []Step  `json:"steps"`
+	Format          string    `json:"format"`
+	ID              string    `json:"id"`
+	Claim           string    `json:"claim"`
+	PositiveControl string    `json:"positive_control,omitempty"`
+	Pins            Pins      `json:"pins"`
+	Records         Records   `json:"records"`
+	Registry        *Registry `json:"registry,omitempty"`
+	Events          []Event   `json:"events"`
+	Steps           []Step    `json:"steps"`
 }
 
 // B64 is the vector byte encoding.
@@ -222,3 +226,7 @@ var errBuild = errors.New("muinterop: case build failed")
 
 // KeyNames lists the published test keys in the vector set.
 var KeyNames = []string{"grant-root", "foreign-grant-root", "mac-agent", "stranger", "publisher"}
+
+func recordParse(b []byte) (any, error) { return record.Parse(b, mugrant.MaxEnvelopeBytes, 16) }
+
+func recordCanonical(v any) ([]byte, error) { return record.Canonical(v) }
