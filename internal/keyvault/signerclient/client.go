@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // Options configure Start.
@@ -92,6 +93,9 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 		args = append(args, "--version", strconv.Itoa(opts.Version))
 	}
 	cmd := exec.CommandContext(ctx, binary, args...)
+	// Bound pipe cleanup after exit or cancellation when a descendant keeps
+	// stderr open. The session lifetime is still controlled by ctx.
+	cmd.WaitDelay = time.Second
 	cmd.Stderr = opts.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -108,7 +112,7 @@ func Start(ctx context.Context, opts Options) (*Client, error) {
 	resp, err := c.readResponse(ctx, true)
 	if err != nil {
 		c.abort()
-		return nil, fmt.Errorf("%w: no hello line: %v", ErrProtocol, err)
+		return nil, fmt.Errorf("%w: no hello line: %w", ErrProtocol, err)
 	}
 	if resp.Contract != Contract {
 		c.abort()

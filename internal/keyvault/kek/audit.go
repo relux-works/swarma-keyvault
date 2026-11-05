@@ -2,6 +2,7 @@ package kek
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/boundedwait"
 )
 
 // AuditEntry is one answered or refused request. It never holds a KEK or a
@@ -49,8 +52,14 @@ func DefaultAuditPath() (string, error) {
 	return filepath.Join(home, "Library", "Application Support", "mac-keyvault-kek", "audit.jsonl"), nil
 }
 
-// Append writes entry at now, chained to the last line, and syncs it.
+// Append writes and syncs entry, waiting at most boundedwait.LockWait for the lock.
 func (a *Audit) Append(entry AuditEntry, now time.Time) error {
+	return a.AppendContext(context.Background(), entry, now)
+}
+
+// AppendContext chains and syncs entry only after acquiring the exclusive lock.
+// Cancellation or lock failure leaves the log unchanged and closes the descriptor.
+func (a *Audit) AppendContext(ctx context.Context, entry AuditEntry, now time.Time) error {
 	if a == nil || a.Path == "" {
 		return errors.New("no audit log configured")
 	}
@@ -66,7 +75,7 @@ func (a *Audit) Append(entry AuditEntry, now time.Time) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := boundedwait.LockFile(ctx, f); err != nil {
 		return err
 	}
 	info, err := f.Stat()

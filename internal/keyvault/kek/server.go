@@ -7,6 +7,7 @@ package kek
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,10 +101,15 @@ func (s *Server) Serve(l *net.UnixListener) error {
 		return fmt.Errorf("accept: %w", err)
 	}
 	defer conn.Close()
+	ctx := context.Background()
 	if s.Timeout > 0 {
-		conn.SetDeadline(time.Now().Add(s.Timeout))
+		deadline := time.Now().Add(s.Timeout)
+		conn.SetDeadline(deadline)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
 	}
-	resp, outcome := s.handle(conn)
+	resp, outcome := s.handle(ctx, conn)
 	line, err := encodeResponse(resp)
 	if resp.Result != nil {
 		clear(resp.Result.KEK)
@@ -161,7 +167,7 @@ func refuse(code, format string, args ...any) *refusal {
 	return &refusal{code: code, message: fmt.Sprintf(format, args...)}
 }
 
-func (s *Server) handle(conn *net.UnixConn) (kekclient.Response, error) {
+func (s *Server) handle(ctx context.Context, conn *net.UnixConn) (kekclient.Response, error) {
 	entry := AuditEntry{Op: s.Op, Address: s.Address}
 	result, err := s.answer(conn, &entry)
 	var r *refusal
@@ -174,7 +180,7 @@ func (s *Server) handle(conn *net.UnixConn) (kekclient.Response, error) {
 		entry.Verdict = "answered"
 	}
 	// The answer is given only once the log holds it.
-	if aerr := s.Audit.Append(entry, s.now()); aerr != nil {
+	if aerr := s.Audit.AppendContext(ctx, entry, s.now()); aerr != nil {
 		if result != nil {
 			clear(result.KEK)
 		}

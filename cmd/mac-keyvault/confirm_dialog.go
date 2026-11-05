@@ -48,11 +48,19 @@ var (
 	digestPattern      = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	confirmNow         = time.Now
 	runOSAScript       = func(ctx context.Context, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, "/usr/bin/osascript", args...)
-		cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+		cmd := dialogCommand(ctx, args...)
 		return cmd.Output()
 	}
 )
+
+// dialogCommand bounds Output's pipe cleanup after the context deadline or
+// process exit, even when an osascript descendant inherits stdout/stderr.
+func dialogCommand(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "/usr/bin/osascript", args...)
+	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+	cmd.WaitDelay = time.Second
+	return cmd
+}
 
 func runConfirmDialog(args []string, out output) int {
 	fs := flag.NewFlagSet("confirm-dialog", flag.ContinueOnError)
