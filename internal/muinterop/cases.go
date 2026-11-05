@@ -3,6 +3,7 @@ package muinterop
 import (
 	"crypto/ecdsa"
 	"crypto/rand"
+	"strings"
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
@@ -132,6 +133,24 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	limitText := strings.Repeat("я", (mugrant.MaxRequestText-4)/2) + "\nend"
+	if len(limitText) != mugrant.MaxRequestText {
+		return nil, errBuild
+	}
+	rLimit, err := req(w.agent, "work.assign", "product", product, args, limitText, "limit")
+	if err != nil {
+		return nil, err
+	}
+	overText := limitText + "!"
+	rOver, err := w.rehashed(rLimit, overText)
+	if err != nil {
+		return nil, err
+	}
+	crText := "Assign: interop acceptance\r\nsecond line"
+	rCR, err := w.rehashed(rAccept, crText)
+	if err != nil {
+		return nil, err
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -157,6 +176,12 @@ func MacFamily() ([]Case, error) {
 			records(gForeign), ev("$foreign", rAccept, text), fresh, "key_binding_unavailable"),
 		one("M-N-stale-snapshot", "A publisher snapshot 61 s old refuses (at the author attestation evidence check, which reads the same snapshot first): there is no grace period.", "M-P-accept",
 			records(gCurrent), ev("$stale", rAccept, text), stale, "key_binding_unavailable"),
+		one("M-P-text-at-limit", "Event text of exactly 4096 bytes of valid UTF-8 is admitted.", "",
+			records(gCurrent), ev("$limit", rLimit, limitText), fresh, "succeeded"),
+		one("M-N-text-over-limit", "Event text of 4097 bytes refuses on receipt even when the signed body_sha256 binds it.", "M-P-text-at-limit",
+			records(gCurrent), ev("$over", rOver, overText), fresh, "mu-request-text-refused"),
+		one("M-N-text-cr", "Event text containing CR refuses on receipt even when the signed body_sha256 binds it.", "M-P-accept",
+			records(gCurrent), ev("$cr", rCR, crText), fresh, "mu-request-text-refused"),
 		one("M-N-body-hash", "Delivered text that differs from the signed body_sha256 refuses.", "M-P-accept",
 			records(gCurrent), ev("$text", rAccept, text+" (edited)"), fresh, "message_text_mismatch"),
 		{Format: Format, ID: "M-N-replay", Claim: "The same request event handled twice executes once; the second refuses on the held nonce.", PositiveControl: "M-P-accept",
@@ -173,6 +198,26 @@ func MacFamily() ([]Case, error) {
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(withEntry), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-revocation-snapshot-rollback"}}},
 	}
 	return cases, nil
+}
+
+// rehashed re-signs the request's body by the agent with body_sha256 bound
+// to text: a well-signed request carrying text the requester rule forbids.
+func (w *world) rehashed(valid []byte, text string) ([]byte, error) {
+	v, err := record.Parse(valid, mugrant.MaxEnvelopeBytes, 16)
+	if err != nil {
+		return nil, err
+	}
+	body := v.(map[string]any)["body"].(map[string]any)
+	body["body_sha256"] = hexDigest([]byte(text))
+	raw, err := record.Canonical(body)
+	if err != nil {
+		return nil, err
+	}
+	p, err := mugrant.Prepare("message/1", w.agent.ID, raw)
+	if err != nil {
+		return nil, err
+	}
+	return w.agent.Sign(p)
 }
 
 func contentID(wire []byte) (string, error) {

@@ -20,6 +20,7 @@ var (
 	ErrMUExecution = errors.New("mu-effect-refused")
 	ErrMURevoked   = errors.New("mu-grant-revoked")
 	ErrMURollback  = errors.New("mu-revocation-snapshot-rollback")
+	ErrMUText      = errors.New("mu-request-text-refused")
 )
 
 // MUEvent is one authenticated Matrix event from the a2a envelope projection.

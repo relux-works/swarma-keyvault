@@ -7,6 +7,7 @@ import (
 
 	"github.com/relux-works/swarma-envelope/record"
 	"github.com/relux-works/swarma-envelope/verifier"
+	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
 // ErrMUPlatform carries a platform verifier refusal code.
@@ -70,6 +71,11 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	agent, ok := p.config.Agents[pe.Sender]
 	if !ok {
 		return MUDecision{}, ErrMUSender
+	}
+	// The same text rule the requester enforces before signing, so both
+	// sides admit exactly the same requests (interop contract §2.2).
+	if !mugrant.RequestTextAdmissible(pe.Text) {
+		return MUDecision{}, ErrMUText
 	}
 	snap, err := p.config.Snapshot()
 	if err != nil {

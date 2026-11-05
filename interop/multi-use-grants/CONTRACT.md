@@ -1,4 +1,4 @@
-# Multi-use owner grants: cross-platform interop contract (r1, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r2, draft for agreement)
 
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
@@ -52,10 +52,12 @@ Content id = `sha256:` + hex(SHA-256(tag LF CCJ-1(body))). The signing preimage 
 
 - Body members, exactly: `action, arguments, aud, author, author_attestation, body_sha256, exp, iat, nonce, room, target, to, type`.
 - `body_sha256` is the hex SHA-256 of the exact event text bytes.
-- Text rule (equal to the a2a #189 send rule):
-  - UTF-8 up to 32 KiB, not blank;
+- Text rule, ONE rule for both sides:
+  - at most **4096 bytes** of valid UTF-8, not blank;
   - LF and TAB are allowed;
   - CR, other C0, DEL and C1 controls, U+FFFD and bidi controls are refused.
+- The requester refuses to sign text outside the rule. The receiver refuses it on receipt with `mu-request-text-refused`, before any other check, even when `body_sha256` binds it.
+- The a2a carriage accepts more (about 45 KB of envelope). The transport is not the limit.
 - Times: `exp - iat <= 120 s`, in whole seconds.
 - Identifiers:
   - `room` is a room id (`!…`), never an alias;
@@ -127,7 +129,9 @@ The refusal vocabulary is the platform codes (spec) plus the receiver codes list
   - foreign domain (a grant from another root);
   - stale publisher snapshot (61 s);
   - mismatched body hash;
-  - a publisher snapshot that drops an entry (rollback).
+  - a publisher snapshot that drops an entry (rollback);
+  - text at the limit (4096 bytes admitted; 4097 bytes and CR refused);
+  - Linux to Mac: a Linux author whose Keymaker attestation has expired while the grant is still valid.
 - The check runs on the Mac:
   - every case through the pinned platform verifier;
   - receiver-level cases through the KV receiver.
@@ -136,10 +140,15 @@ The refusal vocabulary is the platform codes (spec) plus the receiver codes list
 ## 6. Decisions open for agreement (both sides and the platform owner)
 
 - **D1. Evidence delivery to the Mac receiver for Linux authors.** The Mac receiver needs `service_root`, the Keymaker attestation bytes by content id, the active-generation evidence and the agent revocation snapshots (`agent_revocation_root`).
-  - Proposal: the registry serves them by id (spec §6), and the Mac receiver pins `service_root` and `agent_revocation_root`.
-  - Alternative: L carries the attestation bytes beside the request.
-- **D2. Publisher snapshots to the Linux receiver.**
-  - Proposal: the Mac publisher also posts each snapshot to a fixed a2a topic, and the L receiver reads the newest one through the same projection.
-  - Alternative: the registry.
-- **D3. Grants for Linux agents** are issued at an owner sitting on the Mac with the Linux agent's Ed25519 key id as subject. The issuer then verifies the grantee through its Keymaker attestation, not `mac-se-1`. The KV issuer currently accepts only `mac-se-1` grantees, so this needs a KV change once D1 fixes the evidence source.
+  - Position: the registry serves them by id (spec §6), and the Mac receiver pins `service_root` and `agent_revocation_root`.
+  - Awaiting L's agreement.
+- **D2. Publisher snapshots to the Linux receiver.** Decided:
+  - the Mac publisher posts each snapshot as an envelope into a dedicated a2a room whose only members are the publisher and the receivers, every **30 s**;
+  - the L receiver uses the newest snapshot that is at most 60 s old by its trusted clock, and otherwise refuses;
+  - open: the room name and its provisioning.
+- **D3. Grants for Linux agents** are issued at an owner sitting on the Mac, with the Linux agent's Ed25519 key id as `subject`.
+  - A Keymaker attestation lives at most 86 400 s, so the whole-interval cover rule of §2.1 applies only to `mac-se-1` grantees.
+  - For an Ed25519 grantee, the issuer verifies at issuance a current Keymaker attestation of that key and its registry identity (`uid`, `registration_number`). It shows the owner the MXID of that registry identity, and refuses on any mismatch.
+  - The receiver then requires a current Keymaker attestation and active-generation evidence for the key on every request (§3, step 2). A request whose attestation has expired refuses, even while the grant is valid.
+  - The KV issuer accepts only `mac-se-1` grantees today, so this is a KV change, gated on D1.
 - **D4.** The KV receiver currently admits only `mac-se-1` authors. Accepting Linux authors is a KV change, and it is gated on D1.

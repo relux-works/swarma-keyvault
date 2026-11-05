@@ -56,6 +56,9 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-revoked` | fresh snapshot revokes the grant | `revoked` |
 | `M-N-foreign-domain` | grant from another root | `key_binding_unavailable` |
 | `M-N-stale-snapshot` | snapshot 61 s old | `key_binding_unavailable` (the author attestation check reads the same snapshot first) |
+| `M-P-text-at-limit` | text of exactly 4096 bytes | `succeeded` |
+| `M-N-text-over-limit` | text of 4097 bytes, bound by the signature | `mu-request-text-refused` |
+| `M-N-text-cr` | text with CR, bound by the signature | `mu-request-text-refused` |
 | `M-N-body-hash` | delivered text edited | `message_text_mismatch` |
 | `M-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 | `M-N-use-refill` | `once` grant, second request | `succeeded`, then `mu-grant-use-already-held` |
@@ -79,7 +82,8 @@ step. When it disagrees, the spec decides.
 The check has known-violation controls. Each of the following makes it fail:
 - edited event text in a positive case;
 - an unknown member in a case file;
-- the receiver's nonce check switched off.
+- the receiver's nonce check switched off;
+- the receiver's text rule switched off.
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.

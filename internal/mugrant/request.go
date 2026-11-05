@@ -104,6 +104,12 @@ func (r *Request) Plan() *Plan { return r.plan }
 // Text returns the exact event text that body_sha256 binds.
 func (r *Request) Text() string { return r.text }
 
+// RequestTextAdmissible reports whether text satisfies the request text rule
+// that requesters enforce before signing and receivers enforce on receipt:
+// at most MaxRequestText bytes of valid UTF-8, not blank, LF and TAB as the
+// only controls, no U+FFFD and no bidi controls.
+func RequestTextAdmissible(text []byte) bool { return sendableText(string(text)) }
+
 // sendableText admits exactly the text the a2a envelope send accepts (a2a
 // #189 readEnvelopeText): valid UTF-8, not blank, LF and TAB as the only
 // controls; CR, every other control rune, U+FFFD and the bidi controls refuse.
