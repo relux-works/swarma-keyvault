@@ -3,6 +3,7 @@ package muinterop
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,43 @@ func TestLinuxFamilyShape(t *testing.T) {
 	}
 	if len(linux) < 10 {
 		t.Fatal("linux family shrank", len(linux))
+	}
+}
+
+// Claim: the Ed25519 publisher family has ids distinct from the Mac and Linux
+// families, an Ed25519 publisher key pin on its positive control, and every
+// negative names a positive control present in the family.
+func TestPublisherEd25519FamilyShape(t *testing.T) {
+	ids := map[string]bool{}
+	for _, f := range []func() ([]Case, error){MacFamily, LinuxFamily} {
+		cs, err := f()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cs {
+			ids[c.ID] = true
+		}
+	}
+	p2, err := PublisherEd25519Family()
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := map[string]Case{}
+	for _, c := range p2 {
+		if _, dup := own[c.ID]; ids[c.ID] || dup || len(c.Steps) == 0 {
+			t.Fatal("bad publisher-ed25519 case", c.ID)
+		}
+		own[c.ID] = c
+	}
+	accept, ok := own["P2-P-accept"]
+	if !ok || !strings.HasPrefix(accept.Pins.PublisherKey, "ed25519:") {
+		t.Fatal("positive control missing or not an Ed25519 publisher")
+	}
+	for _, c := range p2 {
+		if c.PositiveControl != "" {
+			if _, ok := own[c.PositiveControl]; !ok {
+				t.Fatal("missing positive control", c.ID)
+			}
+		}
 	}
 }

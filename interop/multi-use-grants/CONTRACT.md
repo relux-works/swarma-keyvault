@@ -1,6 +1,6 @@
-# Multi-use owner grants: cross-platform interop contract (r7, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r8, draft for agreement)
 
-Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7 states which snapshots count as verified for the revocation duties and adds three vectors. Every changed rule is marked "(r5)", "(r6)" or "(r7)". Linux builds start from r6 once both sides accept it.
+Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7, which both sides agreed, states which snapshots count as verified for the revocation duties and adds three vectors. r8 admits an Ed25519 revocation publisher (profile `grant-revocation-2`) and adds the P2 vector family. Every changed rule is marked "(r5)", "(r6)", "(r7)" or "(r8)". Linux builds start from r6 once both sides accept it.
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
 
@@ -12,7 +12,7 @@ Sides:
 
 | What | Pin |
 | --- | --- |
-| Record format and verifier | relux-works/swarma-envelope `939750828554` (spec `spec/swarm-envelope-2.md`, library `record`, `verifier`) |
+| Record format and verifier | relux-works/swarma-envelope `6c71e5226416` (r8; spec `spec/swarm-envelope-2.md`, library `record`, `verifier`) |
 | Transport projection | a2a-swarm #189 `25f1e44b002b`, record `a2a.event-envelope-input/1` |
 | KV builders | swarma-keyvault `internal/mugrant` |
 
@@ -23,7 +23,7 @@ Anything not stated here follows the pinned spec. Where this text and the spec d
 | Role | Mac | Linux |
 | --- | --- | --- |
 | Owner grant root (issues grant/1 and the Mac agent and publisher attestations) | P-256, Secure Enclave, user presence (Touch ID) | none; grants for Linux agents are issued on the Mac |
-| Revocation publisher (one per grant domain) | P-256, Secure Enclave, no presence | none; L consumes the Mac publisher's snapshots |
+| Revocation publisher (one per grant domain) | P-256, Secure Enclave, no presence (`grant-revocation-1`) | (r8) Ed25519, held by a signing service (`grant-revocation-2`); without one, L consumes the Mac publisher's snapshots |
 | Agent (requester) | P-256, Secure Enclave, no presence; attestation profile `mac-se-1` signed by the grant root | **Ed25519**; Keymaker v0 agent attestation signed by the signing-service root (`service_root`, purpose 5) |
 | Receiver | swarma-keyvault `grants mu-execute` | L receiver |
 
@@ -89,6 +89,9 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 | `mac-se-1` (Mac agent) | owner grant root | P-256 | ≤ 366 d, covers every grant naming the key | `{profile:"mac-se-1",mxid,generation}` | `{profile,mxid,generation,active:true}`; mxid filled from the authenticated sender |
 | Keymaker v0 agent (Linux agent) | `service_root` (purpose 5) | Ed25519 | ≤ 86 400 s | `{uid,generation,registration_number,master_epoch,owner,path}` | the same six fields plus `active:true`, from protected registry evidence |
 | `grant-revocation-1` (publisher) | owner grant root | P-256 | ≤ 366 d | `{profile:"grant-revocation-1",domain:<grant root>}` | n/a |
+| (r8) `grant-revocation-2` (publisher) | owner grant root | Ed25519 | ≤ 366 d | `{profile:"grant-revocation-2",domain:<grant root>}` | n/a |
+
+(r8) Publisher profiles. A receiver pins exactly one publisher: its key and its attestation. The profile fixes the algorithm, `grant-revocation-1` with a P-256 key and `grant-revocation-2` with an Ed25519 key; any other pair, or an unknown profile, refuses. Only the owner grant root appoints a publisher: an attestation issued or signed by any other key, such as a signing-service root, is refused. The owner signs the attestation under Touch ID at a sitting (`mu-issue --kind publisher` or `publisher-ed25519`). The signing service may hold an Ed25519 publisher key but cannot appoint one. For a Mac author these refusals surface as `key_binding_invalid` from `VerifyMessage`, because the platform resolves the publisher during agent-attestation intake; through Authorize they map to `revocation_invalid`. Everything in §2.4 applies to both profiles. Custody of an Ed25519 publisher key is a deployment qualification, outside this contract.
 
 ### 2.4 revocation/1
 

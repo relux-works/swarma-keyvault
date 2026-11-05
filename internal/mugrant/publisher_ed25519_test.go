@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -159,5 +160,30 @@ func TestEd25519PublisherAttestation(t *testing.T) {
 	}
 	if _, _, err := BuildPublisherAttestation(root, edSPKI, nb, ex); !errors.Is(err, ErrAttestationSpec) {
 		t.Error("Ed25519 SPKI accepted as a P-256 publisher", err)
+	}
+}
+
+// Claim: a grant whose revocation publisher is an Ed25519 key builds, and the
+// owner's rendering shows that key's id and SHA-256 SPKI fingerprint labelled
+// as held by a signing service, not as a mac-keyvault fingerprint. Positive
+// control: the P-256 publisher line of TestGrantAttestationBinding.
+func TestGrantRenderingEd25519Publisher(t *testing.T) {
+	s := metaSpec(t)
+	_, _, edSPKI := ed25519TestKey(t)
+	nb, ex := s.NotBefore.UTC(), s.NotBefore.UTC().Add(MaxAttestationWindow)
+	p, edID, err := BuildEd25519PublisherAttestation(s.Issuer, edSPKI, nb, ex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.PublisherAttestation = signWire(t, testPrivate(t, s.Issuer), p)
+	g, err := BuildGrant(s)
+	if err != nil {
+		t.Fatal("grant with an Ed25519 publisher refused", err)
+	}
+	r := g.Rendering()
+	if !strings.Contains(r, "revocation publisher key: "+edID) ||
+		!strings.Contains(r, "revocation publisher key fingerprint (SHA-256 of the Ed25519 SPKI DER, held by a signing service): "+Fingerprint(edSPKI)) ||
+		strings.Contains(r, "revocation publisher key fingerprint (as mac-keyvault prints it)") {
+		t.Fatal("rendering of the Ed25519 publisher", r)
 	}
 }

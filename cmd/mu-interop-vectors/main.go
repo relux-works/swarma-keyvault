@@ -46,6 +46,11 @@ func write(dir string) error {
 		return err
 	}
 	cases = append(cases, linux...)
+	publisher2, err := muinterop.PublisherEd25519Family()
+	if err != nil {
+		return err
+	}
+	cases = append(cases, publisher2...)
 	if err := os.Mkdir(filepath.Join(dir, "cases"), 0o755); err != nil {
 		return err
 	}

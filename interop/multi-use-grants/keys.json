@@ -61,5 +61,12 @@
     "KeyID": "ed25519:HTKprxyrH3pqWICWw3dZGl4ZNs6Rs3xqzPQ-RtQnYDU",
     "SeedHex": "a1c52866df51c4bd2c4ec693a259396fe5f13272f943d03408092298f6507bba",
     "SPKIHex": "1d32a9af1cab1f7a6a588096c377591a5e1936ce91b37c6accf43e46d4276035"
+  },
+  {
+    "Name": "publisher-ed25519",
+    "Algorithm": "Ed25519",
+    "KeyID": "ed25519:ot5Yp38prgkuhLu0VHvWoXbsmDt64ODmgtvJUY7gRUs",
+    "SeedHex": "382463ab48b2efb65270a8d4e28b2bea00f2b5bb63fedd6c7a60c488ee860889",
+    "SPKIHex": "a2de58a77f29ae092e84bbb4547bd6a176ec983b7ae0e0e682dbc9518ee0454b"
   }
 ]

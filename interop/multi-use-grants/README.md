@@ -114,6 +114,17 @@ Linux-authored (Ed25519) family:
 | `L-N-agent-rollback-older-mark` | older agent snapshot after a newer one, revoking nothing | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
+Ed25519 publisher family (r8): a Mac-authored grant whose revocation publisher is an Ed25519 key appointed by the owner grant root (`grant-revocation-2`). The pins name that key and the records carry its attestation.
+
+| Case | Fact changed | Expected |
+| --- | --- | --- |
+| `P2-P-accept` | none: fresh snapshot signed by the Ed25519 publisher | `succeeded` |
+| `P2-N-revoked` | the fresh snapshot lists the grant | `revoked` |
+| `P2-N-snapshot-foreign-signer` | snapshot naming the publisher, signed by another Ed25519 key | `key_binding_invalid` |
+| `P2-N-profile-2-p256-subject` | root-signed `grant-revocation-2` attestation over a P-256 key | `key_binding_invalid` |
+| `P2-N-issued-by-service-root` | `grant-revocation-2` attestation issued and signed by the signing-service root | `key_binding_invalid` |
+| `P2-N-snapshot-older` | older Ed25519 publisher snapshot after a newer one | `succeeded`, then `mu-revocation-snapshot-rollback` |
+
 ## Checking
 
 ```sh
@@ -140,6 +151,7 @@ Not committed, run by hand against the real code: these known-violation plants e
 - the snapshot shape check left out of pre-verification recording;
 - the 8192-byte snapshot bound left out of pre-verification recording;
 - the mark raise left out of pre-verification recording.
+- the pinned verifier set back to one without `grant-revocation-2` (`P2-P-accept`, `P2-N-revoked` and `P2-N-snapshot-older` fail).
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.
