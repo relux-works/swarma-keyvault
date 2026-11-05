@@ -80,3 +80,41 @@ func TestMURevocationsRefuseSharedSignerKey(t *testing.T) {
 		t.Fatal("distinct keys refused or mark not recorded", err, s.highWater)
 	}
 }
+
+// Claim: a receiver pinned to one publisher refuses a journal that holds a
+// union or mark from another snapshot signer (a publisher rotation without a
+// new state epoch), and a decision naming a publisher it does not pin, before
+// any state change. Positive controls: the pinned publisher is judged and
+// records its mark beside owner-root entries, which are not a signer of the
+// publisher's kind.
+func TestMURevocationsRefuseUnpinnedSigner(t *testing.T) {
+	c, b := muFixture(t)
+	s := muOpen(t, c, b)
+	defer s.close()
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	if err := s.absorbSigned(MUOwnerRootSigner, []MURevocation{{"record", "root-revoked"}}); err != nil {
+		t.Fatal(err)
+	}
+	pinned := &MUReceiver{config: MUReceiverConfig{Signers: map[string]bool{"p256:publisher": true}}}
+	ok := MUDecision{GrantID: "grant-id", Author: "p256:author", PublisherKey: "p256:publisher", SnapshotMarks: map[string]time.Time{"p256:publisher": at}}
+	if err := pinned.revocations(s, ok); err != nil || !s.highWater["p256:publisher"].Equal(at) {
+		t.Fatal("pinned publisher refused", err)
+	}
+	unpinned := ok
+	unpinned.PublisherKey = "ed25519:other"
+	unpinned.SnapshotMarks = map[string]time.Time{"ed25519:other": at.Add(time.Second)}
+	if err := pinned.revocations(s, unpinned); !errors.Is(err, ErrMUState) {
+		t.Fatal("decision with an unpinned publisher admitted", err)
+	}
+	rotated := &MUReceiver{config: MUReceiverConfig{Signers: map[string]bool{"ed25519:new": true}}}
+	next := ok
+	next.PublisherKey = "ed25519:new"
+	next.SnapshotMarks = map[string]time.Time{"ed25519:new": at.Add(time.Second)}
+	unions, marks := len(s.unions), len(s.highWater)
+	if err := rotated.revocations(s, next); !errors.Is(err, ErrMUState) {
+		t.Fatal("journal of another publisher admitted after rotation", err)
+	}
+	if len(s.unions) != unions || len(s.highWater) != marks || s.unions["ed25519:new"] != nil {
+		t.Fatal("refusal changed state", s.unions, s.highWater)
+	}
+}

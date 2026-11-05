@@ -179,7 +179,7 @@ func ParseMUService(raw []byte) (*MUService, error) {
 	binding := MUBinding{Audience: c.Audience, GrantRoot: c.GrantRoot}
 	root := c.GrantRoot
 	receiver := NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: c.Owner, RoomScope: c.RoomScope, Modules: modules, Paused: paused,
-		RootRevocations: func() ([]MURevocation, error) { return VerifyRootRevocations(root, rootSnaps) }},
+		RootRevocations: func() ([]MURevocation, error) { return VerifyRootRevocations(root, rootSnaps) }, Signers: map[string]bool{c.PublisherKey: true}},
 		platform, muServiceRegistry{agents: agents, owners: c.RegistryOwners},
 		map[string]MUEffect{"work.assign": TaskBoardAssign{Path: c.TaskBoard.Path, SHA256: c.TaskBoard.SHA256, BoardDir: c.TaskBoard.BoardDir, Parent: c.TaskBoard.Parent}})
 	return &MUService{receiver: receiver, state: state, binding: binding, projector: projector, room: c.A2A.Room}, nil

@@ -166,3 +166,16 @@ func TestMUServiceSnapshotSourceWired(t *testing.T) {
 		t.Fatal("service receiver verifier does not supply verified snapshots")
 	}
 }
+
+// Claim: the configured service pins exactly its revocation publisher as the
+// receiver's snapshot signer, so a journal from another publisher refuses.
+func TestMUServicePinsPublisherSigner(t *testing.T) {
+	g, cfg, _ := muServiceRig(t)
+	svc, err := muServiceFrom(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := svc.receiver.config.Signers; len(s) != 1 || !s[g.pub.id] {
+		t.Fatal("service signers", s)
+	}
+}

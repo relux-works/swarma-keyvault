@@ -100,6 +100,37 @@ type MUReceiverConfig struct {
 	// RootRevocations returns revocations signed by the owner grant root,
 	// verified by the adapter and honoured at any age (r5 constraint 3).
 	RootRevocations func() ([]MURevocation, error)
+	// Signers pins the snapshot signers this receiver accepts: its revocation
+	// publisher and, with a Linux registry, the agent revocation root. A
+	// journal holding a union or mark from any other signer (the owner root
+	// aside) was written under another publisher: pinning a different
+	// publisher needs a new state epoch (contract, publisher profiles). Nil
+	// disables the check; the service always sets it.
+	Signers map[string]bool
+}
+
+// foreignSigner reports whether the journal or the decision names a snapshot
+// signer this receiver does not pin.
+func (r *MUReceiver) foreignSigner(s *muState, keys ...string) bool {
+	if r.config.Signers == nil {
+		return false
+	}
+	for _, k := range keys {
+		if k != "" && !r.config.Signers[k] {
+			return true
+		}
+	}
+	for signer := range s.unions {
+		if signer != MUOwnerRootSigner && !r.config.Signers[signer] {
+			return true
+		}
+	}
+	for signer := range s.highWater {
+		if !r.config.Signers[signer] {
+			return true
+		}
+	}
+	return false
 }
 
 // MUReceiver handles one request at a time per call.
@@ -256,9 +287,12 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 		return
 	}
 	defer s.close()
+	if r.foreignSigner(s) {
+		return
+	}
 	now := r.now()
 	for _, sn := range snaps {
-		if sn.Signer == MUOwnerRootSigner || s.absorbSigned(sn.Signer, sn.Entries) != nil {
+		if sn.Signer == MUOwnerRootSigner || r.foreignSigner(s, sn.Signer) || s.absorbSigned(sn.Signer, sn.Entries) != nil {
 			return
 		}
 		// Entries always join the union, but only a snapshot that is not
@@ -283,6 +317,9 @@ func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 	// Each signer keeps its own union and mark; one key in both roles would
 	// merge them. The platform verifier refuses that pair too.
 	if d.PublisherKey != "" && d.PublisherKey == d.AgentRevocationKey {
+		return ErrMUState
+	}
+	if r.foreignSigner(s, d.PublisherKey, d.AgentRevocationKey) {
 		return ErrMUState
 	}
 	var root []MURevocation

@@ -101,7 +101,7 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 
   A receiver that validates the pinned publisher attestation when it loads its configuration meets the vectors with an invalid publisher attestation by refusing that configuration, before any request or effect. That refusal counts as the expected verdict for those steps. A rig must not translate one entry point's refusal into the other's code.
 - (r8.1) Consumer scope. A receiver implements r8 only when it pins a platform verifier with profile 2 (§0) and its own publisher gate admits the profile the verified attestation declares. A receiver that does not fails closed on every profile-2 input. r8 qualifies no such receiver.
-- (r8.1) Rotation. Pinning a different publisher on an existing journal is not defined by this contract. It is blocked until the receiver re-initialises under a new state epoch and re-applies the owner-root revocations, as the restore rule in §2.4 requires.
+- (r8.1) Rotation. Pinning a different publisher on an existing journal is not defined by this contract. It is blocked until the receiver re-initialises under a new state epoch and re-applies the owner-root revocations, as the restore rule in §2.4 requires. The KV receiver enforces this: it pins its snapshot signers and refuses, before any state change, a journal that holds a union or mark from any other signer (the owner root aside).
 - Everything in §2.4 applies to both profiles. Custody of an Ed25519 publisher key is a deployment qualification, outside this contract.
 
 ### 2.4 revocation/1
