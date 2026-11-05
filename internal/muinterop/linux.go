@@ -247,6 +247,14 @@ func LinuxFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	servicePublisherAtt, err := edAttest(service)
+	if err != nil {
+		return nil, err
+	}
+	servicePublisherSnapshot, err := snap(service, T0.Add(-5*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
 	nonce2 := hexDigest([]byte("linux grant nonce profile-2"))
 	g2, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: w.root.ID, Subject: agent.ID, SubjectMXID: linuxMXID, SubjectAttestation: att,
 		ServiceRoot: service.ID, SubjectRegistry: &mugrant.RegistryIdentity{MXID: linuxMXID, UID: gen.UID, RegistrationNumber: gen.RegistrationNumber}, IssuedAt: T0.Add(-time.Hour),
@@ -264,6 +272,10 @@ func LinuxFamily() ([]Case, error) {
 		return nil, err
 	}
 	pub2Fresh, err := snap(pub2, T0.Add(-5*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
+	pub2Older, err := snap(pub2, T0.Add(-30*time.Second), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -294,6 +306,13 @@ func LinuxFamily() ([]Case, error) {
 		p.SenderMXID = sender
 		return Case{Format: Format, ID: id, Claim: claim, PositiveControl: control, Pins: p, Records: records, Registry: reg, Events: []Event{e},
 			Steps: []Step{{Event: e.ID, Now: at, Snapshot: B64(pub), AgentSnapshot: B64(agentSnap), Expected: expected}}}
+	}
+	// Keep all other evidence fixed while varying the publisher snapshot or event.
+	p2Sequence := func(id, claim string, events []Event, steps []Step) Case {
+		p := pins
+		p.PublisherKey = pub2.ID
+		return Case{Format: Format, ID: id, Claim: claim, PositiveControl: "P2-L-P-accept", Pins: p,
+			Records: Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(pub2Att)}, Registry: registry(served, gen), Events: events, Steps: steps}
 	}
 	return []Case{
 		one("L-P-accept", "An in-scope work.assign signed by the Keymaker-attested Linux agent under a Mac-issued until_expiry grant is accepted and executed once.", "",
@@ -365,6 +384,25 @@ func LinuxFamily() ([]Case, error) {
 				registry(served, gen), linuxMXID, ev("$p2l-revoked", rAccept, text), now, pub2Revoking, agentFresh, "revoked")
 			c.Pins.PublisherKey = pub2.ID
 			c.Records = Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(pub2Att)}
+			return c
+		}(),
+		p2Sequence("P2-L-N-revoked-then-older", "A revoking Ed25519 publisher snapshot refused in Authorize is remembered for a Linux author: an older snapshot without the entry cannot restore the grant.",
+			[]Event{ev("$p2l-first", rAccept, text), ev("$p2l-second", rSecondL, text)},
+			[]Step{{Event: "$p2l-first", Now: now, Snapshot: B64(pub2Revoking), AgentSnapshot: B64(agentFresh), Expected: "revoked"},
+				{Event: "$p2l-second", Now: later, Snapshot: B64(pub2Older), AgentSnapshot: B64(agentFresh), Expected: "mu-grant-revoked"}}),
+		p2Sequence("P2-L-N-snapshot-older", "For a Linux author, an Ed25519 publisher snapshot older than one already accepted refuses as rollback, even within 60 seconds and with no dropped entries.",
+			[]Event{ev("$p2l-first", rAccept, text), ev("$p2l-second", rSecondL, text)},
+			[]Step{{Event: "$p2l-first", Now: now, Snapshot: B64(pub2Fresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
+				{Event: "$p2l-second", Now: later, Snapshot: B64(pub2Older), AgentSnapshot: B64(agentFresh), Expected: "mu-revocation-snapshot-rollback"}}),
+		p2Sequence("P2-L-N-replay", "The same Linux request under an Ed25519 publisher executes once; replay refuses on its held nonce.",
+			[]Event{ev("$p2l-accept", rAccept, text)},
+			[]Step{{Event: "$p2l-accept", Now: now, Snapshot: B64(pub2Fresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
+				{Event: "$p2l-accept", Now: later, Snapshot: B64(pub2Fresh), AgentSnapshot: B64(agentFresh), Expected: "mu-request-nonce-already-held"}}),
+		func() Case {
+			c := one("P2-L-N-publisher-is-service-root", "A root-signed grant-revocation-2 attestation whose subject is the signing-service root cannot appoint a publisher. Entry point: Authorize for a Linux author refuses the role collision with revocation_invalid.", "P2-L-P-accept",
+				registry(served, gen), linuxMXID, ev("$p2l-service-root", rAccept, text), now, servicePublisherSnapshot, agentFresh, "revocation_invalid")
+			c.Pins.PublisherKey = service.ID
+			c.Records = Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(servicePublisherAtt)}
 			return c
 		}(),
 		func() Case {

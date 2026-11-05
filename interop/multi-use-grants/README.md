@@ -115,7 +115,7 @@ Linux-authored (Ed25519) family:
 | `L-N-agent-rollback-older-mark` | older agent snapshot after a newer one, revoking nothing | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
-Ed25519 publisher family (r8): grants whose revocation publisher is an Ed25519 key appointed by the owner grant root (`grant-revocation-2`). The pins name that key and the records carry its attestation. The family has 11 cases with 12 steps, 8 Mac-authored and 3 Linux-authored; the whole set has 83 cases with 100 steps.
+Ed25519 publisher family (r8): grants whose revocation publisher is an Ed25519 key appointed by the owner grant root (`grant-revocation-2`). The pins name that key and the records carry its attestation. The family has 15 cases with 19 steps (5 succeeded steps), 8 Mac-authored and 7 Linux-authored; the whole set has 88 cases with 108 steps and 24 succeeded steps.
 
 | Case | Fact changed | Expected |
 | --- | --- | --- |
@@ -130,8 +130,14 @@ Ed25519 publisher family (r8): grants whose revocation publisher is an Ed25519 k
 | `P2-L-P-accept` | Linux author: fresh Ed25519 publisher and agent revocation snapshots | `succeeded` |
 | `P2-L-N-revoked` | Linux author: the Ed25519 publisher snapshot lists the grant | `revoked` |
 | `P2-L-N-publisher-is-agent-revocation-root` | Linux author: the publisher attestation's subject is the agent revocation root | `revocation_invalid` |
+| `P2-L-N-publisher-is-service-root` | Linux author: the publisher attestation's subject is the signing-service root | `revocation_invalid` from `Authorize` |
+| `P2-L-N-revoked-then-older` | Linux author: revoking publisher snapshot, then an older one without the entry | `revoked`, then `mu-grant-revoked` |
+| `P2-L-N-snapshot-older` | Linux author: fresh publisher snapshot, then an older one | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `P2-L-N-replay` | Linux author: same event twice under the Ed25519 publisher | `succeeded`, then `mu-request-nonce-already-held` |
 
 The P2 negatives that expect `key_binding_invalid` (Mac author) or `revocation_invalid` (Linux author) would get the same code from a verifier that does not know `grant-revocation-2`. They show that profile 2 refuses what it must only together with `P2-P-accept` and `P2-L-P-accept`, which such a verifier refuses. A receiver that validates the pinned publisher attestation at configuration load meets the invalid-attestation cases by refusing that configuration (CONTRACT, publisher profiles).
+
+New negative controls: the four Linux-authored P2 cases above name `P2-L-P-accept`. The Mac role-collision case `M-N-publisher-is-grant-root` names `M-P-accept`: a root-signed `grant-revocation-1` attestation whose subject is the grant root gives `key_binding_invalid` from `VerifyMessage`.
 
 ## Checking
 
@@ -159,7 +165,9 @@ Not committed, run by hand against the real code: these known-violation plants e
 - the snapshot shape check left out of pre-verification recording;
 - the 8192-byte snapshot bound left out of pre-verification recording;
 - the mark raise left out of pre-verification recording.
-- the pinned verifier set back to one without `grant-revocation-2` (`P2-P-accept`, `P2-N-revoked`, `P2-N-snapshot-older`, `P2-L-P-accept` and `P2-L-N-revoked` fail).
+- the pinned verifier set back to one without `grant-revocation-2` (`P2-P-accept`, `P2-N-revoked`, `P2-N-snapshot-older`, `P2-L-P-accept`, `P2-L-N-revoked`, `P2-L-N-revoked-then-older`, `P2-L-N-snapshot-older` and `P2-L-N-replay` fail).
+- the foreign-journal-signer skips left out of pre-verification recording (the empty-journal positive control still records both pinned snapshots);
+- the consecutive interrupted-attempt bound left out of the file-lock wait (a finite sentinel after the bound exposes the extra attempt; the free-lock and interrupted-then-success controls still acquire the lock).
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.

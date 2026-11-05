@@ -14,8 +14,8 @@ import (
 // without stealing the lock from a live holder.
 const LockWait = 45 * time.Second
 
-// flock is syscall.Flock; tests replace it to interrupt an attempt.
-var flock = syscall.Flock
+// maxConsecutiveInterrupts bounds immediate attempts even under a done context.
+const maxConsecutiveInterrupts = 8
 
 // LockFile takes an exclusive flock, retrying contention and interrupted calls
 // while ctx is live, for at most LockWait. A done ctx bounds only waiting: an
@@ -24,18 +24,29 @@ var flock = syscall.Flock
 // closes f, including on failure; closing a successfully locked descriptor
 // releases it.
 func LockFile(ctx context.Context, f *os.File) error {
+	return lockFile(ctx, f, syscall.Flock)
+}
+
+func lockFile(ctx context.Context, f *os.File, flock func(int, int) error) error {
 	ctx, cancel := context.WithTimeout(ctx, LockWait)
 	defer cancel()
+	interrupts := 0
 	for {
 		err := flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			return nil
 		}
 		// An interrupted attempt is not contention: retry it at once, also
-		// under a done ctx, so a free lock is still taken.
+		// under a done ctx, so a free lock is still taken. A consecutive
+		// interruption limit prevents a signal storm from spinning forever.
 		if errors.Is(err, syscall.EINTR) {
+			interrupts++
+			if interrupts >= maxConsecutiveInterrupts {
+				return err
+			}
 			continue
 		}
+		interrupts = 0
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
 			return err
 		}

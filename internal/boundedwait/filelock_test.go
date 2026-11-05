@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
+// Claim: a closed descriptor returns its error without waiting for the context deadline.
 func TestLockFileReportsDescriptorError(t *testing.T) {
+	t.Parallel()
 	f, err := os.CreateTemp(t.TempDir(), "closed")
 	if err != nil {
 		t.Fatal(err)
@@ -23,11 +25,9 @@ func TestLockFileReportsDescriptorError(t *testing.T) {
 	}
 }
 
-// Claim: a done context bounds only waiting. With the lock free, the first
-// attempt still takes it (so a deadline refusal can be audited); with the
-// lock held by another descriptor, it refuses with the context error at once,
-// without waiting and without taking the lock.
+// Claim: a done context takes a free lock immediately and refuses contention without taking the held lock.
 func TestLockFileDoneContext(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lock")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -56,28 +56,82 @@ func TestLockFileDoneContext(t *testing.T) {
 	}
 }
 
-// Claim: an interrupted attempt is retried, also under a done context, so a
-// free lock is still taken; the interruption is not reported as contention
-// or as the context error. Limit: the interruption is injected through the
-// package's flock seam.
+// Claim: a free lock succeeds on the first attempt or after two interruptions, even under a done context.
 func TestLockFileRetriesInterruptedAttempt(t *testing.T) {
-	interrupted := 0
-	flock = func(fd int, how int) error {
-		if interrupted < 2 {
-			interrupted++
+	t.Parallel()
+	for _, interruptions := range []int{0, 2} {
+		calls := 0
+		flock := func(fd int, how int) error {
+			calls++
+			if calls <= interruptions {
+				return syscall.EINTR
+			}
+			return syscall.Flock(fd, how)
+		}
+		f, err := os.CreateTemp(t.TempDir(), "lock")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := lockFile(ctx, f, flock); err != nil || calls != interruptions+1 {
+			t.Fatal("free lock not taken at first successful attempt", interruptions, calls, err)
+		}
+	}
+}
+
+// Claim: consecutive interruptions return EINTR at the fixed attempt bound with either a live or a done context.
+func TestLockFileBoundsInterruptedAttempts(t *testing.T) {
+	t.Parallel()
+	for _, done := range []bool{false, true} {
+		calls := 0
+		sentinel := errors.New("attempt after interruption bound")
+		flock := func(int, int) error {
+			calls++
+			if calls > maxConsecutiveInterrupts {
+				return sentinel // An unbounded retry fails observably without hanging.
+			}
 			return syscall.EINTR
 		}
-		return syscall.Flock(fd, how)
+		f, err := os.CreateTemp(t.TempDir(), "lock")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		if done {
+			cancel()
+		}
+		err = lockFile(ctx, f, flock)
+		cancel()
+		if !errors.Is(err, syscall.EINTR) || calls != maxConsecutiveInterrupts {
+			t.Fatalf("interruption bound violated: done=%v calls=%d want=%d err=%v", done, calls, maxConsecutiveInterrupts, err)
+		}
 	}
-	t.Cleanup(func() { flock = syscall.Flock })
-	f, err := os.OpenFile(filepath.Join(t.TempDir(), "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+}
+
+// Claim: contention resets the consecutive interruption count, so two shorter interruption runs still acquire a free lock.
+func TestLockFileResetsInterruptedAttempts(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	flock := func(fd int, how int) error {
+		calls++
+		switch calls {
+		case maxConsecutiveInterrupts:
+			return syscall.EWOULDBLOCK
+		case 2 * maxConsecutiveInterrupts:
+			return syscall.Flock(fd, how)
+		default:
+			return syscall.EINTR
+		}
+	}
+	f, err := os.CreateTemp(t.TempDir(), "lock")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := LockFile(ctx, f); err != nil || interrupted != 2 {
-		t.Fatal("interrupted attempt not retried under a done context", interrupted, err)
+	if err := lockFile(context.Background(), f, flock); err != nil || calls != 2*maxConsecutiveInterrupts {
+		t.Fatal("interruption count not reset after contention", calls, err)
 	}
 }

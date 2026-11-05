@@ -52,6 +52,33 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Build the forbidden subject directly: the normal builder rejects self-appointment.
+	rootPublisherRecord, err := recordParse(publisherAtt)
+	if err != nil {
+		return nil, err
+	}
+	rootPublisherBody := rootPublisherRecord.(map[string]any)["body"].(map[string]any)
+	rootPublisherBody["subject"] = map[string]any{"algorithm": "P-256", "key_id": w.root.ID, "public_bytes": strings.TrimPrefix(w.root.ID, "p256:")}
+	rootPublisherRaw, err := recordCanonical(rootPublisherBody)
+	if err != nil {
+		return nil, err
+	}
+	rootPublisherPlan, err := mugrant.Prepare("attestation/1", w.root.ID, rootPublisherRaw)
+	if err != nil {
+		return nil, err
+	}
+	rootPublisherAtt, err := w.root.Sign(rootPublisherPlan)
+	if err != nil {
+		return nil, err
+	}
+	rootSnapshotPlan, err := mugrant.BuildSnapshot(w.root.ID, T0.Add(-5*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
+	rootSnapshot, err := w.root.Sign(rootSnapshotPlan)
+	if err != nil {
+		return nil, err
+	}
 	attID, err := contentID(agentAtt)
 	if err != nil {
 		return nil, err
@@ -307,6 +334,13 @@ func MacFamily() ([]Case, error) {
 			records(gCurrent), ev("$room-other", rRoomOther, roomText), fresh, "mu-request-out-of-owner-scope"),
 		one("M-P-text-tab", "Event text containing TAB is admitted.", "",
 			records(gCurrent), ev("$tab", rTab, tabText), fresh, "succeeded"),
+		func() Case {
+			c := one("M-N-publisher-is-grant-root", "A root-signed grant-revocation-1 attestation whose subject is the grant root cannot appoint a publisher. Entry point: VerifyMessage for a Mac author refuses the role collision with key_binding_invalid.", "M-P-accept",
+				records(gCurrent), ev("$publisher-root", rAccept, text), rootSnapshot, "key_binding_invalid")
+			c.Pins.PublisherKey = w.root.ID
+			c.Records.PublisherAttestation = B64(rootPublisherAtt)
+			return c
+		}(),
 		// Text rule, one class per case; each is signed (body_sha256 binds it).
 		one("M-N-body-hash", "Delivered text that differs from the signed body_sha256 refuses.", "M-P-accept",
 			records(gCurrent), ev("$text", rAccept, text+" (edited)"), fresh, "message_text_mismatch"),

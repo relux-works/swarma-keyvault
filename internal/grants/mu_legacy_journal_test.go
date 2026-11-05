@@ -1,8 +1,11 @@
 package grants
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -152,5 +155,57 @@ func TestMUAbsorbSkipsSharedSignerKey(t *testing.T) {
 	defer s.close()
 	if !s.unions["ed25519:publisher"][entry[0]] || !s.highWater["ed25519:agent-revocation"].Equal(at) {
 		t.Fatal("distinct signers not recorded", s.unions, s.highWater)
+	}
+}
+
+// Claim: a journal with an unpinned signer's union or mark absorbs no event snapshots; an empty journal records both pinned signers.
+func TestMUAbsorbSkipsUnpinnedJournalSigner(t *testing.T) {
+	for _, held := range []string{"empty", "union", "mark"} {
+		t.Run(held, func(t *testing.T) {
+			c, b := muFixture(t)
+			at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+			foreign := "ed25519:foreign"
+			s := muOpen(t, c, b)
+			switch held {
+			case "union":
+				if err := s.absorbSigned(foreign, []MURevocation{{"record", "foreign-entry"}}); err != nil {
+					t.Fatal(err)
+				}
+			case "mark":
+				if err := s.markSnapshots(map[string]time.Time{foreign: at.Add(-time.Second)}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.close()
+			journal := func() []byte {
+				raw, err := os.ReadFile(filepath.Join(c.Directory, "mu.journal"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			before := journal()
+			pub, agent := "ed25519:publisher", "ed25519:agent-revocation"
+			snaps := []MUSnapshot{
+				{Signer: pub, IssuedAt: at, Entries: []MURevocation{{"record", "publisher-entry"}}},
+				{Signer: agent, IssuedAt: at, Entries: []MURevocation{{"key", "agent-entry"}}},
+			}
+			r := NewMUReceiver(MUReceiverConfig{State: c, Binding: b, Signers: map[string]bool{pub: true, agent: true}}, muSnapshotsOnly{snaps}, nil, nil)
+			r.now = func() time.Time { return at }
+			r.absorbSnapshots(context.Background(), MUEvent{})
+			s = muOpen(t, c, b)
+			defer s.close()
+			if held != "empty" {
+				if !bytes.Equal(before, journal()) || s.unions[pub] != nil || s.unions[agent] != nil || !s.highWater[pub].IsZero() || !s.highWater[agent].IsZero() {
+					t.Fatal("unpinned journal signer allowed snapshot recording", s.unions, s.highWater)
+				}
+				return
+			}
+			for _, sn := range snaps {
+				if !s.unions[sn.Signer][sn.Entries[0]] || !s.revoked[sn.Entries[0]] || !s.highWater[sn.Signer].Equal(at) {
+					t.Fatal("empty journal did not record pinned snapshot", sn.Signer, s.unions, s.highWater)
+				}
+			}
+		})
 	}
 }
