@@ -52,3 +52,38 @@ func TestFileLockDeadlineAndRecovery(t *testing.T) {
 		t.Fatalf("canceled uncontended lock acquired: %v", err)
 	}
 }
+
+// flipContext reports live on its first Err call and canceled afterwards: the
+// cancellation lands between LockContext's pre-check and its result.
+type flipContext struct {
+	context.Context
+	calls int
+}
+
+func (c *flipContext) Err() error {
+	c.calls++
+	if c.calls == 1 {
+		return nil
+	}
+	return context.Canceled
+}
+
+// Claim: a context cancelled while the lock is being taken still refuses, and
+// the lock is free afterwards (another caller takes it at once). Paired with
+// the uncontended positive control in TestFileLockDeadlineAndRecovery.
+func TestFileLockCancelledDuringAttempt(t *testing.T) {
+	lock := FileLock{Path: filepath.Join(t.TempDir(), "lock")}
+	ctx := &flipContext{Context: context.Background()}
+	release, err := lock.LockContext(ctx)
+	if release != nil {
+		release()
+	}
+	if !errors.Is(err, context.Canceled) || release != nil {
+		t.Fatalf("lock taken by a cancelled caller: release present=%t, err=%v", release != nil, err)
+	}
+	again, err := lock.LockContext(context.Background())
+	if err != nil {
+		t.Fatal("lock left held after the refusal", err)
+	}
+	again()
+}
