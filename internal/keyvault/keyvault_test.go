@@ -861,7 +861,7 @@ func TestManagerRotate(t *testing.T) {
 			store := newFakeStore(tc.existing...)
 			for label, item := range store.keys {
 				rec, _ := DecodeRecord(item.Tag)
-				rec.Title, rec.Usages, rec.Meta, rec.Extraction = "titled", []string{"sign", "decrypt"}, map[string]any{"pki": "bsim"}, ExtractionHuman
+				rec.Title, rec.Usages, rec.Meta, rec.Extraction = "titled", []string{"sign", "decrypt"}, map[string]any{"pki": "example"}, ExtractionHuman
 				item.Tag, _ = EncodeRecord(rec)
 				store.keys[label] = item
 			}
@@ -880,7 +880,7 @@ func TestManagerRotate(t *testing.T) {
 				t.Fatalf("rotate = %s -> %s, want %s -> %s", result.Old.Label, result.New.Label, tc.wantOld, tc.wantNew)
 			}
 			rec := result.New.Record
-			if rec.Version != result.Old.Record.Version+1 || rec.Title != "titled" || strings.Join(rec.Usages, ",") != "sign,decrypt" || rec.Meta["pki"] != "bsim" || rec.Extraction != ExtractionHuman || rec.Origin != testOrigin || rec.Created.Equal(result.Old.Record.Created.Time) || rec.Store != StoreKeychain {
+			if rec.Version != result.Old.Record.Version+1 || rec.Title != "titled" || strings.Join(rec.Usages, ",") != "sign,decrypt" || rec.Meta["pki"] != "example" || rec.Extraction != ExtractionHuman || rec.Origin != testOrigin || rec.Created.Equal(result.Old.Record.Created.Time) || rec.Store != StoreKeychain {
 				t.Fatalf("new record = %+v, old = %+v", rec, result.Old.Record)
 			}
 			for _, label := range tc.existing {

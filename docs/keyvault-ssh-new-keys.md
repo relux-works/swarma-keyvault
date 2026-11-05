@@ -4,7 +4,7 @@ Owner policy (2026-10-15): **only new keys go into keyvault**. Existing SSH
 keys, GitHub/GitLab registrations, host configuration and signing settings stay
 as they are. There is no import, replacement, migration or retirement step.
 The existing `~/.ssh/id_ed25519` and GitHub key `macpro 16 m1` remain unchanged.
-MTS and its keys are out of scope.
+Corporate infrastructure and its keys are out of scope.
 
 This is an owner-run onboarding guide for a **new host or new service**.
 Delivery does not create real keys, register them with services, or alter live

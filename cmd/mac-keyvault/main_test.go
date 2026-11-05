@@ -639,7 +639,7 @@ func TestRunRecordRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, resp, raw := runJSON(t, initArgs("rt", "--title", "Round trip", "--description", "used by the round trip test", "--usages", "verify,sign,decrypt", "--extraction", "agent",
-		"--format-public", "spki-pem", "--format-signature", "ecdsa-raw", "--meta", "owner=alexis", "--meta", "pki=bsim", "--meta-json", metaJSON, "--not-after", "2027-01-01T00:00:00Z")...)
+		"--format-public", "spki-pem", "--format-signature", "ecdsa-raw", "--meta", "owner=alexis", "--meta", "pki=example", "--meta-json", metaJSON, "--not-after", "2027-01-01T00:00:00Z")...)
 	if code != exitOK {
 		t.Fatalf("init: %s", raw)
 	}
@@ -655,7 +655,7 @@ func TestRunRecordRoundTrip(t *testing.T) {
 	meta := result["meta"].(map[string]any)
 	origin := result["origin"].(map[string]any)
 	validity := result["validity"].(map[string]any)
-	if format["public"] != "spki-pem" || format["signature"] != "ecdsa-raw" || format["envelope"] != nil || meta["owner"] != "alexis" || meta["pki"] != "bsim" || meta["ttl"] != 30.0 || meta["pinned"] != true ||
+	if format["public"] != "spki-pem" || format["signature"] != "ecdsa-raw" || format["envelope"] != nil || meta["owner"] != "alexis" || meta["pki"] != "example" || meta["ttl"] != 30.0 || meta["pinned"] != true ||
 		origin["source"] != "generated" || origin["tool"] != "mac-keyvault/"+Version || origin["user"] == "" || validity["not_after"] != "2027-01-01T00:00:00Z" || validity["not_before"] != nil {
 		t.Fatalf("init result = %v", result)
 	}

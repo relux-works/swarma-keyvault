@@ -405,7 +405,7 @@ func (m *metaFlags) Set(v string) error { m.pairs = append(m.pairs, v); return n
 
 func runInit(args []string, out output) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	service := fs.String("service", "", "consumer of the key (kvctl, bsim-ci, agent)")
+	service := fs.String("service", "", "consumer of the key (kvctl, build-ci, agent)")
 	purpose := fs.String("purpose", "", "role of the key (pki-root, attest)")
 	kind := fs.String("kind", keyvault.KindKey, "record kind; only key is created in this revision")
 	title := fs.String("title", "", "short human name, at most 80 characters")
