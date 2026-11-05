@@ -132,8 +132,9 @@ replaces the click with two controls:
     exits before its socket exists.
   - A signature is returned only after its record is written and synced. If
     the write or the sync fails, the signature is withheld and the log
-    refuses every later record, so the agent signs nothing more until it is
-    restarted with a sound log.
+    refuses every later record, so no further signatures are returned until
+    the agent is restarted with a sound log. Further requests can still
+    perform confirmation and private signing before the audit refusal.
   - Refusals for a pinned key are recorded best effort, including requests
     with nonzero flags, trailing bytes or a missing or truncated field
     (`malformed_request`).

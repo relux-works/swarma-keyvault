@@ -4,7 +4,9 @@ macOS key custody and narrow signing/KEK interfaces, extracted from the publishe
 `relux-works/mac-infra` component at `3e9ee3e749f3ef8b6f6d4f188c39bb8207efa337`.
 The current source candidate retains P-256 key custody, the paired Secure Enclave
 helper, signer contract 1, the SSH agent bridge and the `kek-1` broker/client.
-Standalone validation and installed adoption are pending.
+The source extraction has passed its confined suite and read-only public-code
+qualification. Real Keychain/Enclave and installed consumer adoption remain
+separate qualification steps.
 
 The module is `github.com/relux-works/swarma-keyvault`. The public KEK client is
 `pkg/kekclient`; the signer client remains internal in this initial extraction.
@@ -51,6 +53,22 @@ The native-input allowlist is a review tripwire; it does not replace confinement
 Read [the KEK contract](docs/kek.md) and [SSH/new-key onboarding](docs/keyvault-ssh-new-keys.md)
 before selecting an interface. Generic signing is not typed grant or release
 authority. Same-user sockets and code binding do not prove per-agent identity.
+
+## Operational skill
+
+The source-versioned [swarma-keyvault skill](agents/skills/swarma-keyvault/SKILL.md)
+contains interface selection, CLI and signer examples, KEK integration,
+new-SSH-key onboarding, validation and recovery. Its references are bundled inside
+`agents/skills/swarma-keyvault/` so exporting that directory preserves them.
+The bundled KEK and SSH guides are exact copies of `docs/kek.md` and
+`docs/keyvault-ssh-new-keys.md`; update both copies together when either changes.
+
+Use the reviewed package and immutable revision through the target environment's
+supported skill-dependency route. Source publication and runtime adoption are
+separate: installing these instructions does not install binaries, create keys,
+alter existing SSH/Git configuration or repin an existing service. Repository-local
+discovery links can point `.codex/skills/swarma-keyvault` and
+`.claude/skills/swarma-keyvault` to `../../agents/skills/swarma-keyvault`.
 
 ## Certificate work
 
