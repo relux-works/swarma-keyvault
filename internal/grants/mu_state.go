@@ -114,7 +114,7 @@ func InitializeMUState(config MUStateConfig, binding MUBinding) error {
 		return ErrMUState
 	}
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
-	file, err := a2aOpenFile(dir, "mu.journal", true)
+	file, err := muOpenJournal(dir, true)
 	if err != nil {
 		return ErrMUState
 	}
@@ -155,7 +155,7 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 	if lockStateFile(ctx, s.lock) != nil {
 		return nil, ErrMUState
 	}
-	if s.file, err = a2aOpenFile(dir, "mu.journal", false); err != nil {
+	if s.file, err = muOpenJournal(dir, false); err != nil {
 		return nil, ErrMUState
 	}
 	st, err := s.file.Stat()
@@ -446,4 +446,12 @@ func (s *muState) absorbRevocations(entries []MURevocation) error {
 		fresh = fresh[len(chunk):]
 	}
 	return nil
+}
+
+// muOpenJournal opens mu.journal for append only. The receiver only ever
+// writes at the end after a full replay, and with O_APPEND the open also
+// succeeds when the operator sets the BSD append-only flag on the file, which
+// refuses truncation, rewrite and rename by a same-user process.
+func muOpenJournal(dir *os.File, create bool) (*os.File, error) {
+	return a2aOpenFileWith(dir, "mu.journal", create, unix.O_APPEND)
 }

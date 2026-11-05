@@ -78,7 +78,13 @@ func a2aOpenDirectory(config A2AStateConfig) (*os.File, error) {
 }
 
 func a2aOpenFile(directory *os.File, name string, create bool) (*os.File, error) {
-	flags := unix.O_RDWR | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	return a2aOpenFileWith(directory, name, create, 0)
+}
+
+// a2aOpenFileWith is a2aOpenFile with extra open flags (O_APPEND for a
+// journal that may carry the BSD append-only flag).
+func a2aOpenFileWith(directory *os.File, name string, create bool, extra int) (*os.File, error) {
+	flags := unix.O_RDWR | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC | extra
 	if create {
 		flags |= unix.O_CREAT | unix.O_EXCL
 	}
