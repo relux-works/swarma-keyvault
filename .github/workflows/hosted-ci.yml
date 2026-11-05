@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   group: hosted-linux-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
@@ -23,28 +23,25 @@ jobs:
       MAC_KEYVAULT_SKIP_KEYCHAIN: '1'
     steps:
       - name: Check out the PR head or pushed commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Set up Go 1.26.x
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: false
-      - name: Vet internal packages
-        run: go vet ./internal/...
+      - name: List Linux-buildable Go packages
+        run: go list ./...
+      - name: Vet every Linux-buildable Go package
+        run: go vet ./...
       - name: Inventory committed MU interop cases
         run: |
           cases=$(find interop/multi-use-grants/cases -maxdepth 1 -type f -name '*.json' | wc -l)
           echo "TestMUInteropVectors committed cases: $cases"
           test "$cases" -ge 72
-      # All 17 Go packages at this source revision build on Linux; none is excluded.
-      # The keyvault/... pattern expands to internal/keyvault plus:
-      # internal/keyvault/kek, internal/keyvault/keychaingate,
-      # internal/keyvault/recordtest, internal/keyvault/signerclient,
-      # internal/keyvault/signertest, internal/keyvault/testguard.
-      # All other patterns below each name exactly one package at this base.
+      # Discover all Linux-buildable Go packages with ./...; none is excluded.
       # Go excludes the Darwin-only Security.framework/Keychain cgo backend,
       # KEK code-identity inspection, sandbox-exec and Enclave helper tests,
       # macOS peer/publication implementations, kekclient identity tests, and
@@ -57,15 +54,4 @@ jobs:
         run: |
           # Permission-refusal fixtures create deliberately world-readable files.
           umask 022
-          MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v \
-            ./cmd/mac-keyvault/... \
-            ./cmd/mac-keyvault-kek/... \
-            ./cmd/mu-interop-vectors/... \
-            ./cmd/swarma-keyvault/... \
-            ./internal/grantissuer/... \
-            ./internal/grantrequester/... \
-            ./internal/grants/... \
-            ./internal/keyvault/... \
-            ./internal/mugrant/... \
-            ./internal/muinterop/... \
-            ./pkg/kekclient/...
+          MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v ./...
