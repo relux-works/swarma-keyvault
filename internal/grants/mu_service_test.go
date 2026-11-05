@@ -103,7 +103,8 @@ func TestMUServiceSitting(t *testing.T) {
 
 // Claim: the configuration is refused for an unknown field, a wrong type,
 // a relative path, a bad epoch, a time authority outside 1..300 s, a
-// duplicate agent and a root revocation not signed by the pinned root.
+// duplicate agent, a root revocation not signed by the pinned root, and an
+// audience carrying the TEST marker prefix "test:".
 func TestMUServiceConfigRefusals(t *testing.T) {
 	g, cfg, _ := muServiceRig(t)
 	if _, err := muServiceFrom(t, cfg); err != nil {
@@ -127,6 +128,8 @@ func TestMUServiceConfigRefusals(t *testing.T) {
 			c["agents"] = append(a, a[0])
 		},
 		"foreign-root-revocation": func(c map[string]any) { c["root_revocations"] = []string{foreign} },
+		// A2-261105-037: a production receiver refuses the TEST audience marker.
+		"test-audience": func(c map[string]any) { c["audience"] = "test:grant-service" },
 	}
 	for name, mutate := range mutations {
 		_, cfg2, _ := muServiceRig(t)

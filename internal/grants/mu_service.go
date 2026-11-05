@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -113,6 +114,11 @@ func ParseMUService(raw []byte) (*MUService, error) {
 		if !filepath.IsAbs(p) || filepath.Clean(p) != p {
 			return nil, ErrMUConfig
 		}
+	}
+	// A production receiver never serves TEST records: the TEST marker is the
+	// signed audience prefix "test:" (A2-261105-037).
+	if strings.HasPrefix(c.Audience, "test:") {
+		return nil, ErrMUConfig
 	}
 	if c.TimeAuthoritySeconds < 1 || c.TimeAuthoritySeconds > 300 {
 		return nil, ErrMUConfig
