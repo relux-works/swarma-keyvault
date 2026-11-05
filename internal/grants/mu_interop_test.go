@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +20,13 @@ import (
 // muInteropRun handles every step of one interop case with a fresh receiver
 // and returns the observed verdict per step and the number of effects.
 func muInteropRun(t *testing.T, c muinterop.Case) ([]string, int) {
+	t.Helper()
+	return muInteropRunWith(t, c, nil)
+}
+
+// muInteropRunWith runs a case; a non-nil override replaces the platform
+// verifier (used to show the set rejects degenerate implementations).
+func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]string, int) {
 	t.Helper()
 	dec := func(s string) []byte {
 		b, err := base64.RawURLEncoding.DecodeString(s)
@@ -60,9 +69,13 @@ func muInteropRun(t *testing.T, c muinterop.Case) ([]string, int) {
 		modules[m] = true
 	}
 	effect := &countingEffect{}
+	var verifier MUVerifier = platform
+	if override != nil {
+		verifier = override
+	}
 	r := NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: c.Pins.Owner, RoomScope: c.Pins.RoomScope, Modules: modules, Paused: map[string]bool{},
 		RootRevocations: func() ([]MURevocation, error) { return nil, nil }},
-		platform, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: c.Pins.AgentKey}, owners: c.Pins.RegistryOwners},
+		verifier, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: c.Pins.AgentKey}, owners: c.Pins.RegistryOwners},
 		map[string]MUEffect{"work.assign": effect, "account.manage": effect})
 	var got []string
 	for _, s := range c.Steps {
@@ -161,5 +174,57 @@ func TestMUInteropFresh(t *testing.T) {
 	for _, c := range cases {
 		got, calls := muInteropRun(t, c)
 		t.Logf("%s: got %v effects %d", c.ID, got, calls)
+	}
+}
+
+type muRefuseAll struct{}
+
+func (muRefuseAll) Verify(MUEvent, time.Time) (MUDecision, error) { return MUDecision{}, ErrMUState }
+
+// muAcceptAll admits every event without verifying anything, as an
+// in-scope work.assign under an until_expiry grant with a fresh nonce.
+type muAcceptAll struct {
+	pins muinterop.Pins
+	n    int
+}
+
+func (a *muAcceptAll) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
+	a.n++
+	nonce := fmt.Sprintf("%s-%d", ev.EventID, a.n)
+	return MUDecision{GrantRoot: a.pins.GrantRoot, GrantID: "sha256:any", Use: "until_expiry", Author: a.pins.AgentKey, Audience: a.pins.Audience, Nonce: nonce,
+		Action: "work.assign", TargetKind: "product", TargetID: "swarma-platform", Arguments: map[string]string{"module": "swarma-keyvault", "title": "t"},
+		Expires: now.Add(time.Minute), RequestHash: sha256.Sum256([]byte(nonce))}, nil
+}
+
+// Claim: the committed set rejects degenerate implementations. A receiver
+// whose verifier refuses everything fails every positive step, and one
+// whose verifier accepts everything fails every negative step that expects
+// a platform, text or grant-selection refusal. Limit: this shows the set
+// discriminates; it is not a mutation test of the real receiver.
+func TestMUInteropRejectsDegenerate(t *testing.T) {
+	positives, refuseMisses, verifierNegatives, acceptMisses := 0, 0, 0, 0
+	for _, c := range loadMUInterop(t) {
+		refused, _ := muInteropRunWith(t, c, muRefuseAll{})
+		accepted, _ := muInteropRunWith(t, c, &muAcceptAll{pins: c.Pins})
+		for i, s := range c.Steps {
+			switch {
+			case s.Expected == "succeeded":
+				positives++
+				if refused[i] != "succeeded" {
+					refuseMisses++
+				}
+			case !strings.HasPrefix(s.Expected, "mu-") || s.Expected == "mu-no-applicable-grant" || s.Expected == "mu-ambiguous-grant" || s.Expected == "mu-request-text-refused":
+				verifierNegatives++
+				if accepted[i] != s.Expected {
+					acceptMisses++
+				}
+			}
+		}
+	}
+	if positives == 0 || refuseMisses != positives {
+		t.Errorf("refuse-all passes %d of %d positive steps", positives-refuseMisses, positives)
+	}
+	if verifierNegatives == 0 || acceptMisses != verifierNegatives {
+		t.Errorf("accept-all passes %d of %d verifier-refusal steps", verifierNegatives-acceptMisses, verifierNegatives)
 	}
 }

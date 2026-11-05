@@ -109,7 +109,7 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 3. Apply the text rule (§2.2) to the delivered text. A violation refuses with `mu-request-text-refused`.
 4. Load the newest publisher snapshot. A Linux author also needs its registry evidence (D1).
 5. Call `VerifyMessage` (platform verifier) with the protected facts in §5.1. Any refusal returns the platform code.
-6. Select the grant: among the pinned grants, take those whose subject equals the author and which cover the action and target. None refuses with `mu-no-applicable-grant`; more than one refuses with `mu-ambiguous-grant` (an interim rule; grant selection is structural).
+6. Select the grant: among the pinned grants, take those whose subject equals the author and which list the action and the exact target id, regardless of their validity (r5). None refuses with `mu-no-applicable-grant`; more than one refuses with `mu-ambiguous-grant`. This is an interim rule. Selection is structural, so an expired grant pinned beside its renewal is ambiguous; unpin the old one.
 7. Call `Authorize([grant], {key,action,target})`. `Plan.use` gives the policy.
 8. Receiver checks:
    - audience and grant root equal the binding (`mu-audience-mismatch`);
@@ -130,6 +130,10 @@ Platform codes are returned unchanged from the pinned verifier. The vectors exer
 | Code | Meaning in the vectors |
 | --- | --- |
 | `envelope_signature_invalid` | the request signature does not verify under the author key |
+| `envelope_malformed` | the request breaks a structural rule, for example `exp - iat` over 120 s |
+| `audience_mismatch` | the request names another audience |
+| `message_room_mismatch` | the request names another room than the delivering room |
+| `message_recipient_mismatch` | the request is addressed to another recipient |
 | `expired` | the grant interval has ended |
 | `revoked` | a fresh snapshot revokes the grant or the agent key |
 | `key_binding_unavailable` | required evidence is missing or stale: no binding for the grant issuer, attestation not served, snapshot over 60 s |

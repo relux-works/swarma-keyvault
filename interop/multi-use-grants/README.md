@@ -51,7 +51,14 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-wrong-key` | signature by another key | `envelope_signature_invalid` |
 | `M-N-wrong-action` | action not in the grant | `mu-no-applicable-grant` |
 | `M-N-wrong-target` | target not in the grant | `mu-no-applicable-grant` |
-| `M-N-account-other-owner` | account held by another owner | `mu-request-out-of-owner-scope` |
+| `M-P-account-own-owner` | none: `account.manage` on an account the owner holds | `succeeded` |
+| `M-N-account-other-owner` | only the account argument: another owner's account | `mu-request-out-of-owner-scope` |
+| `M-N-audience-mismatch` | request audience differs | `audience_mismatch` |
+| `M-N-room-mismatch` | request room differs from the delivering room | `message_room_mismatch` |
+| `M-N-recipient-mismatch` | request recipient differs | `message_recipient_mismatch` |
+| `M-N-lifetime-over-120s` | `exp - iat` is 121 s | `envelope_malformed` |
+| `M-N-ambiguous-grant` | a second pinned grant also covers the request | `mu-ambiguous-grant` |
+| `M-N-text-rule-before-hash` | text breaks the rule and the hash | `mu-request-text-refused` (the text rule runs first) |
 | `M-N-expired` | grant interval ended | `expired` |
 | `M-N-revoked` | fresh snapshot revokes the grant | `revoked` |
 | `M-N-foreign-domain` | grant from another root | `key_binding_unavailable` |
@@ -80,7 +87,9 @@ that every positive control exists and succeeds.
 Another implementation runs the same files and must give the same verdict per
 step. When it disagrees, the spec decides.
 
-The check has known-violation controls. Each of the following makes it fail:
+Committed: `TestMUInteropRejectsDegenerate` shows that the set rejects degenerate implementations. A verifier that refuses everything fails every positive step; one that accepts everything fails every negative step that expects a verifier, text or grant-selection refusal.
+
+Not committed, run by hand against the real code: these known-violation plants each make `TestMUInteropVectors` fail at the intended case, and their logs are kept in the task scratch:
 - edited event text in a positive case;
 - an unknown member in a case file;
 - the receiver's nonce check switched off;
