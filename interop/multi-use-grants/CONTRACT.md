@@ -1,6 +1,6 @@
-# Multi-use owner grants: cross-platform interop contract (r8, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r8.1, draft for agreement)
 
-Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7, which both sides agreed, states which snapshots count as verified for the revocation duties and adds three vectors. r8 admits an Ed25519 revocation publisher (profile `grant-revocation-2`) and adds the P2 vector family. Every changed rule is marked "(r5)", "(r6)", "(r7)" or "(r8)". Linux builds start from r6 once both sides accept it.
+Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7, which both sides agreed, states which snapshots count as verified for the revocation duties and adds three vectors. r8 admits an Ed25519 revocation publisher (profile `grant-revocation-2`) and adds the P2 vector family; r8.1 answers the other side's review of r8 (entry points, consumer scope, Linux-author vectors, role distinctness, publisher rotation). Every changed rule is marked "(r5)", "(r6)", "(r7)" or "(r8)". r8 is agreed only when both sides record it.
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
 
@@ -91,7 +91,18 @@ Domain tags, exactly as `record.Tag` gives them (r5):
 | `grant-revocation-1` (publisher) | owner grant root | P-256 | ≤ 366 d | `{profile:"grant-revocation-1",domain:<grant root>}` | n/a |
 | (r8) `grant-revocation-2` (publisher) | owner grant root | Ed25519 | ≤ 366 d | `{profile:"grant-revocation-2",domain:<grant root>}` | n/a |
 
-(r8) Publisher profiles. A receiver pins exactly one publisher: its key and its attestation. The profile fixes the algorithm, `grant-revocation-1` with a P-256 key and `grant-revocation-2` with an Ed25519 key; any other pair, or an unknown profile, refuses. Only the owner grant root appoints a publisher: an attestation issued or signed by any other key, such as a signing-service root, is refused. The owner signs the attestation under Touch ID at a sitting (`mu-issue --kind publisher` or `publisher-ed25519`). The signing service may hold an Ed25519 publisher key but cannot appoint one. For a Mac author these refusals surface as `key_binding_invalid` from `VerifyMessage`, because the platform resolves the publisher during agent-attestation intake; through Authorize they map to `revocation_invalid`. Everything in §2.4 applies to both profiles. Custody of an Ed25519 publisher key is a deployment qualification, outside this contract.
+(r8) Publisher profiles.
+- A receiver pins exactly one publisher: its key and its attestation. The profile fixes the algorithm: `grant-revocation-1` with a P-256 key, `grant-revocation-2` with an Ed25519 key. Any other pair, or an unknown profile, refuses; no profile is inferred from the key.
+- Only the owner grant root appoints a publisher. An attestation issued or signed by any other key, such as a signing-service root, is refused. The owner signs it under Touch ID at a sitting (`mu-issue --kind publisher` or `publisher-ed25519`). A signing service may hold an Ed25519 publisher key but cannot appoint one.
+- The publisher key differs from each of these six roles: the grant root, the operator root, `service_root.key`, `agent_revocation_root.key`, the commit-signing key and the enrollment publisher (the platform spec checks this list). For a Mac author no service or registry root is pinned, so for that receiver the distinctness is a provisioning duty.
+- Entry points and codes. A receiver that passes the pinned publisher to the platform on each request returns these codes:
+  - for a Mac author, `key_binding_invalid` from `VerifyMessage`, because the platform resolves the publisher during agent-attestation intake;
+  - for a Linux author, `revocation_invalid`, because Authorize resolves the publisher and its G7 gate maps the binding refusal.
+
+  A receiver that validates the pinned publisher attestation when it loads its configuration meets the vectors with an invalid publisher attestation by refusing that configuration, before any request or effect. That refusal counts as the expected verdict for those steps. A rig must not translate one entry point's refusal into the other's code.
+- (r8.1) Consumer scope. A receiver implements r8 only when it pins a platform verifier with profile 2 (§0) and its own publisher gate admits the profile the verified attestation declares. A receiver that does not fails closed on every profile-2 input. r8 qualifies no such receiver.
+- (r8.1) Rotation. Pinning a different publisher on an existing journal is not defined by this contract. It is blocked until the receiver re-initialises under a new state epoch and re-applies the owner-root revocations, as the restore rule in §2.4 requires.
+- Everything in §2.4 applies to both profiles. Custody of an Ed25519 publisher key is a deployment qualification, outside this contract.
 
 ### 2.4 revocation/1
 

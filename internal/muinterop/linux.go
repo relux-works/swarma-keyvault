@@ -2,6 +2,7 @@ package muinterop
 
 import (
 	"crypto/ed25519"
+	"crypto/x509"
 	"time"
 
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
@@ -219,6 +220,57 @@ func LinuxFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Profile 2 (r8): the same Linux grant issued under an Ed25519 publisher
+	// appointed by the owner grant root, and an Ed25519 publisher attestation
+	// whose subject is the agent revocation root (a collision the verifier
+	// refuses).
+	pub2, err := Ed25519("publisher-ed25519")
+	if err != nil {
+		return nil, err
+	}
+	edAttest := func(k *EdKey) ([]byte, error) {
+		spki, err := x509.MarshalPKIXPublicKey(k.Public)
+		if err != nil {
+			return nil, err
+		}
+		p, _, err := mugrant.BuildEd25519PublisherAttestation(w.root.ID, spki, T0.Add(-60*24*time.Hour), T0.Add(300*24*time.Hour))
+		if err != nil {
+			return nil, err
+		}
+		return w.root.Sign(p)
+	}
+	pub2Att, err := edAttest(pub2)
+	if err != nil {
+		return nil, err
+	}
+	collidingAtt, err := edAttest(agentRev)
+	if err != nil {
+		return nil, err
+	}
+	nonce2 := hexDigest([]byte("linux grant nonce profile-2"))
+	g2, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: w.root.ID, Subject: agent.ID, SubjectMXID: linuxMXID, SubjectAttestation: att,
+		ServiceRoot: service.ID, SubjectRegistry: &mugrant.RegistryIdentity{MXID: linuxMXID, UID: gen.UID, RegistrationNumber: gen.RegistrationNumber}, IssuedAt: T0.Add(-time.Hour),
+		PublisherAttestation: pub2Att, Audience: audience, Entries: assign,
+		NotBefore: T0.Add(-time.Hour), Expires: T0.Add(30 * 24 * time.Hour), Use: mugrant.UseUntilExpiry, Nonce: []byte(nonce2[:16])})
+	if err != nil {
+		return nil, err
+	}
+	grant2, err := w.root.Sign(g2.Plan())
+	if err != nil {
+		return nil, err
+	}
+	grant2ID, err := contentID(grant2)
+	if err != nil {
+		return nil, err
+	}
+	pub2Fresh, err := snap(pub2, T0.Add(-5*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
+	pub2Revoking, err := snap(pub2, T0.Add(-5*time.Second), []mugrant.SnapshotEntry{{Kind: "record", ID: grant2ID, From: stamp(T0.Add(-time.Minute))}})
+	if err != nil {
+		return nil, err
+	}
 	pins := Pins{GrantRoot: w.root.ID, Audience: audience, PublisherKey: w.publisher.ID, Room: room, ReceiverMXID: receiverMXID, SenderMXID: linuxMXID,
 		Owner: "owner:alexis", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"}, RegistryOwners: map[string]string{},
 		Linux: &LinuxPins{ServiceRoot: service.ID, AgentRevocationKey: agentRev.ID, AgentMXID: linuxMXID, AgentKey: agent.ID, UID: gen.UID, RegistrationNumber: gen.RegistrationNumber}}
@@ -299,6 +351,29 @@ func LinuxFamily() ([]Case, error) {
 			Pins: pins, Records: records, Registry: registry(served, gen), Events: []Event{ev("$l-accept", rAccept, text)},
 			Steps: []Step{{Event: "$l-accept", Now: now, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "succeeded"},
 				{Event: "$l-accept", Now: later, Snapshot: B64(pubFresh), AgentSnapshot: B64(agentFresh), Expected: "mu-request-nonce-already-held"}}},
+		// Linux author under a grant-revocation-2 publisher (r8): two Ed25519
+		// snapshot signers, the publisher and the agent revocation root.
+		func() Case {
+			c := one("P2-L-P-accept", "A Linux agent request under a grant whose revocation publisher is an Ed25519 key appointed by the owner grant root is accepted: the publisher and the agent revocation root each sign a fresh Ed25519 snapshot.", "",
+				registry(served, gen), linuxMXID, ev("$p2l-accept", rAccept, text), now, pub2Fresh, agentFresh, "succeeded")
+			c.Pins.PublisherKey = pub2.ID
+			c.Records = Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(pub2Att)}
+			return c
+		}(),
+		func() Case {
+			c := one("P2-L-N-revoked", "A fresh Ed25519 publisher snapshot that lists the Linux grant revokes it, while the agent revocation snapshot is clean.", "P2-L-P-accept",
+				registry(served, gen), linuxMXID, ev("$p2l-revoked", rAccept, text), now, pub2Revoking, agentFresh, "revoked")
+			c.Pins.PublisherKey = pub2.ID
+			c.Records = Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(pub2Att)}
+			return c
+		}(),
+		func() Case {
+			c := one("P2-L-N-publisher-is-agent-revocation-root", "A root-signed grant-revocation-2 attestation whose subject is the agent revocation root does not appoint a publisher: the publisher key must differ from every pinned role. Entry point: for a Linux author the publisher is resolved in Authorize, whose G7 gate maps the binding refusal to revocation_invalid.", "P2-L-P-accept",
+				registry(served, gen), linuxMXID, ev("$p2l-collide", rAccept, text), now, agentFresh, agentFresh, "revocation_invalid")
+			c.Pins.PublisherKey = agentRev.ID
+			c.Records = Records{Grants: []string{B64(grant2)}, PublisherAttestation: B64(collidingAtt)}
+			return c
+		}(),
 	}, nil
 }
 

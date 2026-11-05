@@ -77,6 +77,33 @@ func PublisherEd25519Family() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The Ed25519 body re-bound to grant-revocation-1, and to an unknown
+	// profile, both signed by the root.
+	rebound := func(profile string) ([]byte, error) {
+		b, err := recordParse(pp.Body())
+		if err != nil {
+			return nil, err
+		}
+		m := b.(map[string]any)
+		m["binding"] = map[string]any{"profile": profile, "domain": w.root.ID}
+		raw, err := recordCanonical(m)
+		if err != nil {
+			return nil, err
+		}
+		p, err := mugrant.Prepare("attestation/1", w.root.ID, raw)
+		if err != nil {
+			return nil, err
+		}
+		return w.root.Sign(p)
+	}
+	profile1Ed, err := rebound("grant-revocation-1")
+	if err != nil {
+		return nil, err
+	}
+	unknownProfile, err := rebound("grant-revocation-3")
+	if err != nil {
+		return nil, err
+	}
 	// The grant-revocation-2 attestation issued and signed by the signing
 	// service root instead of the owner grant root.
 	svcBody, err := recordParse(pp.Body())
@@ -185,6 +212,10 @@ func PublisherEd25519Family() ([]Case, error) {
 			p256Pins, records(mixedAtt), ev("$p2-mixed", rAccept), p256Fresh, "key_binding_invalid"),
 		one("P2-N-issued-by-service-root", "A grant-revocation-2 attestation issued and signed by the signing-service root instead of the owner grant root does not appoint a publisher; it is refused at the publisher binding gate. Entry point as P2-N-snapshot-foreign-signer.", "P2-P-accept",
 			pins, records(serviceAtt), ev("$p2-service", rAccept), fresh, "key_binding_invalid"),
+		one("P2-N-profile-1-ed25519-subject", "A root-signed publisher attestation of profile grant-revocation-1 over an Ed25519 key is refused at the publisher binding gate: profile 1 requires P-256. Entry point as P2-N-snapshot-foreign-signer.", "P2-P-accept",
+			pins, records(profile1Ed), ev("$p2-reverse", rAccept), fresh, "key_binding_invalid"),
+		one("P2-N-unknown-profile", "A root-signed publisher attestation of an unknown profile is refused at the publisher binding gate, with no fallback to either known profile. Entry point as P2-N-snapshot-foreign-signer.", "P2-P-accept",
+			pins, records(unknownProfile), ev("$p2-unknown", rAccept), fresh, "key_binding_invalid"),
 		{Format: Format, ID: "P2-N-snapshot-older", Claim: "An Ed25519 publisher snapshot older than one already accepted refuses as rollback, even though it is under 60 s old and drops nothing.", PositiveControl: "P2-P-accept",
 			Pins: pins, Records: records(pubAtt), Events: []Event{ev("$p2-first", rAccept), ev("$p2-second", rSecond)},
 			Steps: []Step{{Event: "$p2-first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$p2-second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},
