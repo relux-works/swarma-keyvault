@@ -45,9 +45,29 @@ type MUDecision struct {
 	// decision used, by signer key (the publisher, and the agent revocation
 	// root for a Linux author). issued_at is the per-signer sequence.
 	SnapshotMarks map[string]time.Time
-	Revocations   []MURevocation
-	Expires       time.Time
-	RequestHash   [32]byte
+	// AgentRevocationKey and AgentRevocations are the agent revocation
+	// root's verified snapshot for a Linux author (empty for a Mac author).
+	AgentRevocationKey string
+	AgentRevocations   []MURevocation
+	Revocations        []MURevocation
+	Expires            time.Time
+	RequestHash        [32]byte
+}
+
+// MUSnapshot is one revocation snapshot whose signature by Signer has been
+// verified; its age is not judged here.
+type MUSnapshot struct {
+	Signer   string
+	IssuedAt time.Time
+	Entries  []MURevocation
+}
+
+// MUSnapshotSource is implemented by a verifier that can hand the receiver
+// every verified snapshot it would use for an event, before and whatever the
+// outcome of verification, so a snapshot that refuses a request is still
+// remembered (interop contract §2.4).
+type MUSnapshotSource interface {
+	VerifiedSnapshots(ev MUEvent) ([]MUSnapshot, error)
 }
 
 // MUVerifier is the seam to the platform verifier (ENV v-next): it verifies the
@@ -175,6 +195,7 @@ func (r *MUReceiver) Handle(ctx context.Context, ev MUEvent) (*MUOutcome, error)
 	if r == nil || r.verifier == nil || r.registry == nil || ctx == nil || ctx.Err() != nil {
 		return nil, ErrMUState
 	}
+	r.absorbSnapshots(ctx, ev)
 	d, err := r.check(ev, r.now())
 	if err != nil {
 		return nil, err
@@ -222,6 +243,34 @@ func (r *MUReceiver) Handle(ctx context.Context, ev MUEvent) (*MUOutcome, error)
 // publisher fails closed; a snapshot that drops anything in the union is a
 // rollback; the snapshot's own entries then join the union. The union only
 // grows and survives restarts.
+// absorbSnapshots records the entries and issued_at of every verified
+// snapshot for this event before verification, so that a snapshot which
+// refuses the request is not forgotten. Errors are left to the checks that
+// follow, which fail closed.
+func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
+	src, ok := r.verifier.(MUSnapshotSource)
+	if !ok {
+		return
+	}
+	snaps, err := src.VerifiedSnapshots(ev)
+	if err != nil || len(snaps) == 0 {
+		return
+	}
+	s, err := r.open(ctx, r.config.State, r.config.Binding)
+	if err != nil {
+		return
+	}
+	defer s.close()
+	for _, sn := range snaps {
+		if sn.Signer == MUOwnerRootSigner || s.absorbSigned(sn.Signer, sn.Entries) != nil {
+			return
+		}
+		if s.markSnapshots(map[string]time.Time{sn.Signer: sn.IssuedAt}) != nil {
+			return
+		}
+	}
+}
+
 func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 	var root []MURevocation
 	if r.config.RootRevocations != nil {
@@ -230,7 +279,9 @@ func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 			return ErrMUState
 		}
 	}
-	if err := s.absorbRevocations(root); err != nil {
+	// Owner-root entries form their own set: they revoke, but a publisher
+	// that does not mirror them is not a rollback (contract §2.4).
+	if err := s.absorbSigned(MUOwnerRootSigner, root); err != nil {
 		return ErrMUState
 	}
 	for _, e := range []MURevocation{{"record", d.GrantID}, {"key", d.Author}, {"record", d.AuthorAttestation}} {
@@ -248,17 +299,30 @@ func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 			return ErrMURollback
 		}
 	}
-	present := map[MURevocation]bool{}
-	for _, e := range d.Revocations {
-		present[e] = true
+	// Rollback is judged per signer: each snapshot must still list every
+	// entry its own signer published before.
+	signed := map[string][]MURevocation{}
+	if d.PublisherKey != "" {
+		signed[d.PublisherKey] = d.Revocations
 	}
-	for e := range s.revoked {
-		if !present[e] {
-			return ErrMURollback
+	if d.AgentRevocationKey != "" {
+		signed[d.AgentRevocationKey] = d.AgentRevocations
+	}
+	for signer, entries := range signed {
+		present := map[MURevocation]bool{}
+		for _, e := range entries {
+			present[e] = true
+		}
+		for e := range s.unions[signer] {
+			if !present[e] {
+				return ErrMURollback
+			}
 		}
 	}
-	if err := s.absorbRevocations(d.Revocations); err != nil {
-		return err
+	for signer, entries := range signed {
+		if err := s.absorbSigned(signer, entries); err != nil {
+			return err
+		}
 	}
 	return s.markSnapshots(d.SnapshotMarks)
 }

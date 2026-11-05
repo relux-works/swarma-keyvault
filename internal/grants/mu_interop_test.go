@@ -232,7 +232,11 @@ type muAcceptAll struct {
 func (a *muAcceptAll) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	a.n++
 	nonce := fmt.Sprintf("%s-%d", ev.EventID, a.n)
-	return MUDecision{GrantRoot: a.pins.GrantRoot, GrantID: "sha256:any", Use: "until_expiry", Author: a.pins.AgentKey, Audience: a.pins.Audience, Nonce: nonce,
+	author := a.pins.AgentKey
+	if a.pins.Linux != nil {
+		author = a.pins.Linux.AgentKey
+	}
+	return MUDecision{GrantRoot: a.pins.GrantRoot, GrantID: "sha256:any", Use: "until_expiry", Author: author, Audience: a.pins.Audience, Nonce: nonce,
 		Action: "work.assign", TargetKind: "product", TargetID: "swarma-platform", Arguments: map[string]string{"module": "swarma-keyvault", "title": "t"},
 		Expires: now.Add(time.Minute), RequestHash: sha256.Sum256([]byte(nonce))}, nil
 }

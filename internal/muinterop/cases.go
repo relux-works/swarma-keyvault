@@ -201,6 +201,16 @@ func MacFamily() ([]Case, error) {
 	}
 	rootRecords := records(gCurrent)
 	rootRecords.RootRevocations = []string{B64(rootRev)}
+	unrelatedP, err := mugrant.BuildSnapshot(w.root.ID, T0.Add(-10*time.Minute), []mugrant.SnapshotEntry{{Kind: "record", ID: "sha256:" + hexDigest([]byte("unrelated root record")), From: stamp(T0.Add(-10 * time.Minute))}})
+	if err != nil {
+		return nil, err
+	}
+	unrelated, err := w.root.Sign(unrelatedP)
+	if err != nil {
+		return nil, err
+	}
+	unmirrored := records(gCurrent)
+	unmirrored.RootRevocations = []string{B64(unrelated)}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -246,6 +256,14 @@ func MacFamily() ([]Case, error) {
 		{Format: Format, ID: "M-P-until-expiry-second-use", Claim: "An until_expiry grant admits a second request with a new nonce.", Pins: pins, Records: records(gCurrent),
 			Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps:  []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "succeeded"}}},
+		{Format: Format, ID: "M-N-revoked-then-older", Claim: "A snapshot that refused a request as revoked is remembered: a later, older snapshot without the entry does not let the grant run.", PositiveControl: "M-P-until-expiry-second-use",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(revoking), Expected: "revoked"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-grant-revoked"}}},
+		{Format: Format, ID: "M-N-revoked-then-equal", Claim: "A snapshot that refused a request as revoked is remembered: a snapshot with the same issued_at but without the entry does not let the grant run.", PositiveControl: "M-P-until-expiry-second-use",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(revoking), Expected: "revoked"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-grant-revoked"}}},
+		one("M-P-root-revocation-unmirrored", "An owner-root revocation of an unrelated record that the publisher does not mirror is kept apart and does not make the request a rollback.", "",
+			unmirrored, ev("$unmirrored", rAccept, text), fresh, "succeeded"),
 		{Format: Format, ID: "M-N-snapshot-older", Claim: "A publisher snapshot older than one already accepted refuses as rollback, even though it is under 60 s old and drops nothing.", PositiveControl: "M-P-until-expiry-second-use",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},

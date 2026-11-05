@@ -75,6 +75,9 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 | `M-N-use-refill` | `once` grant, second request | `succeeded`, then `mu-grant-use-already-held` |
 | `M-N-snapshot-rollback` | newer snapshot drops a held revocation | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `M-N-revoked-then-older` | revoking snapshot, then an older one without the entry | `revoked`, then `mu-grant-revoked` |
+| `M-N-revoked-then-equal` | revoking snapshot, then one with the same `issued_at` without the entry | `revoked`, then `mu-grant-revoked` |
+| `M-P-root-revocation-unmirrored` | an unrelated owner-root revocation the publisher does not mirror | `succeeded` |
 | `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
 
@@ -95,6 +98,10 @@ Linux-authored (Ed25519) family:
 | `L-N-agent-revoked` | fresh agent revocation snapshot revokes the key | `revoked` |
 | `L-N-stale-agent-snapshot` | agent revocation snapshot 61 s old | `key_binding_unavailable` |
 | `L-N-sender-not-registered` | sender MXID without a registry identity | `mu-sender-not-attested` |
+| `L-N-agent-revoked-then-older` | revoking agent snapshot, then an older one without the entry | `revoked`, then `mu-grant-revoked` |
+| `L-N-agent-revoked-then-equal` | revoking agent snapshot, then one with the same `issued_at` without the entry | `revoked`, then `mu-grant-revoked` |
+| `L-N-registry-uid-mismatch` | the registry identity's uid differs from the active generation | `key_binding_unavailable` |
+| `L-N-cross-algorithm` | the Linux identity names a P-256 Mac key and its `mac-se-1` attestation | `key_binding_invalid` |
 | `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
 ## Checking

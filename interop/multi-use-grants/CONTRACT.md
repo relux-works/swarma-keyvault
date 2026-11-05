@@ -1,6 +1,6 @@
-# Multi-use owner grants: cross-platform interop contract (r5, draft for agreement)
+# Multi-use owner grants: cross-platform interop contract (r6, draft for agreement)
 
-Status: r5 revises r3, which both sides agreed. It makes the contract exact after review. Every changed rule is marked "(r5)". Linux builds start from r5 once both sides accept it.
+Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. Every changed rule is marked "(r5)" or "(r6)". Linux builds start from r6 once both sides accept it.
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
 
@@ -98,10 +98,11 @@ Domain tags, exactly as `record.Tag` gives them (r5):
   - a snapshot is admitted only when `issued_at` is not in the future and the age is at most 60 s, inclusive;
   - without such a snapshot every request refuses; there is no grace period.
 - Entries are `{kind,id,from}`.
-- Receivers keep a durable, monotonic union of all revocations. A snapshot that drops a known entry is refused as rollback.
+- (r6) Every snapshot a receiver verifies for an event is recorded before the request is judged, whatever the outcome. Its entries join a durable, monotonic union kept per signer: the publisher, and for a Linux author the agent revocation root. Its `issued_at` raises that signer's high-water mark. A snapshot that refuses a request as `revoked` is therefore remembered. A later snapshot without the entry, whether older or with the same `issued_at`, cannot let the grant or key act (`mu-grant-revoked`).
+- A snapshot that drops an entry its own signer published before is refused as rollback.
 - `issued_at` is the per-signer sequence of snapshots (no extra member). Each receiver keeps, durably, the newest `issued_at` it has accepted per signer. A snapshot older than that refuses as rollback with `mu-revocation-snapshot-rollback`, even when it is fresh and drops nothing; an equal `issued_at` is admitted.
 - A receiver restored from a backup re-initialises its journal under a new state epoch and re-applies the owner-root revocations before it admits any request. A restored journal can lack revocations, and no local mark detects that.
-- A revocation signed by the owner root wins at any age. Owner-root revocations reach each receiver out of band, into its protected configuration; they never pass through the publisher, so a publisher that keeps signing fresh snapshots without an entry cannot hide one. The issuer prepares them with `mu-root-revocation-prepare`, and the owner signs them under Touch ID.
+- A revocation signed by the owner root wins at any age. (r6) Owner-root entries form their own set, apart from every signer's union. A publisher is not required to mirror them, and a publisher snapshot without them is not a rollback. Owner-root revocations reach each receiver out of band, into its protected configuration; they never pass through the publisher, so a publisher that keeps signing fresh snapshots without an entry cannot hide one. The issuer prepares them with `mu-root-revocation-prepare`, and the owner signs them under Touch ID.
 - A revoked publisher fails closed.
 
 ## 3. Receiver pipeline (both platforms, in this order) (r5)
