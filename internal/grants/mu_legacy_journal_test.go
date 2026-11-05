@@ -1,6 +1,7 @@
 package grants
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -116,5 +117,40 @@ func TestMURevocationsRefuseUnpinnedSigner(t *testing.T) {
 	}
 	if len(s.unions) != unions || len(s.highWater) != marks || s.unions["ed25519:new"] != nil {
 		t.Fatal("refusal changed state", s.unions, s.highWater)
+	}
+}
+
+// muSnapshotsOnly hands the receiver fixed verified snapshots; Verify is not
+// reached in this test.
+type muSnapshotsOnly struct{ snaps []MUSnapshot }
+
+func (m muSnapshotsOnly) Verify(MUEvent, time.Time) (MUDecision, error) {
+	return MUDecision{}, ErrMUState
+}
+func (m muSnapshotsOnly) VerifiedSnapshots(MUEvent) ([]MUSnapshot, error) { return m.snaps, nil }
+
+// Claim: pre-verification recording writes nothing when two of the verified
+// snapshots share one signer key (the publisher doubling as the agent
+// revocation root); the decision refuses that pair, so no union or mark is
+// left behind. Positive control: two distinct signers are both recorded.
+func TestMUAbsorbSkipsSharedSignerKey(t *testing.T) {
+	c, b := muFixture(t)
+	at := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	entry := []MURevocation{{"record", "revoked-id"}}
+	run := func(snaps ...MUSnapshot) *muState {
+		r := NewMUReceiver(MUReceiverConfig{State: c, Binding: b}, muSnapshotsOnly{snaps}, nil, nil)
+		r.now = func() time.Time { return at.Add(time.Minute) }
+		r.absorbSnapshots(context.Background(), MUEvent{})
+		return muOpen(t, c, b)
+	}
+	s := run(MUSnapshot{Signer: "ed25519:shared", IssuedAt: at, Entries: entry}, MUSnapshot{Signer: "ed25519:shared", IssuedAt: at})
+	if len(s.unions) != 0 || len(s.highWater) != 0 || len(s.revoked) != 0 {
+		t.Fatal("shared signer key recorded", s.unions, s.highWater)
+	}
+	s.close()
+	s = run(MUSnapshot{Signer: "ed25519:publisher", IssuedAt: at, Entries: entry}, MUSnapshot{Signer: "ed25519:agent-revocation", IssuedAt: at})
+	defer s.close()
+	if !s.unions["ed25519:publisher"][entry[0]] || !s.highWater["ed25519:agent-revocation"].Equal(at) {
+		t.Fatal("distinct signers not recorded", s.unions, s.highWater)
 	}
 }

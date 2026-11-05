@@ -290,6 +290,16 @@ func (r *MUReceiver) absorbSnapshots(ctx context.Context, ev MUEvent) {
 	if r.foreignSigner(s) {
 		return
 	}
+	// One key signing two of the snapshots (publisher and agent revocation
+	// root) would merge two signers; the decision refuses that pair, so
+	// nothing is recorded for it either.
+	seen := map[string]bool{}
+	for _, sn := range snaps {
+		if seen[sn.Signer] {
+			return
+		}
+		seen[sn.Signer] = true
+	}
 	now := r.now()
 	for _, sn := range snaps {
 		if sn.Signer == MUOwnerRootSigner || r.foreignSigner(s, sn.Signer) || s.absorbSigned(sn.Signer, sn.Entries) != nil {
