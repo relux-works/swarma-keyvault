@@ -89,6 +89,9 @@ type Records struct {
 	Grants               []string `json:"grants"`
 	AgentAttestation     string   `json:"agent_attestation"`
 	PublisherAttestation string   `json:"publisher_attestation"`
+	// RootRevocations are owner-root-signed revocation/1 snapshots the
+	// receiver has in its protected configuration (never via the publisher).
+	RootRevocations []string `json:"root_revocations,omitempty"`
 }
 
 // Event is one delivered a2a event: the exact envelope and text bytes.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func muWithSnapshot(d MUDecision, publisher string, entries ...MURevocation) MUDecision {
@@ -92,3 +93,41 @@ func TestMURevocationPublisherRevoked(t *testing.T) {
 }
 
 func nil2ctx() context.Context { return context.Background() }
+
+// Claim (contract §2.4, high-water): the newest accepted snapshot issued_at
+// per signer is durable. An older snapshot refuses as rollback in the same
+// receiver and in a receiver reopened on the same journal; an equal issued_at
+// is admitted, and so is a newer one.
+func TestMURevocationHighWater(t *testing.T) {
+	g := newMURig(t)
+	at := time.Date(2026, 11, 5, 18, 0, 0, 0, time.UTC)
+	mark := func(d MUDecision, t time.Time) MUDecision {
+		d.SnapshotMarks = map[string]time.Time{"p256:pub": t}
+		return d
+	}
+	g.v.decisions["$1"] = mark(muWithSnapshot(muDecision("grant-U", "h1", "until_expiry"), "p256:pub"), at)
+	if _, err := g.handle("$1"); err != nil {
+		t.Fatal("first snapshot refused", err)
+	}
+	g.v.decisions["$2"] = mark(muWithSnapshot(muDecision("grant-U", "h2", "until_expiry"), "p256:pub"), at)
+	if _, err := g.handle("$2"); err != nil {
+		t.Fatal("equal issued_at refused", err)
+	}
+	g.v.decisions["$3"] = mark(muWithSnapshot(muDecision("grant-U", "h3", "until_expiry"), "p256:pub"), at.Add(-time.Second))
+	if _, err := g.handle("$3"); !errors.Is(err, ErrMURollback) {
+		t.Fatal("older snapshot accepted", err)
+	}
+	fresh := NewMUReceiver(g.r.config, g.v, g.r.registry, g.r.effects)
+	fresh.now = g.r.now
+	g.v.decisions["$4"] = mark(muWithSnapshot(muDecision("grant-U", "h4", "until_expiry"), "p256:pub"), at.Add(-time.Second))
+	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muMeta, EventID: "$4"}); !errors.Is(err, ErrMURollback) {
+		t.Fatal("high-water lost across reopen", err)
+	}
+	g.v.decisions["$5"] = mark(muWithSnapshot(muDecision("grant-U", "h5", "until_expiry"), "p256:pub"), at.Add(time.Second))
+	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muMeta, EventID: "$5"}); err != nil {
+		t.Fatal("newer snapshot refused", err)
+	}
+	if g.effect.calls != 3 {
+		t.Fatal("effects", g.effect.calls)
+	}
+}

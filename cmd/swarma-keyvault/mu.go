@@ -255,7 +255,7 @@ func runMURequestPrepare(args []string, stdout, stderr io.Writer) int {
 }
 
 func runMUAssemble(args []string, stdout, stderr io.Writer) int {
-	usageText := "swarma-keyvault grants mu-assemble --kind grant/1|message/1|attestation/1 --body FILE --key KEY_ID --signature DER_FILE"
+	usageText := "swarma-keyvault grants mu-assemble --kind grant/1|message/1|attestation/1|revocation/1 --body FILE --key KEY_ID --signature DER_FILE"
 	f := flag.NewFlagSet("mu-assemble", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	var kind, body, key, signature onceString
@@ -270,7 +270,7 @@ func runMUAssemble(args []string, stdout, stderr io.Writer) int {
 		}
 		return 2
 	}
-	if f.NArg() != 0 || !kind.set || !body.set || !key.set || !signature.set || body.value == "-" || signature.value == "-" || (kind.value != "grant/1" && kind.value != "message/1" && kind.value != "attestation/1") {
+	if f.NArg() != 0 || !kind.set || !body.set || !key.set || !signature.set || body.value == "-" || signature.value == "-" || (kind.value != "grant/1" && kind.value != "message/1" && kind.value != "attestation/1" && kind.value != "revocation/1") {
 		fmt.Fprintln(stderr, usageText)
 		return 2
 	}

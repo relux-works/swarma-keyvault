@@ -32,7 +32,7 @@ These are test keys only. Never use them for anything else.
 Each file in `cases/` holds one case:
 - `id`, `claim` and, for a negative, `positive_control`;
 - `pins`: the receiver's protected configuration;
-- `records`: the exact signed grants and the agent and publisher attestations, as unpadded base64url bytes;
+- `records`: the exact signed grants, the agent and publisher attestations and any owner-root revocations in the receiver's configuration, as unpadded base64url bytes;
 - `events`: the delivered a2a events, each with the exact envelope and text bytes;
 - `steps`: handled in order against one fresh receiver journal. Each step has a trusted `now`, the publisher snapshot that is current at that time, and the `expected` verdict.
 
@@ -75,6 +75,8 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 | `M-N-use-refill` | `once` grant, second request | `succeeded`, then `mu-grant-use-already-held` |
 | `M-N-snapshot-rollback` | newer snapshot drops a held revocation | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
 
 Linux-authored (Ed25519) family:
 - Mac-issued grants name the Linux agent's Ed25519 key.
@@ -115,7 +117,9 @@ Not committed, run by hand against the real code: these known-violation plants e
 - an unknown member in a case file;
 - the receiver's nonce check switched off;
 - the receiver's text rule switched off;
-- the agent revocation snapshot left out of the receiver's evidence.
+- the agent revocation snapshot left out of the receiver's evidence;
+- the snapshot high-water check switched off;
+- the owner-root revocations ignored.
 
 Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
 signatures. The committed files are the contract.

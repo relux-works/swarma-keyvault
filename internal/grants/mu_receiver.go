@@ -41,9 +41,13 @@ type MUDecision struct {
 	// verifier used (empty when the grant root signed it); Revocations are
 	// that snapshot's complete verified entries.
 	PublisherKey string
-	Revocations  []MURevocation
-	Expires      time.Time
-	RequestHash  [32]byte
+	// SnapshotMarks is the issued_at of each revocation snapshot this
+	// decision used, by signer key (the publisher, and the agent revocation
+	// root for a Linux author). issued_at is the per-signer sequence.
+	SnapshotMarks map[string]time.Time
+	Revocations   []MURevocation
+	Expires       time.Time
+	RequestHash   [32]byte
 }
 
 // MUVerifier is the seam to the platform verifier (ENV v-next): it verifies the
@@ -237,6 +241,13 @@ func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 	if d.PublisherKey != "" && s.revoked[MURevocation{"key", d.PublisherKey}] {
 		return ErrMURevoked
 	}
+	// A snapshot older than one already accepted from the same signer is a
+	// rollback even when its entries look complete (contract §2.4).
+	for k, at := range d.SnapshotMarks {
+		if hw, ok := s.highWater[k]; ok && at.Before(hw) {
+			return ErrMURollback
+		}
+	}
 	present := map[MURevocation]bool{}
 	for _, e := range d.Revocations {
 		present[e] = true
@@ -246,5 +257,8 @@ func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
 			return ErrMURollback
 		}
 	}
-	return s.absorbRevocations(d.Revocations)
+	if err := s.absorbRevocations(d.Revocations); err != nil {
+		return err
+	}
+	return s.markSnapshots(d.SnapshotMarks)
 }

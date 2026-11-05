@@ -104,6 +104,7 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	}
 	revocations := map[string]any{p.config.PublisherKey: map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": snap}}
 	var linuxRoots map[string]any
+	var agentSnapBytes []byte
 	var (
 		authorKey, attID string
 		attestation      []byte
@@ -142,6 +143,7 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 		if err != nil {
 			return MUDecision{}, &ErrMUPlatform{"revocation_unavailable"}
 		}
+		agentSnapBytes = agentSnap
 		revocations[reg.AgentRevocationKey] = map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": agentSnap}
 		linuxRoots = map[string]any{
 			"service_root":          map[string]any{"key": reg.ServiceRoot, "purpose": int64(5)},
@@ -220,11 +222,20 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	if err != nil {
 		return MUDecision{}, ErrMUState
 	}
+	marks := map[string]time.Time{}
+	if marks[p.config.PublisherKey], err = muSnapshotIssuedAt(snap); err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	if agentSnapBytes != nil {
+		if marks[p.config.Registry.AgentRevocationKey], err = muSnapshotIssuedAt(agentSnapBytes); err != nil {
+			return MUDecision{}, ErrMUState
+		}
+	}
 	nonce, _ := body["nonce"].(string)
 	aud, _ := body["aud"].(string)
 	return MUDecision{GrantRoot: p.config.GrantRoot, GrantID: grantID, Use: r.Plan.Use, Author: author, Audience: aud, Nonce: nonce,
 		Action: action, TargetKind: kind, TargetID: id, Arguments: args, AuthorAttestation: attID, Expires: exp,
-		RequestHash: sha256.Sum256(pe.Envelope), PublisherKey: p.config.PublisherKey, Revocations: entries}, nil
+		RequestHash: sha256.Sum256(pe.Envelope), PublisherKey: p.config.PublisherKey, Revocations: entries, SnapshotMarks: marks}, nil
 }
 
 func strOr(v any) string { s, _ := v.(string); return s }
@@ -304,6 +315,21 @@ func muRecordID(raw []byte, kind string) (string, error) {
 
 // muSnapshotEntries returns the entries of a snapshot the verifier already
 // accepted in the same call.
+// muSnapshotIssuedAt returns a verified snapshot's issued_at.
+func muSnapshotIssuedAt(raw []byte) (time.Time, error) {
+	e, err := muParseEnvelope(raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	b, _ := e["body"].(map[string]any)
+	text, _ := b["issued_at"].(string)
+	t, err := time.Parse("2006-01-02T15:04:05Z", text)
+	if err != nil {
+		return time.Time{}, ErrMUState
+	}
+	return t.UTC(), nil
+}
+
 func muSnapshotEntries(raw []byte) ([]MURevocation, error) {
 	e, err := muParseEnvelope(raw)
 	if err != nil {

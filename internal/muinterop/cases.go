@@ -187,6 +187,20 @@ func MacFamily() ([]Case, error) {
 			return nil, err
 		}
 	}
+	older, err := w.snapshot(T0.Add(-30*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
+	rootRevP, err := mugrant.BuildSnapshot(w.root.ID, T0.Add(-10*time.Minute), []mugrant.SnapshotEntry{{Kind: "record", ID: grantID, From: stamp(T0.Add(-10 * time.Minute))}})
+	if err != nil {
+		return nil, err
+	}
+	rootRev, err := w.root.Sign(rootRevP)
+	if err != nil {
+		return nil, err
+	}
+	rootRecords := records(gCurrent)
+	rootRecords.RootRevocations = []string{B64(rootRev)}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -232,6 +246,11 @@ func MacFamily() ([]Case, error) {
 		{Format: Format, ID: "M-P-until-expiry-second-use", Claim: "An until_expiry grant admits a second request with a new nonce.", Pins: pins, Records: records(gCurrent),
 			Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps:  []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "succeeded"}}},
+		{Format: Format, ID: "M-N-snapshot-older", Claim: "A publisher snapshot older than one already accepted refuses as rollback, even though it is under 60 s old and drops nothing.", PositiveControl: "M-P-until-expiry-second-use",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},
+		one("M-N-root-revoked", "An owner-root revocation in the receiver's protected configuration revokes the grant at any age, while the fresh publisher snapshot does not list it.", "M-P-accept",
+			rootRecords, ev("$root-revoked", rAccept, text), fresh, "mu-grant-revoked"),
 		{Format: Format, ID: "M-N-snapshot-rollback", Claim: "A newer publisher snapshot that drops a revocation the receiver already holds refuses as rollback.", PositiveControl: "M-P-accept",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(withEntry), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-revocation-snapshot-rollback"}}},

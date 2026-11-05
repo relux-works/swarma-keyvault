@@ -100,7 +100,13 @@ func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]st
 		verifier = override
 	}
 	r := NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: c.Pins.Owner, RoomScope: c.Pins.RoomScope, Modules: modules, Paused: map[string]bool{},
-		RootRevocations: func() ([]MURevocation, error) { return nil, nil }},
+		RootRevocations: func() ([]MURevocation, error) {
+			var snaps [][]byte
+			for _, r := range c.Records.RootRevocations {
+				snaps = append(snaps, dec(r))
+			}
+			return VerifyRootRevocations(c.Pins.GrantRoot, snaps)
+		}},
 		verifier, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: registryKey}, owners: c.Pins.RegistryOwners},
 		map[string]MUEffect{"work.assign": effect, "account.manage": effect})
 	var got []string

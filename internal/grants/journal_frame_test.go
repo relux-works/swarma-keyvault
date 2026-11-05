@@ -100,7 +100,7 @@ func TestJournalFrameRejectsHeaders(t *testing.T) {
 		{"magic", func(b []byte) { b[0] ^= 1 }, errJournalFrameFormat},
 		{"version", func(b []byte) { binary.BigEndian.PutUint16(b[8:10], 2) }, errJournalFrameFormat},
 		{"kind-zero", func(b []byte) { b[10] = 0 }, errJournalFrameFormat},
-		{"kind-future", func(b []byte) { b[10] = 7 }, errJournalFrameFormat},
+		{"kind-future", func(b []byte) { b[10] = 8 }, errJournalFrameFormat},
 		{"flags", func(b []byte) { b[11] = 1 }, errJournalFrameFormat},
 		{"length-zero", func(b []byte) { binary.BigEndian.PutUint32(b[12:16], 0) }, errJournalFrameLimit},
 		{"length-empty", func(b []byte) { binary.BigEndian.PutUint32(b[12:16], 120) }, errJournalFrameLimit},
@@ -206,7 +206,7 @@ func TestJournalFramePhysicalLimits(t *testing.T) {
 	}{
 		{journalActivation, 108739}, {journalReservation, 276784},
 		{journalDispatchIntent, 1259}, {journalOutcome, 270425},
-		{journalRevocation, 18476}, {journalBlocked, 71},
+		{journalRevocation, 18476}, {journalBlocked, 71}, {journalSnapshotMark, 300},
 	} {
 		body := bytes.Repeat([]byte{'x'}, c.limit)
 		wire, err := encodeJournalFrame(c.kind, a, body)
@@ -223,7 +223,7 @@ func TestJournalFramePhysicalLimits(t *testing.T) {
 			}
 		}
 	}
-	if got, err := encodeJournalFrame(7, a, []byte{'x'}); got != nil || err != errJournalFrameFormat {
+	if got, err := encodeJournalFrame(8, a, []byte{'x'}); got != nil || err != errJournalFrameFormat {
 		t.Fatalf("unknown kind: %x %v", got, err)
 	}
 }
