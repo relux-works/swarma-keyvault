@@ -231,6 +231,14 @@ func MacFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
+	future, err := w.snapshot(T0.Add(10*time.Minute), nil)
+	if err != nil {
+		return nil, err
+	}
+	freshLater, err := w.snapshot(T0.Add(15*time.Second), nil)
+	if err != nil {
+		return nil, err
+	}
 	now := stamp(T0)
 	later := stamp(T0.Add(20 * time.Second))
 	one := func(id, claim, control string, r Records, e Event, snap []byte, expected string) Case {
@@ -292,6 +300,9 @@ func MacFamily() ([]Case, error) {
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(revoking), Expected: "revoked"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-grant-revoked"}}},
 		one("M-P-root-revocation-unmirrored", "An owner-root revocation of an unrelated record that the publisher does not mirror is kept apart and does not make the request a rollback.", "",
 			unmirrored, ev("$unmirrored", rAccept, text), fresh, "succeeded"),
+		{Format: Format, ID: "M-P-future-then-fresh", Claim: "A validly signed snapshot dated in the future does not raise the high-water mark: the request it accompanies refuses, and a later fresh snapshot is admitted.",
+			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
+			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(future), Expected: "key_binding_unavailable"}, {Event: "$second", Now: later, Snapshot: B64(freshLater), Expected: "succeeded"}}},
 		{Format: Format, ID: "M-N-snapshot-older", Claim: "A publisher snapshot older than one already accepted refuses as rollback, even though it is under 60 s old and drops nothing.", PositiveControl: "M-P-until-expiry-second-use",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},

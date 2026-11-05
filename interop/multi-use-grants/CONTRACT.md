@@ -103,8 +103,9 @@ Domain tags, exactly as `record.Tag` gives them (r5):
   - a snapshot is admitted only when `issued_at` is not in the future and the age is at most 60 s, inclusive;
   - without such a snapshot every request refuses; there is no grace period.
 - Entries are `{kind,id,from}`.
-- (r6) Every snapshot a receiver verifies for an event is recorded before the request is judged, whatever the outcome. Its entries join a durable, monotonic union kept per signer: the publisher, and for a Linux author the agent revocation root. Its `issued_at` raises that signer's high-water mark. A snapshot that refuses a request as `revoked` is therefore remembered. A later snapshot without the entry, whether older or with the same `issued_at`, cannot let the grant or key act (`mu-grant-revoked`).
+- (r6) Every snapshot a receiver verifies for an event is recorded before the request is judged, whatever the outcome. Its entries join a durable, monotonic union kept per signer: the publisher, and for a Linux author the agent revocation root. Its `issued_at` raises that signer's high-water mark only when it is not in the future by the trusted clock, the same test freshness applies; the entries of a future-dated snapshot still join the union, but the snapshot cannot lock out later correct ones. A snapshot that refuses a request as `revoked` is therefore remembered. A later snapshot without the entry, whether older or with the same `issued_at`, cannot let the grant or key act (`mu-grant-revoked`).
 - A snapshot that drops an entry its own signer published before is refused as rollback.
+- (r6) Revocation entries recorded before per-signer unions existed carry no signer: they still revoke, but they are never compared for rollback.
 - `issued_at` is the per-signer sequence of snapshots (no extra member). Each receiver keeps, durably, the newest `issued_at` it has accepted per signer. A snapshot older than that refuses as rollback with `mu-revocation-snapshot-rollback`, even when it is fresh and drops nothing; an equal `issued_at` is admitted.
 - A receiver restored from a backup re-initialises its journal under a new state epoch and re-applies the owner-root revocations before it admits any request. A restored journal can lack revocations, and no local mark detects that.
 - A revocation signed by the owner root wins at any age. (r6) Owner-root entries form their own set, apart from every signer's union. A publisher is not required to mirror them, and a publisher snapshot without them is not a rollback. Owner-root revocations reach each receiver out of band, into its protected configuration; they never pass through the publisher, so a publisher that keeps signing fresh snapshots without an entry cannot hide one. The issuer prepares them with `mu-root-revocation-prepare`, and the owner signs them under Touch ID.
@@ -148,7 +149,7 @@ Platform codes are returned unchanged from the pinned verifier. (r6) Among them,
 | `expired` | the grant interval has ended |
 | `revoked` | a fresh snapshot revokes the grant or the agent key |
 | `key_binding_unavailable` | required evidence is missing or stale: no binding for the grant issuer, attestation not served, snapshot over 60 s |
-| `key_binding_invalid` | evidence does not match: an expired Keymaker attestation, a generation that moved |
+| `key_binding_invalid` | evidence does not match: an expired Keymaker attestation, a generation that moved, or a Linux identity whose referenced attestation is a `mac-se-1` attestation by the grant root instead of a Keymaker one |
 | `revocation_unavailable` | no revocation snapshot could be read (r6) |
 | `message_text_mismatch` | the delivered text does not hash to `body_sha256` |
 

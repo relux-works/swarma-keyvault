@@ -324,6 +324,9 @@ func muRecordID(raw []byte, kind string) (string, error) {
 
 // muSnapshotEntries returns the entries of a snapshot the verifier already
 // accepted in the same call.
+// MUPlatform hands the receiver its verified snapshots before verification.
+var _ MUSnapshotSource = (*MUPlatform)(nil)
+
 // VerifiedSnapshots returns the snapshots this event would be judged against,
 // each verified as an exact revocation/1 signed by its pinned signer: the
 // publisher snapshot, and for a Linux author the agent revocation snapshot.

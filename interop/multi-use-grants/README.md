@@ -82,6 +82,7 @@ controls stop an implementation that refuses everything from passing.
 | `M-P-room-membership` | none: `room.membership` in the receiver's room scope | `succeeded` |
 | `M-N-room-outside-scope` | only the target id: a room scope the receiver does not serve | `mu-request-out-of-owner-scope` |
 | `M-P-text-tab` | text containing TAB | `succeeded` |
+| `M-P-future-then-fresh` | a validly signed snapshot dated 10 minutes ahead, then a fresh one | `key_binding_unavailable`, then `succeeded` |
 | `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
 
@@ -106,6 +107,8 @@ Linux-authored (Ed25519) family:
 | `L-N-agent-revoked-then-equal` | revoking agent snapshot, then one with the same `issued_at` without the entry | `revoked`, then `mu-grant-revoked` |
 | `L-N-registry-uid-mismatch` | the registry identity's uid differs from the active generation | `key_binding_unavailable` |
 | `L-N-cross-algorithm` | the Linux identity names a P-256 Mac key and its `mac-se-1` attestation | `key_binding_invalid` |
+| `L-N-agent-rollback-drops-unrelated` | newer agent snapshot drops an unrelated key it listed before | `succeeded`, then `mu-revocation-snapshot-rollback` |
+| `L-N-agent-rollback-older-mark` | older agent snapshot after a newer one, revoking nothing | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `L-N-replay` | same event twice | `succeeded`, then `mu-request-nonce-already-held` |
 
 ## Checking
