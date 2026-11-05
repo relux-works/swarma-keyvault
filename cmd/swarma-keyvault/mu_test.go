@@ -126,7 +126,7 @@ func TestMUCLIGrantRoundTrip(t *testing.T) {
 		t.Fatal(code, errText)
 	}
 	var p map[string]string
-	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @meta-keeper") || !strings.Contains(p["rendering"], "use policy: until_expiry") || !strings.Contains(p["rendering"], "revocation publisher key SPKI SHA-256: ") || !strings.Contains(p["rendering"], "grantee: @meta-keeper.keeper-sirius:gr.relux.works (generation 1, from attestation sha256:") {
+	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @meta-keeper") || !strings.Contains(p["rendering"], "use policy: until_expiry") || !strings.Contains(p["rendering"], "revocation publisher key fingerprint (as mac-keyvault prints it): ") || !strings.Contains(p["rendering"], "grantee: @meta-keeper.keeper-sirius:gr.relux.works (generation 1, from attestation sha256:") {
 		t.Fatal("prepared output", err, out)
 	}
 	code, wire, errText := muSignAndAssemble(t, p, ik)
@@ -191,6 +191,17 @@ func TestMUCLIRefusals(t *testing.T) {
 	foreign := muAttestFiles(t, otherRoot, otherID, sk, "@meta-keeper.keeper-sirius:gr.relux.works")
 	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, foreign...)...); code != 1 || out != "" {
 		t.Fatal("foreign-root attestations admitted", code)
+	}
+	// The two attestations swapped between the flags do not bind.
+	swapped := []string{"--subject-attestation", attest[3], "--publisher-attestation", attest[1]}
+	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, swapped...)...); code != 1 || out != "" {
+		t.Fatal("swapped attestations admitted", code)
+	}
+	// A grant starting before the attestation window is not covered by it.
+	early := muGrantSpecMap(issuer, subject)
+	early["not_before"], early["expires"] = "2026-11-05T16:59:59Z", "2027-11-05T16:59:59Z"
+	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", early)}, attest...)...); code != 1 || out != "" {
+		t.Fatal("grant outside the attestation window admitted", code)
 	}
 	for name, args := range map[string][]string{
 		"no-spec":         append([]string{"grants", "mu-grant-prepare"}, attest...),

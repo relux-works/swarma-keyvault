@@ -5,7 +5,11 @@ import (
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
@@ -21,7 +25,93 @@ type AttestedKey struct {
 	MXID               string // Mac agent attestations only
 	Generation         int64  // Mac agent attestations only
 	NotBefore, Expires time.Time
-	SPKISHA256         [32]byte // fingerprint of the key as SPKI DER
+	Fingerprint        string // SPKI SHA-256, base64url, as mac-keyvault prints it
+}
+
+// Fingerprint is the key fingerprint exactly as mac-keyvault create, pub and
+// describe print it: SHA-256 of the SPKI DER, unpadded base64url.
+func Fingerprint(spki []byte) string {
+	sum := sha256.Sum256(spki)
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// spkiFromCompressed rebuilds the SPKI DER of a compressed P-256 point.
+func spkiFromCompressed(compressed []byte) ([]byte, error) {
+	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), compressed)
+	if x == nil {
+		return nil, ErrAttestation
+	}
+	spki, err := x509.MarshalPKIXPublicKey(&ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y})
+	if err != nil {
+		return nil, ErrAttestation
+	}
+	return spki, nil
+}
+
+// AttestationRendering is the pre-sign rendering of a prepared attestation,
+// read back from the exact body bytes that will be signed: kind, agent MXID
+// and generation (agent only), subject key id and fingerprint, window in UTC
+// and MSK, content id and digest.
+func AttestationRendering(p *Plan) (string, error) {
+	var b struct {
+		Type    string `json:"type"`
+		Issuer  string `json:"issuer"`
+		IAT     string `json:"iat"`
+		EXP     string `json:"exp"`
+		Subject struct {
+			KeyID       string `json:"key_id"`
+			PublicBytes string `json:"public_bytes"`
+		} `json:"subject"`
+		Binding struct {
+			Profile    string `json:"profile"`
+			MXID       string `json:"mxid"`
+			Generation int64  `json:"generation"`
+		} `json:"binding"`
+	}
+	if p == nil || json.Unmarshal(p.Body(), &b) != nil || b.Type != "attestation/1" {
+		return "", ErrAttestation
+	}
+	compressed, err := record.DecodeBase64(b.Subject.PublicBytes, 33)
+	if err != nil {
+		return "", ErrAttestation
+	}
+	spki, err := spkiFromCompressed(compressed)
+	if err != nil {
+		return "", err
+	}
+	nb, err1 := time.Parse("2006-01-02T15:04:05Z", b.IAT)
+	ex, err2 := time.Parse("2006-01-02T15:04:05Z", b.EXP)
+	if err1 != nil || err2 != nil {
+		return "", ErrAttestation
+	}
+	var lines []string
+	switch b.Binding.Profile {
+	case "mac-se-1":
+		lines = []string{
+			"attestation/1 Mac agent key (profile mac-se-1), to be signed by the owner root under Touch ID",
+			"agent: " + b.Binding.MXID,
+			fmt.Sprintf("generation: %d", b.Binding.Generation),
+			"may sign: message.sign (requests under grants naming this key)",
+		}
+	case "grant-revocation-1":
+		lines = []string{
+			"attestation/1 grant revocation publisher key (profile grant-revocation-1), to be signed by the owner root under Touch ID",
+			"may sign: revocation.sign (revocation snapshots for grants of this root only)",
+		}
+	default:
+		return "", ErrAttestation
+	}
+	d := p.Digest()
+	lines = append(lines,
+		"issuer: "+b.Issuer,
+		"subject key: "+b.Subject.KeyID,
+		"subject key fingerprint (as mac-keyvault prints it): "+Fingerprint(spki),
+		"window UTC: "+b.IAT+" – "+b.EXP,
+		"window MSK: "+mskInterval(nb.UTC(), ex.UTC()),
+		"content id: "+p.ContentID(),
+		fmt.Sprintf("signing digest: %x", d[:]),
+	)
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func (a *AttestedKey) covers(nb, ex time.Time) bool {
@@ -72,13 +162,9 @@ func verifyAttestation(wire []byte, root, profile string) (*AttestedKey, error) 
 	if err != nil {
 		return nil, ErrAttestation
 	}
-	x, y := elliptic.UnmarshalCompressed(elliptic.P256(), compressed)
-	if x == nil {
-		return nil, ErrAttestation
-	}
-	spki, err := x509.MarshalPKIXPublicKey(&ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y})
+	spki, err := spkiFromCompressed(compressed)
 	if err != nil {
-		return nil, ErrAttestation
+		return nil, err
 	}
 	nb, err1 := time.Parse("2006-01-02T15:04:05Z", iat)
 	ex, err2 := time.Parse("2006-01-02T15:04:05Z", exp)
@@ -86,7 +172,7 @@ func verifyAttestation(wire []byte, root, profile string) (*AttestedKey, error) 
 		return nil, ErrAttestation
 	}
 	nb, ex = nb.UTC(), ex.UTC()
-	a := &AttestedKey{NotBefore: nb, Expires: ex, SPKISHA256: sha256.Sum256(spki)}
+	a := &AttestedKey{NotBefore: nb, Expires: ex, Fingerprint: Fingerprint(spki)}
 	var plan *Plan
 	switch profile {
 	case "mac-se-1":

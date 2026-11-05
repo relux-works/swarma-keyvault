@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
+	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
@@ -77,7 +78,9 @@ func TestMUCLIAttestationRoundTrip(t *testing.T) {
 		if !bytes.Equal(body, want.Body()) || p["content_id"] != want.ContentID() {
 			t.Fatal("body differs from the docked builder", kind)
 		}
-		if !strings.Contains(p["rendering"], "subject key: "+wantSubject) || !strings.Contains(p["rendering"], p["digest_sha256"]) {
+		if !strings.Contains(p["rendering"], "subject key: "+wantSubject) || !strings.Contains(p["rendering"], p["digest_sha256"]) ||
+			!strings.Contains(p["rendering"], "subject key fingerprint (as mac-keyvault prints it): "+signerclient.Fingerprint(spki)) ||
+			!strings.Contains(p["rendering"], "window MSK: 05.11.2026 20:00–06.11.2027 20:00 MSK") {
 			t.Fatal("rendering", kind, p["rendering"])
 		}
 		code, wire, errText := muSignAndAssemble(t, p, rk)
@@ -162,5 +165,15 @@ func TestMUCLIKeyID(t *testing.T) {
 	}
 	if code, out, _ := muCLIRun("grants", "mu-key-id", "--subject-spki-der", muCLIWrite(t, "k.der", []byte("x"))); code != 1 || out != "" {
 		t.Fatal("garbage key admitted", code)
+	}
+	for name, args := range map[string][]string{
+		"no-flag":    {},
+		"stdin":      {"--subject-spki-der", "-"},
+		"positional": {"--subject-spki-der", muCLIWrite(t, "k.der", muSPKI(t, k)), "extra"},
+		"repeated":   {"--subject-spki-der", "a", "--subject-spki-der", "b"},
+	} {
+		if code, out, _ := muCLIRun(append([]string{"grants", "mu-key-id"}, args...)...); code != 2 || out != "" {
+			t.Error("usage not exit 2", name, code)
+		}
 	}
 }

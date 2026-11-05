@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
@@ -101,27 +100,16 @@ func runMUAttestationPrepare(args []string, stdout, stderr io.Writer) int {
 	var (
 		plan    *mugrant.Plan
 		subject string
-		lines   []string
 	)
 	switch s.Kind {
 	case "mac-agent":
 		plan, subject, err = mugrant.BuildMacAgentAttestation(s.Issuer, spki, s.MXID, s.Generation, nb, ex)
-		lines = []string{
-			"attestation/1 Mac agent key (profile mac-se-1), to be signed by the owner root under Touch ID",
-			"agent: " + s.MXID,
-			fmt.Sprintf("generation: %d", s.Generation),
-			"may sign: message.sign (requests under grants naming this key)",
-		}
 	case "publisher":
 		if s.MXID != "" || s.Generation != 0 {
 			fmt.Fprintln(stderr, "attestation specification refused: a publisher attestation has no mxid or generation")
 			return 1
 		}
 		plan, subject, err = mugrant.BuildPublisherAttestation(s.Issuer, spki, nb, ex)
-		lines = []string{
-			"attestation/1 grant revocation publisher key (profile grant-revocation-1), to be signed by the owner root under Touch ID",
-			"may sign: revocation.sign (revocation snapshots for grants of this root only)",
-		}
 	default:
 		fmt.Fprintln(stderr, "attestation specification refused: kind must be mac-agent or publisher")
 		return 1
@@ -130,17 +118,16 @@ func runMUAttestationPrepare(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	// The rendering is read back from the exact body bytes to be signed.
+	rendering, err := mugrant.AttestationRendering(plan)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	d := plan.Digest()
-	lines = append(lines,
-		"issuer: "+s.Issuer,
-		"subject key: "+subject,
-		"window UTC: "+s.NotBefore+" – "+s.Expires,
-		"content id: "+plan.ContentID(),
-		"signing digest: "+hex.EncodeToString(d[:]),
-	)
 	return muWrite(stdout, map[string]string{
 		"type": "mu-attestation-prepared-1", "kind": "attestation/1", "key": s.Issuer, "subject_key": subject,
 		"body": base64.RawURLEncoding.EncodeToString(plan.Body()), "content_id": plan.ContentID(),
-		"digest_sha256": hex.EncodeToString(d[:]), "rendering": strings.Join(lines, "\n") + "\n",
+		"digest_sha256": hex.EncodeToString(d[:]), "rendering": rendering,
 	})
 }

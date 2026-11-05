@@ -3,7 +3,6 @@ package mugrant
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
+	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
 )
 
 // testKeys maps test key ids to their software stand-in private keys.
@@ -91,14 +91,15 @@ func TestGrantAttestationBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grantee := sha256.Sum256(spkiOf(t, testPrivate(t, s.Subject)))
-	pub := sha256.Sum256(spkiOf(t, testPrivate(t, publisher.Key)))
+	// Expected fingerprints come from the mac-keyvault encoder itself.
+	grantee := signerclient.Fingerprint(spkiOf(t, testPrivate(t, s.Subject)))
+	pub := signerclient.Fingerprint(spkiOf(t, testPrivate(t, publisher.Key)))
 	r := g.Rendering()
 	for _, want := range []string{
 		fmt.Sprintf("grantee: %s (generation 1, from attestation %s)", metaMXID, agent.ContentID),
-		fmt.Sprintf("grantee key SPKI SHA-256: %x", grantee),
+		"grantee key fingerprint (as mac-keyvault prints it): " + grantee,
 		fmt.Sprintf("revocation publisher key: %s (attestation %s)", publisher.Key, publisher.ContentID),
-		fmt.Sprintf("revocation publisher key SPKI SHA-256: %x", pub),
+		"revocation publisher key fingerprint (as mac-keyvault prints it): " + pub,
 	} {
 		if !strings.Contains(r, want) {
 			t.Fatal("rendering misses", want, r)
