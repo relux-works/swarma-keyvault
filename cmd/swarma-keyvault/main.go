@@ -42,6 +42,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return runA2ARequest(args[2:], stdin, stdout, stderr, false)
 		case "a2a-request-pack":
 			return runA2ARequest(args[2:], stdin, stdout, stderr, true)
+		case "mu-grant-prepare":
+			return runMUGrantPrepare(args[2:], stdout, stderr)
+		case "mu-request-prepare":
+			return runMURequestPrepare(args[2:], stdout, stderr)
+		case "mu-assemble":
+			return runMUAssemble(args[2:], stdout, stderr)
 		}
 	}
 	if len(args) >= 2 && args[0] == "grants" && args[1] == "local-issue" {
