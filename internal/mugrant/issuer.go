@@ -315,7 +315,11 @@ func (g *Grant) Rendering() string {
 		fmt.Fprintf(&b, "grantee key fingerprint (as mac-keyvault prints it): %s\n", g.agent.Fingerprint)
 	}
 	fmt.Fprintf(&b, "revocation publisher key: %s (attestation %s)\n", g.publisher.Key, g.publisher.ContentID)
-	fmt.Fprintf(&b, "revocation publisher key fingerprint (as mac-keyvault prints it): %s\n", g.publisher.Fingerprint)
+	if strings.HasPrefix(g.publisher.Key, "ed25519:") {
+		fmt.Fprintf(&b, "revocation publisher key fingerprint (SHA-256 of the Ed25519 SPKI DER, held by a signing service): %s\n", g.publisher.Fingerprint)
+	} else {
+		fmt.Fprintf(&b, "revocation publisher key fingerprint (as mac-keyvault prints it): %s\n", g.publisher.Fingerprint)
+	}
 	fmt.Fprintf(&b, "audience: %s\n", g.spec.Audience)
 	fmt.Fprintf(&b, "use policy: %s\n", g.spec.Use)
 	fmt.Fprintf(&b, "interval UTC: %s – %s\n", wireTime(g.spec.NotBefore), wireTime(g.spec.Expires))

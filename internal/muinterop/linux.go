@@ -33,7 +33,7 @@ func (k *EdKey) Sign(p *mugrant.Plan) ([]byte, error) {
 }
 
 // EdKeyNames lists the published Ed25519 test keys.
-var EdKeyNames = []string{"linux-agent", "linux-stranger", "keymaker-service-root", "agent-revocation"}
+var EdKeyNames = []string{"linux-agent", "linux-stranger", "keymaker-service-root", "agent-revocation", "publisher-ed25519"}
 
 // LinuxPins are the receiver's protected configuration for Linux authors.
 type LinuxPins struct {
