@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sys/unix"
 )
 
 // SSHMaxPacket bounds both allocation and the amount of data signed per request.
@@ -396,23 +397,53 @@ func ListenSSH(path string) (*net.UnixListener, func(), error) {
 		return nil, nil, errors.New("cannot bind SSH socket")
 	}
 	listener.SetUnlinkOnClose(false)
-	created, err := os.Lstat(path)
+	var created socketIdentity
 	cleanup := func() {
 		listener.Close()
-		current, e := os.Lstat(path)
-		if e == nil && created != nil && os.SameFile(created, current) {
+		if current, ok := lstatIdentity(path); ok && created.owns(current) {
 			os.Remove(path)
 		}
 	}
-	if err != nil {
+	first, ok := lstatIdentity(path)
+	if !ok {
 		cleanup()
 		return nil, nil, errors.New("cannot inspect SSH socket")
 	}
+	created = first
 	if err := os.Chmod(path, 0600); err != nil {
 		cleanup()
 		return nil, nil, errors.New("cannot restrict SSH socket")
 	}
+	// chmod changes the change time; record the final identity.
+	if created, ok = lstatIdentity(path); !ok || created.dev != first.dev || created.ino != first.ino {
+		created = socketIdentity{}
+		listener.Close()
+		return nil, nil, errors.New("cannot inspect SSH socket")
+	}
 	return listener, cleanup, nil
+}
+
+// socketIdentity is what cleanup compares before it unlinks the socket path:
+// device, inode, file type and permission bits, and change time. Device and
+// inode alone are not enough, because a freed inode can be reused at once for
+// a foreign file or socket created at the same path.
+type socketIdentity struct {
+	dev, ino uint64
+	mode     uint32
+	ctime    unix.Timespec
+}
+
+func lstatIdentity(path string) (socketIdentity, bool) {
+	var st unix.Stat_t
+	if unix.Lstat(path, &st) != nil {
+		return socketIdentity{}, false
+	}
+	return socketIdentity{uint64(st.Dev), uint64(st.Ino), uint32(st.Mode), st.Ctim}, true
+}
+
+// owns reports whether current is exactly the socket recorded as id.
+func (id socketIdentity) owns(current socketIdentity) bool {
+	return id.mode&unix.S_IFMT == unix.S_IFSOCK && id == current
 }
 
 // Serve accepts a bounded number of clients. Cancellation closes the
