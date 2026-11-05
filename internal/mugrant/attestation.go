@@ -30,15 +30,33 @@ func attestationSubject(spki []byte) (map[string]any, string, error) {
 	return map[string]any{"algorithm": "P-256", "key_id": id, "public_bytes": base64.RawURLEncoding.EncodeToString(raw)}, id, nil
 }
 
+// ed25519AttestationSubject is the subject of an Ed25519 key given as its
+// canonical PKIX DER.
+func ed25519AttestationSubject(spki []byte) (map[string]any, string, error) {
+	pub, err := parseEd25519SPKI(spki)
+	if err != nil {
+		return nil, "", ErrAttestationSpec
+	}
+	id, err := Ed25519KeyID(pub)
+	if err != nil {
+		return nil, "", ErrAttestationSpec
+	}
+	return map[string]any{"algorithm": "Ed25519", "key_id": id, "public_bytes": base64.RawURLEncoding.EncodeToString(pub)}, id, nil
+}
+
 func attestationWindow(nb, ex time.Time) bool {
 	return nb.Location() == time.UTC && ex.Location() == time.UTC && nb.Nanosecond() == 0 && ex.Nanosecond() == 0 && ex.After(nb) && ex.Sub(nb) <= MaxAttestationWindow
 }
 
 func buildAttestation(root string, spki []byte, nb, ex time.Time, class, purpose string, actions []any, binding map[string]any) (*Plan, string, error) {
+	return buildAttestationWith(attestationSubject, root, spki, nb, ex, class, purpose, actions, binding)
+}
+
+func buildAttestationWith(subjectOf func([]byte) (map[string]any, string, error), root string, spki []byte, nb, ex time.Time, class, purpose string, actions []any, binding map[string]any) (*Plan, string, error) {
 	if record.ValidateKey(root) != nil || !attestationWindow(nb, ex) {
 		return nil, "", ErrAttestationSpec
 	}
-	subject, id, err := attestationSubject(spki)
+	subject, id, err := subjectOf(spki)
 	if err != nil || id == root {
 		return nil, "", ErrAttestationSpec
 	}
@@ -71,6 +89,14 @@ func BuildPublisherAttestation(root string, publisherSPKI []byte, nb, ex time.Ti
 		map[string]any{"profile": "grant-revocation-1", "domain": root})
 }
 
+// BuildEd25519PublisherAttestation prepares the owner-root attestation of an
+// Ed25519 grant revocation publisher (profile grant-revocation-2), for a
+// publisher key held by a signing service. Only the owner grant root signs it.
+func BuildEd25519PublisherAttestation(root string, publisherSPKI []byte, nb, ex time.Time) (*Plan, string, error) {
+	return buildAttestationWith(ed25519AttestationSubject, root, publisherSPKI, nb, ex, "revocation-publisher", "grant-revocation", []any{"revocation.sign"},
+		map[string]any{"profile": "grant-revocation-2", "domain": root})
+}
+
 // MacAgentAttestationReason is the Touch ID reason for the owner-root
 // signature of a Mac agent attestation (decision 154 applied to X9): agent
 // MXID, generation, window in MSK and the digest tail. It refuses instead of
@@ -78,6 +104,14 @@ func BuildPublisherAttestation(root string, publisherSPKI []byte, nb, ex time.Ti
 func MacAgentAttestationReason(p *Plan, mxid string, generation int64, nb, ex time.Time) (string, error) {
 	d := p.Digest()
 	return checkReason(fmt.Sprintf("ключ агента · %s · поколение %d · %s · SHA256 %x", mxid, generation, mskInterval(nb, ex), d[26:]))
+}
+
+// Ed25519PublisherAttestationReason is the Touch ID reason for the owner-root
+// signature of an Ed25519 publisher attestation; it names the algorithm so the
+// owner can tell it from the Mac publisher.
+func Ed25519PublisherAttestationReason(p *Plan, nb, ex time.Time) (string, error) {
+	d := p.Digest()
+	return checkReason(fmt.Sprintf("ключ отзыва грантов Ed25519 · %s · SHA256 %x", mskInterval(nb, ex), d[26:]))
 }
 
 // PublisherAttestationReason is the Touch ID reason for the owner-root

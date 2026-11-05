@@ -2,6 +2,7 @@ package mugrant
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/sha256"
 	"crypto/x509"
@@ -128,9 +129,14 @@ func VerifyMacAgentAttestation(wire []byte, root string) (*AttestedKey, error) {
 }
 
 // VerifyPublisherAttestation admits the grant revocation publisher attestation
-// (binding grant-revocation-1 with domain root) under the same rules.
+// under the same rules: binding grant-revocation-1 with a P-256 subject, or
+// grant-revocation-2 with an Ed25519 subject, both with domain root and signed
+// by root. Each is rebuilt exactly, so a mixed pair refuses.
 func VerifyPublisherAttestation(wire []byte, root string) (*AttestedKey, error) {
-	return verifyAttestation(wire, root, "grant-revocation-1")
+	if a, err := verifyAttestation(wire, root, "grant-revocation-1"); err == nil {
+		return a, nil
+	}
+	return verifyAttestation(wire, root, "grant-revocation-2")
 }
 
 func verifyAttestation(wire []byte, root, profile string) (*AttestedKey, error) {
@@ -158,13 +164,23 @@ func verifyAttestation(wire []byte, root, profile string) (*AttestedKey, error) 
 	if subject == nil || binding == nil || binding["profile"] != profile {
 		return nil, ErrAttestation
 	}
-	compressed, err := record.DecodeBase64(publicText, 33)
-	if err != nil {
-		return nil, ErrAttestation
-	}
-	spki, err := spkiFromCompressed(compressed)
-	if err != nil {
-		return nil, err
+	var spki []byte
+	if profile == "grant-revocation-2" {
+		raw, err := record.DecodeBase64(publicText, ed25519.PublicKeySize)
+		if err != nil {
+			return nil, ErrAttestation
+		}
+		if spki, err = x509.MarshalPKIXPublicKey(ed25519.PublicKey(raw)); err != nil {
+			return nil, ErrAttestation
+		}
+	} else {
+		compressed, err := record.DecodeBase64(publicText, 33)
+		if err != nil {
+			return nil, ErrAttestation
+		}
+		if spki, err = spkiFromCompressed(compressed); err != nil {
+			return nil, err
+		}
 	}
 	nb, err1 := time.Parse("2006-01-02T15:04:05Z", iat)
 	ex, err2 := time.Parse("2006-01-02T15:04:05Z", exp)
@@ -179,6 +195,8 @@ func verifyAttestation(wire []byte, root, profile string) (*AttestedKey, error) 
 		a.MXID, _ = binding["mxid"].(string)
 		a.Generation, _ = binding["generation"].(int64)
 		plan, a.Key, err = BuildMacAgentAttestation(root, spki, a.MXID, a.Generation, nb, ex)
+	case "grant-revocation-2":
+		plan, a.Key, err = BuildEd25519PublisherAttestation(root, spki, nb, ex)
 	default:
 		plan, a.Key, err = BuildPublisherAttestation(root, spki, nb, ex)
 	}
