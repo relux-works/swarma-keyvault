@@ -1,0 +1,37 @@
+[
+  {
+    "Name": "grant-root",
+    "Algorithm": "P-256",
+    "KeyID": "p256:AimCX5a0eiBbfXOHpB7nunHC5y2QmnSRjDiWDIKwkH_b",
+    "SeedHex": "bab00e40c58d63cb593715c6c982a3cd67ddae129814b94973595976ac1192b8",
+    "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000429825f96b47a205b7d7387a41ee7ba71c2e72d909a74918c38960c82b0907fdb0a3da15b43d2e4e24cdf7656bb6f69eef455e4f712fd2a40fbf7e899ddb08788"
+  },
+  {
+    "Name": "foreign-grant-root",
+    "Algorithm": "P-256",
+    "KeyID": "p256:A3HX9sCHfa7eX4p4m0RvtPK069pMNkzmMRat0oFfHOJv",
+    "SeedHex": "6bf5345b1059c936ef5e02bbe8cdc99cfc41e9d31576b88b6c10f8683fc96fa2",
+    "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000471d7f6c0877daede5f8a789b446fb4f2b4ebda4c364ce63116add2815f1ce26feadc8322556f9e8d5892f3cccd77d607ae1da099f84fe1b083386a1d20b4d005"
+  },
+  {
+    "Name": "mac-agent",
+    "Algorithm": "P-256",
+    "KeyID": "p256:ArLrflMENJzntHYhIgkWJPPkmlPEBA9amROwoyV06ES6",
+    "SeedHex": "76e7b86cb8d6ea075993bc7803c5ecdc4dd9b5a89cb644ec92cb1f619f4bd90b",
+    "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004b2eb7e5304349ce7b4762122091624f3e49a53c4040f5a9913b0a32574e844ba996d6efe783a2760dce4079c7e9cf056ad97def8829207062a84723bfecaedee"
+  },
+  {
+    "Name": "stranger",
+    "Algorithm": "P-256",
+    "KeyID": "p256:A3q9Dy1mFin0QXACsYiygqWsdalW9g1VreiQvRokYhPK",
+    "SeedHex": "44d6373f9f1dc5553189801bb25b24822c0caf772a5a2ace7bfb16deac23b15d",
+    "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d030107034200047abd0f2d661629f4417002b188b282a5ac75a956f60d55ade890bd1a246213ca4919ce04669cfd86bcd46f22327c4b8e36e26bb95e524e259720fd2b8875b16b"
+  },
+  {
+    "Name": "publisher",
+    "Algorithm": "P-256",
+    "KeyID": "p256:AtKJrhFwoO2g_dEf0Vvu2V1cInU5WQXtF7K6bbA3_TOw",
+    "SeedHex": "b6a5f2db0d6be709709b65b47acdcd43a4122ef27c0ef94680e34ab063a8d3c2",
+    "SPKIHex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004d289ae1170a0eda0fdd11fd15beed95d5c2275395905ed17b2ba6db037fd33b011656450cc10803df210af0da228bbd4d35147a138ade826d99e009b50213e84"
+  }
+]

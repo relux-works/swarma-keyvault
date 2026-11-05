@@ -49,6 +49,11 @@ Required native certificate qualification and its limits are described in
 [the KEK contract](docs/kek.md). Test/build logs and scratch belong under `.temp/`.
 The native-input allowlist is a review tripwire; it does not replace confinement.
 
+The multi-use grant interop vectors live in
+[`interop/multi-use-grants/`](interop/multi-use-grants/README.md). The confined
+suite checks them (`TestMUInteropVectors`). `go run ./cmd/mu-interop-vectors -out DIR`
+writes a fresh set from the published test seeds into a new directory.
+
 Read [the KEK contract](docs/kek.md) and [SSH/new-key onboarding](docs/keyvault-ssh-new-keys.md)
 before selecting an interface. Generic signing is not typed grant or release
 authority. Same-user sockets and code binding do not prove per-agent identity.
