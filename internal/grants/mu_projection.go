@@ -50,8 +50,8 @@ func ParseMUProjection(raw []byte, room, eventID string) (MUEnvelopeEvent, error
 	if s["type"] != "a2a.event-envelope-input/1" || s["requested_room_id"] != room || s["returned_room_id"] != room || s["requested_event_id"] != eventID || s["returned_event_id"] != eventID {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
-	envelope, err1 := base64.RawURLEncoding.DecodeString(s["envelope_base64"])
-	text, err2 := base64.RawURLEncoding.DecodeString(s["body_text_base64"])
+	envelope, err1 := base64.RawURLEncoding.Strict().DecodeString(s["envelope_base64"])
+	text, err2 := base64.RawURLEncoding.Strict().DecodeString(s["body_text_base64"])
 	if err1 != nil || err2 != nil || len(envelope) == 0 || len(envelope) > 65536 || len(text) == 0 || len(text) > 32768 {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}

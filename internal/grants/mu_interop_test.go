@@ -108,7 +108,7 @@ func muInteropRunWith(t *testing.T, c muinterop.Case, override MUVerifier) ([]st
 			return VerifyRootRevocations(c.Pins.GrantRoot, snaps)
 		}},
 		verifier, fakeRegistry{keys: map[string]string{c.Pins.SenderMXID: registryKey}, owners: c.Pins.RegistryOwners},
-		map[string]MUEffect{"work.assign": effect, "account.manage": effect})
+		map[string]MUEffect{"work.assign": effect, "account.manage": effect, "room.membership": effect})
 	var got []string
 	for _, s := range c.Steps {
 		at, err := time.Parse("2006-01-02T15:04:05Z", s.Now)
