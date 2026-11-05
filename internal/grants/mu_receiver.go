@@ -18,6 +18,8 @@ var (
 	ErrMUAudience  = errors.New("mu-audience-mismatch")
 	ErrMUWidening  = errors.New("mu-request-widens-authority")
 	ErrMUExecution = errors.New("mu-effect-refused")
+	ErrMURevoked   = errors.New("mu-grant-revoked")
+	ErrMURollback  = errors.New("mu-revocation-snapshot-rollback")
 )
 
 // MUEvent is one authenticated Matrix event from the a2a envelope projection.
@@ -33,8 +35,14 @@ type MUDecision struct {
 	Author, Audience, Nonce      string
 	Action, TargetKind, TargetID string
 	Arguments                    map[string]string
-	Expires                      time.Time
-	RequestHash                  [32]byte
+	AuthorAttestation            string
+	// PublisherKey is the grant revocation publisher whose snapshot the
+	// verifier used (empty when the grant root signed it); Revocations are
+	// that snapshot's complete verified entries.
+	PublisherKey string
+	Revocations  []MURevocation
+	Expires      time.Time
+	RequestHash  [32]byte
 }
 
 // MUVerifier is the seam to the platform verifier (ENV v-next): it verifies the
@@ -64,6 +72,9 @@ type MUReceiverConfig struct {
 	RoomScope string          // e.g. "swarma-space"
 	Modules   map[string]bool // product modules known to the product card
 	Paused    map[string]bool // grant ids under a local custodian pause (X7)
+	// RootRevocations returns revocations signed by the owner grant root,
+	// verified by the adapter and honoured at any age (r5 constraint 3).
+	RootRevocations func() ([]MURevocation, error)
 }
 
 // MUReceiver handles one request at a time per call.
@@ -180,6 +191,9 @@ func (r *MUReceiver) Handle(ctx context.Context, ev MUEvent) (*MUOutcome, error)
 	if again.GrantID != d.GrantID || again.RequestHash != d.RequestHash || again.Nonce != d.Nonce {
 		return nil, ErrMUState
 	}
+	if err := r.revocations(s, again); err != nil {
+		return nil, err
+	}
 	seq, err := s.reserve(MUUse{Once: d.Use == "once", GrantRoot: d.GrantRoot, GrantID: d.GrantID, Action: d.Action, TargetKind: d.TargetKind, TargetID: d.TargetID,
 		Requester: d.Author, Nonce: d.Nonce, Audience: d.Audience, RequestHash: d.RequestHash})
 	if err != nil {
@@ -196,4 +210,40 @@ func (r *MUReceiver) Handle(ctx context.Context, ev MUEvent) (*MUOutcome, error)
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
 	}
 	return &MUOutcome{State: "succeeded", Receipt: receipt}, nil
+}
+
+// revocations applies the consumer obligations of r5 option A under the lock:
+// owner-root revocations join the union at any age and always win; a revoked
+// publisher fails closed; a snapshot that drops anything in the union is a
+// rollback; the snapshot's own entries then join the union. The union only
+// grows and survives restarts.
+func (r *MUReceiver) revocations(s *muState, d MUDecision) error {
+	var root []MURevocation
+	if r.config.RootRevocations != nil {
+		var err error
+		if root, err = r.config.RootRevocations(); err != nil {
+			return ErrMUState
+		}
+	}
+	if err := s.absorbRevocations(root); err != nil {
+		return ErrMUState
+	}
+	for _, e := range []MURevocation{{"record", d.GrantID}, {"key", d.Author}, {"record", d.AuthorAttestation}} {
+		if e.ID != "" && s.revoked[e] {
+			return ErrMURevoked
+		}
+	}
+	if d.PublisherKey != "" && s.revoked[MURevocation{"key", d.PublisherKey}] {
+		return ErrMURevoked
+	}
+	present := map[MURevocation]bool{}
+	for _, e := range d.Revocations {
+		present[e] = true
+	}
+	for e := range s.revoked {
+		if !present[e] {
+			return ErrMURollback
+		}
+	}
+	return s.absorbRevocations(d.Revocations)
 }

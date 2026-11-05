@@ -60,6 +60,7 @@ type muState struct {
 	binding               MUBinding
 	allowances, nonces    map[[32]byte]*muReservation
 	reservations          map[uint64]*muReservation
+	revoked               map[MURevocation]bool // monotonic union (r5 constraint 2)
 	write                 func(*os.File, []byte) (int, error)
 	sync                  func(*os.File) error
 }
@@ -140,7 +141,7 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 		return nil, ErrMUState
 	}
 	s := &muState{directory: dir, binding: binding, link: journalFrameLink{sequence: 1, epoch: config.Epoch},
-		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{},
+		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{},
 		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }, sync: func(f *os.File) error { return f.Sync() }}
 	ready := false
 	defer func() {
@@ -234,6 +235,17 @@ func (s *muState) replay(f *journalFrame) error {
 			s.allowances[r.allowance] = r
 		}
 		s.reservations[r.sequence] = r
+	case journalRevocation:
+		entries, ok := decodeMURevocations(f.body)
+		if !ok {
+			return ErrMUState
+		}
+		for _, e := range entries {
+			if s.revoked[e] {
+				return ErrMUState
+			}
+			s.revoked[e] = true
+		}
 	case journalDispatchIntent:
 		if len(f.body) != 12 || string(f.body[:4]) != "MUI1" {
 			return ErrMUState
@@ -339,5 +351,99 @@ func (s *muState) recordOutcome(sequence uint64, receipt []byte) error {
 		return ErrMUState
 	}
 	r.complete = true
+	return nil
+}
+
+// MURevocation is one accepted revocation: Kind "record" (an envelope id) or
+// "key" (a key id).
+type MURevocation struct{ Kind, ID string }
+
+const muMaxRevocations = 4096
+
+func validMURevocation(e MURevocation) bool {
+	return (e.Kind == "record" || e.Kind == "key") && e.ID != "" && len(e.ID) <= 255
+}
+
+func encodeMURevocations(entries []MURevocation) []byte {
+	b := []byte("MUV1")
+	b = binary.BigEndian.AppendUint16(b, uint16(len(entries)))
+	for _, e := range entries {
+		k := byte(1)
+		if e.Kind == "key" {
+			k = 2
+		}
+		b = append(b, k)
+		b = binary.BigEndian.AppendUint16(b, uint16(len(e.ID)))
+		b = append(b, e.ID...)
+	}
+	return b
+}
+
+func decodeMURevocations(b []byte) ([]MURevocation, bool) {
+	if len(b) < 6 || string(b[:4]) != "MUV1" {
+		return nil, false
+	}
+	n := int(binary.BigEndian.Uint16(b[4:6]))
+	if n == 0 || n > 64 {
+		return nil, false
+	}
+	out := make([]MURevocation, 0, n)
+	rest := b[6:]
+	for i := 0; i < n; i++ {
+		if len(rest) < 3 {
+			return nil, false
+		}
+		kind := "record"
+		switch rest[0] {
+		case 1:
+		case 2:
+			kind = "key"
+		default:
+			return nil, false
+		}
+		l := int(binary.BigEndian.Uint16(rest[1:3]))
+		if len(rest) < 3+l {
+			return nil, false
+		}
+		e := MURevocation{Kind: kind, ID: string(rest[3 : 3+l])}
+		if !validMURevocation(e) {
+			return nil, false
+		}
+		out = append(out, e)
+		rest = rest[3+l:]
+	}
+	return out, len(rest) == 0
+}
+
+// absorbRevocations durably adds every not yet known revocation to the
+// monotonic union. The union only grows; nothing is ever removed.
+func (s *muState) absorbRevocations(entries []MURevocation) error {
+	var fresh []MURevocation
+	seen := map[MURevocation]bool{}
+	for _, e := range entries {
+		if !validMURevocation(e) {
+			return ErrMUState
+		}
+		if !s.revoked[e] && !seen[e] {
+			fresh = append(fresh, e)
+			seen[e] = true
+		}
+	}
+	for len(fresh) > 0 {
+		chunk := fresh
+		if len(chunk) > 64 {
+			chunk = chunk[:64]
+		}
+		if len(s.revoked)+len(chunk) > muMaxRevocations {
+			return ErrMUState
+		}
+		if err := s.append(journalRevocation, encodeMURevocations(chunk)); err != nil {
+			return ErrMUState
+		}
+		for _, e := range chunk {
+			s.revoked[e] = true
+		}
+		fresh = fresh[len(chunk):]
+	}
 	return nil
 }
