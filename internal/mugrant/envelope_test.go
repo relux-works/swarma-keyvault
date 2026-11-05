@@ -37,6 +37,7 @@ func testKey(t *testing.T) (*ecdsa.PrivateKey, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	testKeys.Store(id, k)
 	return k, id
 }
 

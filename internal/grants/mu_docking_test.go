@@ -75,13 +75,6 @@ func newMUDock(t *testing.T) *muDock {
 	g := &muDock{t: t, now: time.Date(2026, 11, 5, 18, 0, 0, 0, time.UTC), root: newMUKey(t), meta: newMUKey(t), pub: newMUKey(t), events: map[string]MUEnvelopeEvent{}}
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
-	grant, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: g.root.id, Subject: g.meta.id, SubjectMXID: muDockMeta, Audience: muDockAud,
-		Entries:   []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: "swarma-platform"}}, {Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:alexis"}}},
-		NotBefore: g.now.Add(-time.Hour), Expires: g.now.Add(30 * 24 * time.Hour), Use: mugrant.UseUntilExpiry, Nonce: nonce})
-	if err != nil {
-		t.Fatal(err)
-	}
-	g.grant = g.root.sign(t, grant.Plan())
 	ap, _, err := mugrant.BuildMacAgentAttestation(g.root.id, g.meta.spki, muDockMeta, 1, g.now.Add(-2*time.Hour), g.now.Add(60*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
@@ -92,6 +85,13 @@ func newMUDock(t *testing.T) *muDock {
 		t.Fatal(err)
 	}
 	g.pubAtt = g.root.sign(t, pp)
+	grant, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: g.root.id, Subject: g.meta.id, SubjectMXID: muDockMeta, SubjectAttestation: g.att, PublisherAttestation: g.pubAtt, Audience: muDockAud,
+		Entries:   []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: "swarma-platform"}}, {Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:alexis"}}},
+		NotBefore: g.now.Add(-time.Hour), Expires: g.now.Add(30 * 24 * time.Hour), Use: mugrant.UseUntilExpiry, Nonce: nonce})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.grant = g.root.sign(t, grant.Plan())
 	g.publish(g.now.Add(-5*time.Second), nil)
 	dir := filepath.Join(t.TempDir(), "mu")
 	if err := os.Mkdir(dir, 0700); err != nil {

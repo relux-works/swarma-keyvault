@@ -117,15 +117,54 @@ func muSpecArg(name string, args []string, stderr io.Writer) (string, int) {
 	return spec.value, -1
 }
 
+const muGrantPrepareUsage = "swarma-keyvault grants mu-grant-prepare --spec FILE --subject-attestation FILE --publisher-attestation FILE"
+
+// muGrantInputs parses the grant flags and reads the spec and both owner-root
+// attestations (the grantee's Mac agent attestation and the publisher's).
+func muGrantInputs(args []string, stderr io.Writer) (raw, agent, publisher []byte, code int) {
+	f := flag.NewFlagSet("mu-grant-prepare", flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	var spec, agentPath, publisherPath onceString
+	f.Var(&spec, "spec", "JSON specification file")
+	f.Var(&agentPath, "subject-attestation", "owner-root Mac agent attestation of the grantee key (swarm-envelope/2)")
+	f.Var(&publisherPath, "publisher-attestation", "owner-root grant revocation publisher attestation (swarm-envelope/2)")
+	if err := f.Parse(args); err != nil {
+		fmt.Fprintln(stderr, muGrantPrepareUsage)
+		if errors.Is(err, flag.ErrHelp) {
+			return nil, nil, nil, 0
+		}
+		return nil, nil, nil, 2
+	}
+	for _, v := range []onceString{spec, agentPath, publisherPath} {
+		if !v.set || v.value == "" || v.value == "-" {
+			fmt.Fprintln(stderr, muGrantPrepareUsage)
+			return nil, nil, nil, 2
+		}
+	}
+	if f.NArg() != 0 {
+		fmt.Fprintln(stderr, muGrantPrepareUsage)
+		return nil, nil, nil, 2
+	}
+	var err error
+	if raw, err = readInput(spec.value, nil, 16384); err != nil {
+		fmt.Fprintln(stderr, "cannot read bounded grant specification")
+		return nil, nil, nil, 1
+	}
+	if agent, err = readInput(agentPath.value, nil, mugrant.MaxEnvelopeBytes); err != nil {
+		fmt.Fprintln(stderr, "cannot read bounded subject attestation")
+		return nil, nil, nil, 1
+	}
+	if publisher, err = readInput(publisherPath.value, nil, mugrant.MaxEnvelopeBytes); err != nil {
+		fmt.Fprintln(stderr, "cannot read bounded publisher attestation")
+		return nil, nil, nil, 1
+	}
+	return raw, agent, publisher, -1
+}
+
 func runMUGrantPrepare(args []string, stdout, stderr io.Writer) int {
-	path, code := muSpecArg("mu-grant-prepare", args, stderr)
+	raw, agent, publisher, code := muGrantInputs(args, stderr)
 	if code >= 0 {
 		return code
-	}
-	raw, err := readInput(path, nil, 16384)
-	if err != nil {
-		fmt.Fprintln(stderr, "cannot read bounded grant specification")
-		return 1
 	}
 	var s muGrantSpecFile
 	if err := muStrictJSON(raw, &s); err != nil {
@@ -143,7 +182,8 @@ func runMUGrantPrepare(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nonce unavailable")
 		return 1
 	}
-	spec := mugrant.GrantSpec{Issuer: s.Issuer, Subject: s.Subject, SubjectMXID: s.SubjectMXID, Audience: s.Audience, NotBefore: nb, Expires: ex, Use: s.Use, Nonce: nonce}
+	spec := mugrant.GrantSpec{Issuer: s.Issuer, Subject: s.Subject, SubjectMXID: s.SubjectMXID, SubjectAttestation: agent,
+		PublisherAttestation: publisher, Audience: s.Audience, NotBefore: nb, Expires: ex, Use: s.Use, Nonce: nonce}
 	for _, e := range s.Entries {
 		spec.Entries = append(spec.Entries, mugrant.Entry{Action: e.Action, Target: mugrant.Target{Kind: e.Kind, ID: e.ID}})
 	}

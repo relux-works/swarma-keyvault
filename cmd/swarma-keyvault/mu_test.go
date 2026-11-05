@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
@@ -61,6 +62,39 @@ func muGrantSpecMap(issuer, subject string) map[string]any {
 	}
 }
 
+// muAttestFiles signs, under the issuer key, a Mac agent attestation of the
+// subject key for mxid and a publisher attestation of a fresh key, both with a
+// 366-day window from the spec start, and returns the two flags.
+func muAttestFiles(t *testing.T, ik *ecdsa.PrivateKey, issuer string, sk *ecdsa.PrivateKey, mxid string) []string {
+	t.Helper()
+	nb := time.Date(2026, 11, 5, 17, 0, 0, 0, time.UTC)
+	ex := nb.Add(mugrant.MaxAttestationWindow)
+	sign := func(p *mugrant.Plan) []byte {
+		d := p.Digest()
+		der, err := ecdsa.SignASN1(rand.Reader, ik, d[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := mugrant.AssembleNative(p, der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	subjectSPKI, _ := x509.MarshalPKIXPublicKey(&sk.PublicKey)
+	ap, _, err := mugrant.BuildMacAgentAttestation(issuer, subjectSPKI, mxid, 1, nb, ex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, _ := muCLIKey(t)
+	publisherSPKI, _ := x509.MarshalPKIXPublicKey(&pk.PublicKey)
+	pp, _, err := mugrant.BuildPublisherAttestation(issuer, publisherSPKI, nb, ex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{"--subject-attestation", muCLIWrite(t, "agent.json", sign(ap)), "--publisher-attestation", muCLIWrite(t, "publisher.json", sign(pp))}
+}
+
 // muSignAndAssemble signs the prepared digest with k and runs mu-assemble.
 func muSignAndAssemble(t *testing.T, prepared map[string]string, k *ecdsa.PrivateKey) (int, string, string) {
 	t.Helper()
@@ -85,13 +119,14 @@ func muSignAndAssemble(t *testing.T, prepared map[string]string, k *ecdsa.Privat
 // is refused.
 func TestMUCLIGrantRoundTrip(t *testing.T) {
 	ik, issuer := muCLIKey(t)
-	_, subject := muCLIKey(t)
-	code, out, errText := muCLIRun("grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(issuer, subject)))
+	sk, subject := muCLIKey(t)
+	args := append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(issuer, subject))}, muAttestFiles(t, ik, issuer, sk, "@meta-keeper.keeper-sirius:gr.relux.works")...)
+	code, out, errText := muCLIRun(args...)
 	if code != 0 {
 		t.Fatal(code, errText)
 	}
 	var p map[string]string
-	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @meta-keeper") || !strings.Contains(p["rendering"], "use policy: until_expiry") {
+	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @meta-keeper") || !strings.Contains(p["rendering"], "use policy: until_expiry") || !strings.Contains(p["rendering"], "revocation publisher key SPKI SHA-256: ") || !strings.Contains(p["rendering"], "grantee: @meta-keeper.keeper-sirius:gr.relux.works (generation 1, from attestation sha256:") {
 		t.Fatal("prepared output", err, out)
 	}
 	code, wire, errText := muSignAndAssemble(t, p, ik)
@@ -132,24 +167,38 @@ func TestMUCLIRequestRoundTrip(t *testing.T) {
 // interval or missing arguments are refused with a non-zero exit and no
 // stdout, beside the valid control above.
 func TestMUCLIRefusals(t *testing.T) {
-	_, issuer := muCLIKey(t)
-	_, subject := muCLIKey(t)
+	ik, issuer := muCLIKey(t)
+	sk, subject := muCLIKey(t)
+	attest := muAttestFiles(t, ik, issuer, sk, "@meta-keeper.keeper-sirius:gr.relux.works")
+	if code, _, errText := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, attest...)...); code != 0 {
+		t.Fatal("valid control refused", errText)
+	}
+	otherRoot, otherID := muCLIKey(t)
+	mismatch := muGrantSpecMap(issuer, subject)
+	mismatch["subject_mxid"] = "@other-agent:gr.relux.works"
 	unknown := muGrantSpecMap(issuer, subject)
 	unknown["max_uses"] = 5
 	badTime := muGrantSpecMap(issuer, subject)
 	badTime["not_before"] = "2026-11-05 17:00:00"
 	overCap := muGrantSpecMap(issuer, subject)
 	overCap["expires"] = "2027-11-05T17:00:01Z"
-	for name, spec := range map[string]map[string]any{"unknown-field": unknown, "bad-time": badTime, "over-cap": overCap} {
-		if code, out, _ := muCLIRun("grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", spec)); code == 0 || out != "" {
+	for name, spec := range map[string]map[string]any{"unknown-field": unknown, "bad-time": badTime, "over-cap": overCap, "mxid-not-attested": mismatch} {
+		if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", spec)}, attest...)...); code != 1 || out != "" {
 			t.Fatal("spec admitted", name, code, out)
 		}
 	}
+	// Attestations signed by another root do not bind this issuer's grant.
+	foreign := muAttestFiles(t, otherRoot, otherID, sk, "@meta-keeper.keeper-sirius:gr.relux.works")
+	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, foreign...)...); code != 1 || out != "" {
+		t.Fatal("foreign-root attestations admitted", code)
+	}
 	for name, args := range map[string][]string{
-		"no-spec":       {"grants", "mu-grant-prepare"},
-		"stdin-spec":    {"grants", "mu-grant-prepare", "--spec", "-"},
-		"repeated-spec": {"grants", "mu-grant-prepare", "--spec", "a", "--spec", "b"},
-		"bad-kind":      {"grants", "mu-assemble", "--kind", "operator-act/1", "--body", "b", "--key", "k", "--signature", "s"},
+		"no-spec":         append([]string{"grants", "mu-grant-prepare"}, attest...),
+		"stdin-spec":      append([]string{"grants", "mu-grant-prepare", "--spec", "-"}, attest...),
+		"repeated-spec":   append([]string{"grants", "mu-grant-prepare", "--spec", "a", "--spec", "b"}, attest...),
+		"no-attestations": {"grants", "mu-grant-prepare", "--spec", "a"},
+		"no-publisher":    {"grants", "mu-grant-prepare", "--spec", "a", attest[0], attest[1]},
+		"bad-kind":        {"grants", "mu-assemble", "--kind", "operator-act/1", "--body", "b", "--key", "k", "--signature", "s"},
 	} {
 		if code, out, _ := muCLIRun(args...); code != 2 || out != "" {
 			t.Fatal("usage not refused", name, code, out)

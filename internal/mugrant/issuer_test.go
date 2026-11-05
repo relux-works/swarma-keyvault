@@ -22,12 +22,14 @@ func metaSpec(t *testing.T) GrantSpec {
 		entries = append(entries, Entry{a, product})
 	}
 	entries = append(entries, Entry{"account.manage", Target{"account-scope", "owner:alexis"}}, Entry{"room.membership", Target{"room-scope", "swarma-space"}})
-	return GrantSpec{
+	spec := GrantSpec{
 		Issuer: issuer, Subject: subject, SubjectMXID: metaMXID, Audience: "swarma-keyvault-receiver",
 		Entries:   entries,
 		NotBefore: time.Date(2026, 11, 5, 13, 0, 0, 0, time.UTC), Expires: time.Date(2027, 11, 5, 13, 0, 0, 0, time.UTC),
 		Use: UseUntilExpiry, Nonce: bytes.Repeat([]byte{0x11}, 16),
 	}
+	attestSpec(t, &spec)
+	return spec
 }
 
 // Claim: the Meta delegation builds a canonical grant/1 body with sorted
@@ -135,6 +137,7 @@ func TestGrantSpecRefusals(t *testing.T) {
 func TestGrantReasonBounds(t *testing.T) {
 	s := metaSpec(t)
 	s.SubjectMXID = "@" + strings.Repeat("m", 120) + ":gr.relux.works"
+	attestSpec(t, &s)
 	g, err := BuildGrant(s)
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +163,7 @@ func TestGrantSignAssemble(t *testing.T) {
 	sk, subject := testKey(t)
 	s := metaSpec(t)
 	s.Issuer, s.Subject = issuer, subject
+	attestSpec(t, &s)
 	g, err := BuildGrant(s)
 	if err != nil {
 		t.Fatal(err)

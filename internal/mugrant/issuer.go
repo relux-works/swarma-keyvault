@@ -71,19 +71,26 @@ type Entry struct {
 
 // GrantSpec is what the owner chooses at signing time.
 type GrantSpec struct {
-	Issuer, Subject    string // p256 key ids
-	SubjectMXID        string // display and registry index only
-	Audience           string
-	Entries            []Entry
-	NotBefore, Expires time.Time
-	Use                string
-	Nonce              []byte // 16 CSPRNG bytes in production; fixed only in tests
+	Issuer, Subject string // p256 key ids
+	SubjectMXID     string // expected grantee; must equal the attested MXID
+	// SubjectAttestation is the owner-root Mac agent attestation of Subject;
+	// the grantee MXID shown and put into the reason is taken from it.
+	SubjectAttestation []byte
+	// PublisherAttestation is the owner-root grant revocation publisher
+	// attestation; its key is shown in the rendering (r5 constraint 6).
+	PublisherAttestation []byte
+	Audience             string
+	Entries              []Entry
+	NotBefore, Expires   time.Time
+	Use                  string
+	Nonce                []byte // 16 CSPRNG bytes in production; fixed only in tests
 }
 
 // Grant is a prepared, unsigned grant/1 with its signing plan.
 type Grant struct {
-	spec GrantSpec
-	plan *Plan
+	spec             GrantSpec
+	plan             *Plan
+	agent, publisher *AttestedKey
 }
 
 func wireTime(t time.Time) string { return t.UTC().Format("2006-01-02T15:04:05Z") }
@@ -133,6 +140,17 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 		return nil, ErrGrantInterval
 	}
 	if len(spec.Entries) == 0 || len(spec.Entries) > 64 {
+		return nil, ErrGrantSpec
+	}
+	// The grantee MXID comes from the verified attestation of the subject key
+	// (contract section 5); a different expected MXID refuses. Both
+	// attestations must cover the whole grant interval.
+	agent, err := VerifyMacAgentAttestation(spec.SubjectAttestation, spec.Issuer)
+	if err != nil || agent.Key != spec.Subject || agent.MXID != spec.SubjectMXID || !agent.covers(spec.NotBefore, spec.Expires) {
+		return nil, ErrGrantSpec
+	}
+	publisher, err := VerifyPublisherAttestation(spec.PublisherAttestation, spec.Issuer)
+	if err != nil || publisher.Key == spec.Subject || !publisher.covers(spec.NotBefore, spec.Expires) {
 		return nil, ErrGrantSpec
 	}
 	actions := map[string]bool{}
@@ -188,7 +206,7 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Grant{spec: spec, plan: plan}, nil
+	return &Grant{spec: spec, plan: plan, agent: agent, publisher: publisher}, nil
 }
 
 // Plan returns the grant's signing plan.
@@ -235,7 +253,7 @@ func (g *Grant) Reason() (string, error) {
 		labels = append(labels, a.Short)
 	}
 	d := g.plan.Digest()
-	r := fmt.Sprintf("%s · %s · %s · %s · SHA256 %x", policyLabel(g.spec.Use), g.spec.SubjectMXID, mskInterval(g.spec.NotBefore, g.spec.Expires), strings.Join(labels, ", "), d[26:])
+	r := fmt.Sprintf("%s · %s · %s · %s · SHA256 %x", policyLabel(g.spec.Use), g.agent.MXID, mskInterval(g.spec.NotBefore, g.spec.Expires), strings.Join(labels, ", "), d[26:])
 	if !utf8.ValidString(r) || utf8.RuneCountInString(r) > ReasonLimit {
 		return "", ErrReasonOverflow
 	}
@@ -254,8 +272,11 @@ func (g *Grant) Rendering() string {
 	d := g.plan.Digest()
 	fmt.Fprintf(&b, "grant/1 owner grant, to be signed under Touch ID\n")
 	fmt.Fprintf(&b, "issuer: %s\n", g.spec.Issuer)
-	fmt.Fprintf(&b, "grantee: %s\n", g.spec.SubjectMXID)
+	fmt.Fprintf(&b, "grantee: %s (generation %d, from attestation %s)\n", g.agent.MXID, g.agent.Generation, g.agent.ContentID)
 	fmt.Fprintf(&b, "grantee key: %s\n", g.spec.Subject)
+	fmt.Fprintf(&b, "grantee key SPKI SHA-256: %x\n", g.agent.SPKISHA256)
+	fmt.Fprintf(&b, "revocation publisher key: %s (attestation %s)\n", g.publisher.Key, g.publisher.ContentID)
+	fmt.Fprintf(&b, "revocation publisher key SPKI SHA-256: %x\n", g.publisher.SPKISHA256)
 	fmt.Fprintf(&b, "audience: %s\n", g.spec.Audience)
 	fmt.Fprintf(&b, "use policy: %s\n", g.spec.Use)
 	fmt.Fprintf(&b, "interval UTC: %s – %s\n", wireTime(g.spec.NotBefore), wireTime(g.spec.Expires))
