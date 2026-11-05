@@ -88,8 +88,8 @@ func parseA2AWrapper(raw []byte, expected A2AObservationContext) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	c, ok := a2aJSONObject(n, []string{"msgtype", "body", "ai.relux.a2a", "m.mentions", "m.relates_to"})
-	if !ok || !a2aJSONText(c, "msgtype", "m.text") {
+	c, ok := a2aJSONObject(n, []string{"msgtype", "body", "ai.relux.a2a", "m.mentions", "m.relates_to"}, "format", "formatted_body")
+	if !ok || !a2aJSONText(c, "msgtype", "m.text") || !a2aHTMLRendering(c) {
 		return nil, ErrA2AContext
 	}
 	h, ok := a2aJSONObject(c["ai.relux.a2a"], []string{"v", "type", "slug", "topic", "from", "to", "at", "kind"}, "re")
@@ -157,6 +157,20 @@ func a2aDeclaration(value string) bool {
 		}
 	}
 	return true
+}
+
+// a2aHTMLRendering admits the optional HTML rendering that the a2a sender
+// adds to framed text posts: format and formatted_body together or neither,
+// format exactly "org.matrix.custom.html" and formatted_body a string. The
+// rendering is never read; body stays the only verified text.
+func a2aHTMLRendering(c map[string]any) bool {
+	_, hasFormat := c["format"]
+	_, hasBody := c["formatted_body"]
+	if !hasFormat && !hasBody {
+		return true
+	}
+	_, isString := c["formatted_body"].(string)
+	return hasFormat && hasBody && a2aJSONText(c, "format", "org.matrix.custom.html") && isString
 }
 
 func a2aJSONObject(v any, required []string, optional ...string) (map[string]any, bool) {
