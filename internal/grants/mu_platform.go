@@ -1,0 +1,246 @@
+package grants
+
+import (
+	"crypto/sha256"
+	"errors"
+	"time"
+
+	"github.com/relux-works/swarma-envelope/record"
+	"github.com/relux-works/swarma-envelope/verifier"
+)
+
+// ErrMUPlatform carries a platform verifier refusal code.
+type ErrMUPlatform struct{ Code string }
+
+func (e *ErrMUPlatform) Error() string { return "mu-platform-refused: " + e.Code }
+
+// MUMacAgent is one pinned Mac agent: its owner-root attestation and the
+// current generation the owner registered for it.
+type MUMacAgent struct {
+	Key         string // p256 key id
+	Attestation []byte // raw attestation/1 (profile mac-se-1)
+	Generation  int64
+}
+
+// MUPlatformConfig is the receiver's pinned trust configuration for the
+// platform verifier. Every field comes from protected local configuration,
+// never from the event.
+type MUPlatformConfig struct {
+	GrantRoot     string
+	Audience      string
+	Grants        [][]byte              // pinned owner-signed grant/1 envelopes
+	Agents        map[string]MUMacAgent // by full MXID (registry index only)
+	Publisher     []byte                // raw publisher attestation (grant-revocation-1)
+	PublisherKey  string
+	Snapshot      func() ([]byte, error) // latest publisher snapshot bytes
+	TimeAuthority time.Duration          // how long the local clock is asserted trusted
+}
+
+// MUEnvelopeEvent is the a2a envelope projection of one authenticated event.
+type MUEnvelopeEvent struct {
+	Sender, Receiver, Room, EventID string
+	Envelope, Text                  []byte
+}
+
+// MUPlatform adapts swarma-envelope's verifier to MUVerifier.
+type MUPlatform struct {
+	config MUPlatformConfig
+	events func(eventID string) (MUEnvelopeEvent, error)
+}
+
+// NewMUPlatform builds the adapter. events resolves an event id to its
+// authenticated projection (the pinned a2a read).
+func NewMUPlatform(c MUPlatformConfig, events func(string) (MUEnvelopeEvent, error)) *MUPlatform {
+	return &MUPlatform{config: c, events: events}
+}
+
+func muEvidence(v any) (verifier.Evidence, error) { return verifier.Present(v) }
+
+// Verify checks the projected event with VerifyMessage, selects the single
+// covering pinned grant by author, runs Authorize, and returns the decision
+// with the verified publisher snapshot's entries.
+func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
+	if p == nil || p.events == nil || p.config.Snapshot == nil {
+		return MUDecision{}, ErrMUState
+	}
+	pe, err := p.events(ev.EventID)
+	if err != nil || pe.Sender != ev.SenderMXID || pe.EventID != ev.EventID || pe.Room == "" {
+		return MUDecision{}, ErrMUState
+	}
+	agent, ok := p.config.Agents[pe.Sender]
+	if !ok {
+		return MUDecision{}, ErrMUSender
+	}
+	snap, err := p.config.Snapshot()
+	if err != nil {
+		return MUDecision{}, &ErrMUPlatform{"revocation_unavailable"}
+	}
+	attID, err := muRecordID(agent.Attestation, "attestation/1")
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	nowText := now.UTC().Format("2006-01-02T15:04:05Z")
+	facts := map[string]any{
+		"audience": p.config.Audience, "required_roles": []any{"author"}, "known_keys": []any{agent.Key},
+		"root": p.config.GrantRoot, "attestations": map[string]any{attID: agent.Attestation},
+		"agent_attestation_ids": map[string]any{agent.Key: attID},
+		// The MXID is filled from the authenticated sender, never the request.
+		"active_generations": map[string]any{agent.Key: map[string]any{"profile": "mac-se-1", "mxid": pe.Sender, "generation": agent.Generation, "active": true}},
+		"revocations":        map[string]any{p.config.PublisherKey: map[string]any{"availability": "available", "max_age": int64(60), "rollback_safe": true, "snapshot": snap}},
+		"time":               map[string]any{"trusted": true, "fresh": true, "authority_until": now.UTC().Add(p.config.TimeAuthority).Format("2006-01-02T15:04:05Z")},
+		"now":                nowText, "watermark_available": true, "watermark": nowText,
+		"id_journal_available": true, "seen": map[string]any{}, "replay_available": true, "used_actions": []any{},
+		"assurance": map[string]any{"level": "A2", "presence": false},
+		// No operator devices take part: an explicit empty collection, never absence.
+		"operator_attestations": map[string]any{},
+		"delivery":              map[string]any{"room": pe.Room, "to": pe.Receiver, "text": pe.Text},
+	}
+	c, err := muContext(facts, p.config.Publisher)
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	v := verifier.New(c)
+	if r := v.VerifyMessage(pe.Envelope); r.Code != "accept" {
+		return MUDecision{}, &ErrMUPlatform{r.Code}
+	}
+	body, err := muMessageBody(pe.Envelope)
+	if err != nil {
+		return MUDecision{}, err
+	}
+	target, _ := body["target"].(map[string]any)
+	action, _ := body["action"].(string)
+	kind, _ := target["kind"].(string)
+	id, _ := target["id"].(string)
+	author, _ := body["author"].(string)
+	if author != agent.Key {
+		return MUDecision{}, ErrMUSender
+	}
+	grant, err := muSelectGrant(p.config.Grants, author, action, kind, id)
+	if err != nil {
+		return MUDecision{}, err
+	}
+	req, err := muEvidence(map[string]any{"key": author, "action": action, "target": map[string]any{"kind": kind, "id": id}})
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	r := v.Authorize([][]byte{grant}, req)
+	if r.Code != "accept" {
+		return MUDecision{}, &ErrMUPlatform{r.Code}
+	}
+	args := map[string]string{}
+	if a, ok := body["arguments"].(map[string]any); ok {
+		for k, x := range a {
+			s, ok := x.(string)
+			if !ok {
+				return MUDecision{}, ErrMUState
+			}
+			args[k] = s
+		}
+	}
+	exp, err := time.Parse("2006-01-02T15:04:05Z", strOr(body["exp"]))
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	grantID, err := muRecordID(grant, "grant/1")
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	entries, err := muSnapshotEntries(snap)
+	if err != nil {
+		return MUDecision{}, ErrMUState
+	}
+	nonce, _ := body["nonce"].(string)
+	aud, _ := body["aud"].(string)
+	return MUDecision{GrantRoot: p.config.GrantRoot, GrantID: grantID, Use: r.Plan.Use, Author: author, Audience: aud, Nonce: nonce,
+		Action: action, TargetKind: kind, TargetID: id, Arguments: args, AuthorAttestation: attID, Expires: exp,
+		RequestHash: sha256.Sum256(pe.Envelope), PublisherKey: p.config.PublisherKey, Revocations: entries}, nil
+}
+
+func strOr(v any) string { s, _ := v.(string); return s }
+
+func muContext(f map[string]any, publisher []byte) (verifier.Context, error) {
+	var c verifier.Context
+	slots := map[string]*verifier.Evidence{"audience": &c.Audience, "required_roles": &c.RequiredRoles, "known_keys": &c.AdmittedKeys, "root": &c.GrantRoot,
+		"attestations": &c.Attestations, "agent_attestation_ids": &c.AgentAttestationIDs, "active_generations": &c.CurrentGenerations, "revocations": &c.SignedSnapshots,
+		"time": &c.Time, "now": &c.Now, "watermark_available": &c.WatermarkAvailable, "watermark": &c.Watermark, "id_journal_available": &c.IDJournalAvailable,
+		"seen": &c.IDJournal, "replay_available": &c.ReplayAvailable, "used_actions": &c.UsedActions, "assurance": &c.Assurance, "delivery": &c.Delivery,
+		"operator_attestations": &c.DeviceAttestations}
+	for name, slot := range slots {
+		e, err := verifier.Present(f[name])
+		if err != nil {
+			return c, err
+		}
+		*slot = e
+	}
+	if publisher != nil {
+		e, err := verifier.Present(publisher)
+		if err != nil {
+			return c, err
+		}
+		c.GrantRevocationPublisher = e
+	}
+	return c, nil
+}
+
+func muParseEnvelope(raw []byte) (map[string]any, error) {
+	p, err := record.Parse(raw, 65536, 16)
+	if err != nil {
+		return nil, ErrMUState
+	}
+	e, ok := p.(map[string]any)
+	if !ok {
+		return nil, ErrMUState
+	}
+	return e, nil
+}
+
+func muMessageBody(raw []byte) (map[string]any, error) {
+	e, err := muParseEnvelope(raw)
+	if err != nil {
+		return nil, err
+	}
+	b, ok := e["body"].(map[string]any)
+	if !ok || b["type"] != "message/1" {
+		return nil, ErrMUState
+	}
+	return b, nil
+}
+
+func muRecordID(raw []byte, kind string) (string, error) {
+	e, err := muParseEnvelope(raw)
+	if err != nil {
+		return "", err
+	}
+	b, ok := e["body"].(map[string]any)
+	if !ok || b["type"] != kind {
+		return "", ErrMUState
+	}
+	id, err := record.ContentID(kind, b)
+	if err != nil || id != e["id"] {
+		return "", errors.New("content id mismatch")
+	}
+	return id, nil
+}
+
+// muSnapshotEntries returns the entries of a snapshot the verifier already
+// accepted in the same call.
+func muSnapshotEntries(raw []byte) ([]MURevocation, error) {
+	e, err := muParseEnvelope(raw)
+	if err != nil {
+		return nil, err
+	}
+	b, _ := e["body"].(map[string]any)
+	list, _ := b["entries"].([]any)
+	out := []MURevocation{}
+	for _, x := range list {
+		m, _ := x.(map[string]any)
+		kind, _ := m["kind"].(string)
+		id, _ := m["id"].(string)
+		r := MURevocation{kind, id}
+		if !validMURevocation(r) {
+			return nil, ErrMUState
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}

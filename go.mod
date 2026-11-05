@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.10
 
 require (
-	github.com/relux-works/swarma-envelope v0.0.0-20261029070039-dad9b73ee4bf
+	github.com/relux-works/swarma-envelope v0.0.0-20261105130430-7cc3adf34623
 	golang.org/x/crypto v0.55.0
 	golang.org/x/sys v0.47.0
 )
