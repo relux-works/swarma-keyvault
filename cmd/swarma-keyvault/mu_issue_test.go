@@ -112,11 +112,15 @@ func TestMUIssue(t *testing.T) {
 		{"grant", "grant/1", "до срока · @meta-keeper.keeper-sirius:gr.relux.works · ", false},
 		{"mac-agent", "attestation/1", "ключ агента · @meta-keeper.keeper-sirius:gr.relux.works · поколение 1 · ", true},
 		{"publisher", "attestation/1", "ключ отзыва грантов · ", true},
+		{"publisher-ed25519", "attestation/1", "ключ отзыва грантов Ed25519 · ", true},
 	}
 	for _, c := range cases {
 		t.Run(c.kind, func(t *testing.T) {
 			f := newMUIssueFixture(t, nil)
 			spec := muAttestSpec(c.kind, f.root)
+			if c.kind == "publisher-ed25519" {
+				f.subject = muCLIWrite(t, "publisher-ed25519.der", muEd25519SPKI(t))
+			}
 			if c.kind == "grant" {
 				spec = muGrantSpecMap(f.root, f.agentID)
 			}
