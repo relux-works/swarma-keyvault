@@ -50,6 +50,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return runMUAssemble(args[2:], stdout, stderr)
 		case "mu-revocation-publish":
 			return runMURevocationPublish(args[2:], stdout, stderr)
+		case "mu-state-init", "mu-execute":
+			return runMUReceiver(args[1], args[2:], stdout, stderr)
 		}
 	}
 	if len(args) >= 2 && args[0] == "grants" && args[1] == "local-issue" {

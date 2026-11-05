@@ -17,6 +17,14 @@ import (
 // records each process start, without opening credentials or making a network
 // call. The external docking test uses this same process boundary.
 func TestMain(m *testing.M) {
+	if dir := os.Getenv("KEYVAULT_MU_A2A_DIR"); dir != "" && len(os.Args) == 11 && os.Args[1] == "--profile" && os.Args[9] == "--envelope-input" {
+		raw, err := os.ReadFile(filepath.Join(dir, strings.TrimPrefix(os.Args[8], "$")+".json"))
+		if err != nil {
+			os.Exit(91)
+		}
+		_, _ = os.Stdout.Write(raw)
+		os.Exit(0)
+	}
 	if mode := os.Getenv("KEYVAULT_A2A_PROJECTION_FIXTURE"); mode != "" && len(os.Args) > 1 && os.Args[1] == "--profile" {
 		os.Exit(runA2AProjectionFixture(mode))
 	}
