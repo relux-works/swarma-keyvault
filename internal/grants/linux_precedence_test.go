@@ -153,3 +153,31 @@ func TestLinuxReceiverPauseBeforeWidening(t *testing.T) {
 		t.Fatalf("got %v with %d effects, want %v", err, g.calls.Load(), ErrMUPaused)
 	}
 }
+
+// Claim: at the first pass, a grant-authority action under a grant that is
+// already known revoked refuses as widening (step 8) before revoked (step 9);
+// no effect runs. Control: the same known revocation with the unchanged
+// action refuses as revoked.
+func TestLinuxReceiverWideningBeforeKnownRevocation(t *testing.T) {
+	for _, action := range []string{"", "grant.issue"} {
+		t.Run("action="+action, func(t *testing.T) {
+			g := newLinuxRig(t)
+			e := g.event(t, "$widen-revoked")
+			if action != "" {
+				from := []byte(`"action":"work.assign"`)
+				if bytes.Count(e.Envelope, from) != 1 {
+					t.Fatal("setup: envelope does not carry one work.assign action")
+				}
+				e.Envelope = bytes.Replace(e.Envelope, from, []byte(`"action":"`+action+`"`), 1)
+			}
+			g.r.config.RootRevocations = func() ([]MURevocation, error) { return []MURevocation{{"record", g.v.grant}}, nil }
+			want := ErrMURevoked
+			if action != "" {
+				want = ErrMUWidening
+			}
+			if _, err := g.r.Handle(context.Background(), e); !errors.Is(err, want) || g.calls.Load() != 0 {
+				t.Fatalf("got %v with %d effects, want %v", err, g.calls.Load(), want)
+			}
+		})
+	}
+}
