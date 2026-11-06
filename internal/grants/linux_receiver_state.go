@@ -175,7 +175,7 @@ func (s *linuxRevocationState) admit(mu *muState, snapshots []LinuxVerifiedSnaps
 	seen := map[string]bool{}
 	publisher := false
 	for _, v := range snapshots {
-		if !validLinuxSnapshot(v) || seen[v.Signer] || v.IssuedAt.After(now) || now.Sub(v.IssuedAt) > LinuxPublisherMaxAge {
+		if !validLinuxSnapshot(v) || seen[v.Signer] {
 			return ErrMUState
 		}
 		seen[v.Signer] = true
@@ -197,6 +197,16 @@ func (s *linuxRevocationState) admit(mu *muState, snapshots []LinuxVerifiedSnaps
 	}
 	if !publisher {
 		return ErrMUState
+	}
+	// Validate the whole adapter batch and decision binding before any write.
+	// Freshness judges the request, not the independently verified evidence.
+	for _, v := range snapshots {
+		if v.IssuedAt.After(now) || now.Sub(v.IssuedAt) > LinuxPublisherMaxAge {
+			if err := s.observe(mu, snapshots, now); err != nil {
+				return err
+			}
+			return ErrMUState
+		}
 	}
 	for _, v := range snapshots {
 		if err := s.continuity(v); err != nil {
