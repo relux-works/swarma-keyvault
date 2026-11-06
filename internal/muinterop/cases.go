@@ -378,6 +378,8 @@ func MacFamily() ([]Case, error) {
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(fresh), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(older), Expected: "mu-revocation-snapshot-rollback"}}},
 		one("M-N-root-revoked", "An owner-root revocation in the receiver's protected configuration revokes the grant at any age, while the fresh publisher snapshot does not list it.", "M-P-accept",
 			rootRecords, ev("$root-revoked", rAccept, text), fresh, "mu-grant-revoked"),
+		one("M-N-out-of-scope-and-revoked", "A module outside the receiver's modules and an owner-root revocation of the grant fail together; the receiver refuses by owner scope, because its step-8 checks take precedence over step-9 revocation. This case deliberately combines two failures to pin that precedence; M-N-module-outside and M-N-root-revoked are its single-failure comparisons.", "M-P-accept",
+			rootRecords, ev("$scope-revoked", rModule, text), fresh, "mu-request-out-of-owner-scope"),
 		{Format: Format, ID: "M-N-snapshot-rollback", Claim: "A newer publisher snapshot that drops a revocation the receiver already holds refuses as rollback.", PositiveControl: "M-P-accept",
 			Pins: pins, Records: records(gCurrent), Events: []Event{ev("$first", rAccept, text), ev("$second", rSecond, text)},
 			Steps: []Step{{Event: "$first", Now: now, Snapshot: B64(withEntry), Expected: "succeeded"}, {Event: "$second", Now: later, Snapshot: B64(fresh), Expected: "mu-revocation-snapshot-rollback"}}},

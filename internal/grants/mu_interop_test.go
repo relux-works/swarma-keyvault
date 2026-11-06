@@ -172,17 +172,22 @@ func TestMUInteropVectors(t *testing.T) {
 	for _, c := range cases {
 		byID[c.ID] = c
 	}
+	steps, matched, effects := 0, 0, 0
 	for _, c := range cases {
 		got, calls := muInteropRun(t, c)
 		succeeded := 0
 		for i, s := range c.Steps {
+			steps++
 			if got[i] != s.Expected {
 				t.Errorf("%s step %d: got %s, want %s", c.ID, i, got[i], s.Expected)
+			} else {
+				matched++
 			}
 			if s.Expected == "succeeded" {
 				succeeded++
 			}
 		}
+		effects += calls
 		if calls != succeeded {
 			t.Errorf("%s: %d effects for %d succeeded steps", c.ID, calls, succeeded)
 		}
@@ -193,6 +198,7 @@ func TestMUInteropVectors(t *testing.T) {
 			}
 		}
 	}
+	t.Logf("MU_INTEROP_TOTAL cases=%d steps=%d matched=%d effects=%d", len(cases), steps, matched, effects)
 }
 
 func bytesReader(b []byte) *bytes.Reader { return bytes.NewReader(b) }

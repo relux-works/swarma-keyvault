@@ -1,6 +1,6 @@
-# Multi-use owner grants: cross-platform interop contract (r8.1, agreed)
+# Multi-use owner grants: cross-platform interop contract (r8.2, agreed)
 
-Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7, which both sides agreed, states which snapshots count as verified for the revocation duties and adds three vectors. r8 admits an Ed25519 revocation publisher (profile `grant-revocation-2`) and adds the P2 vector family; r8.1 answers the other side's review of r8 (entry points, consumer scope, Linux-author vectors, role distinctness, publisher rotation). Every changed rule is marked "(r5)", "(r6)", "(r7)", "(r8)" or "(r8.1)". Both sides agreed r8.1 on 2026-11-05 (UTC), at swarma-keyvault ab045eb3.
+Status: r6 revises r3, which both sides agreed. r5 made the contract exact after review; r6 adds the Linux family and the revocation duties. r7, which both sides agreed, states which snapshots count as verified for the revocation duties and adds three vectors. r8 admits an Ed25519 revocation publisher (profile `grant-revocation-2`) and adds the P2 vector family; r8.1 answers the other side's review of r8 (entry points, consumer scope, Linux-author vectors, role distinctness, publisher rotation). r8.2 pins the receiver's refusal precedence (section 3, step 8 before step 9) with one combined vector. Every changed rule is marked "(r5)", "(r6)", "(r7)", "(r8)", "(r8.1)" or "(r8.2)". Both sides agreed r8.1 on 2026-11-05 (UTC), at swarma-keyvault ab045eb3, and r8.2 on 2026-11-06 (UTC).
 
 Owner, 2026-11-05 16:51 MSK: «наши только доверенности под мак довести и чтоб оин со стороны линкуса кросплатформ поддержали - наша отвественность».
 
@@ -213,6 +213,7 @@ Receiver codes:
   - `events`: each with `event_id`, `envelope`, and `text` (base64url of the exact text bytes);
   - `steps`, run in order against one fresh receiver journal. Each has `event`, a trusted `now`, the publisher `snapshot` current at that time, and `expected`, the exact verdict: `succeeded` or a refusal code from §3.1.
 - Every negative differs from its positive control in one fact.
+- (r8.2) `M-N-out-of-scope-and-revoked` deliberately combines two failures to pin refusal precedence; it is an explicit exception to the one-fact rule.
 - The check runs on the Mac: every step goes through the pinned platform verifier and the KV receiver. L runs the same files through its build. A disagreement is decided against the spec.
 
 ### 5.1 Pins to verifier facts (r5)

@@ -718,6 +718,7 @@ var linuxServedCases = map[string]bool{
 	"M-N-room-mismatch":                         true,
 	"M-N-room-outside-scope":                    true,
 	"M-N-root-revoked":                          true,
+	"M-N-out-of-scope-and-revoked":              true,
 	"M-N-snapshot-older":                        true,
 	"M-N-snapshot-rollback":                     true,
 	"M-N-stale-snapshot":                        true,

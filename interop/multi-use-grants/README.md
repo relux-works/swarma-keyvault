@@ -89,6 +89,7 @@ controls stop an implementation that refuses everything from passing.
 | `M-N-refused-then-older-mark` | a request for another audience with a fresh snapshot, then a request with an older snapshot that drops nothing | `audience_mismatch`, then `mu-revocation-snapshot-rollback` |
 | `M-N-snapshot-older` | older snapshot after a newer one, both under 60 s | `succeeded`, then `mu-revocation-snapshot-rollback` |
 | `M-N-root-revoked` | owner-root revocation in the receiver configuration, publisher snapshot silent | `mu-grant-revoked` |
+| `M-N-out-of-scope-and-revoked` | two facts, by design: the `M-N-module-outside` request and the `M-N-root-revoked` owner-root revocation | `mu-request-out-of-owner-scope` (owner scope precedes revocation) |
 
 Linux-authored (Ed25519) family:
 - Mac-issued grants name the Linux agent's Ed25519 key.
