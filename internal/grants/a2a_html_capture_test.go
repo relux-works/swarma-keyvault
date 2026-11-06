@@ -97,7 +97,12 @@ func TestA2ACapturedHTMLPostsRefusals(t *testing.T) {
 			"null-formatted-body":    nullRaw,
 			"oversize-wrapper":       bigRaw,
 			"duplicate-format":       bytes.Replace(raw, []byte(formatPair), []byte(formatPair+","+formatPair), 1),
-			"escaped-duplicate-name": bytes.Replace(raw, []byte(formatPair), []byte(formatPair+`,"format":"org.matrix.custom.html"`), 1),
+			"escaped-duplicate-name": bytes.Replace(raw, []byte(formatPair), []byte(formatPair+`,"form\u0061t":"org.matrix.custom.html"`), 1),
+		}
+		// The escaped spelling must really carry the JSON escape, so that a
+		// check comparing raw key bytes instead of decoded names cannot pass.
+		if escaped := cases["escaped-duplicate-name"]; !bytes.Contains(escaped, []byte(`"form\u0061t"`)) || bytes.Equal(escaped, cases["duplicate-format"]) {
+			t.Fatal("escaped duplicate case is not escaped", c.file)
 		}
 		for name, bad := range cases {
 			if bytes.Equal(bad, raw) {
