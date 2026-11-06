@@ -301,11 +301,7 @@ func peerOf(t *testing.T, dir, binary string) (CodeIdentity, error) {
 // one byte changed after signing is not valid. The runtime,library variant
 // without the entitlement is the positive control.
 func TestCodeInspectorReadsSignatures(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ki")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := privateTemp(t)
 	ents := filepath.Join(dir, "gta.plist")
 	os.WriteFile(ents, []byte(getTaskAllow), 0o600)
 	variants := []struct {

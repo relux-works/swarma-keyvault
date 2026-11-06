@@ -22,8 +22,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/sockettest"
 	"github.com/relux-works/swarma-keyvault/pkg/kekclient"
 )
 
@@ -216,12 +218,10 @@ func (f *fixture) wrap(cdhash string, kek []byte) []byte {
 
 func privateTemp(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "kk")
-	if err != nil {
+	dir := sockettest.Dir(t, "kk")
+	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	os.Chmod(dir, 0o700)
 	return dir
 }
 
@@ -629,5 +629,65 @@ func TestAuditChainDetectsEdits(t *testing.T) {
 		if _, _, err := f.audit.Verify(); err == nil {
 			t.Fatalf("%s: chain still verifies", name)
 		}
+	}
+}
+
+// Character counts describe the literal TMPDIR input; Unix sockets budget UTF-8
+// bytes. Both cases have at least 70 characters and exercise binding, a real fixture
+// server exchange, and cleanup through the same privateTemp used by its callers.
+func TestPrivateTempWithLongTMPDIR(t *testing.T) {
+	setup := filepath.Join(t.TempDir(), strings.Repeat("x", 58))
+	if err := os.Mkdir(setup, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", setup)
+	parent := sockettest.Dir(t, "kk-env")
+	for _, tc := range []struct {
+		name  string
+		chars int
+		pad   string
+	}{
+		{"ascii100", 100, "x"},
+		{"utf8-70-characters", 70, "é"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := filepath.Join(parent, strings.Repeat(tc.pad, tc.chars-utf8.RuneCountInString(parent)-1))
+			if err := os.Mkdir(input, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if utf8.RuneCountInString(input) != tc.chars {
+				t.Fatal("incorrect TMPDIR character count")
+			}
+			t.Setenv("TMPDIR", input)
+			var dir string
+			t.Run("socket-and-exchange", func(t *testing.T) {
+				dir = privateTemp(t)
+				path := filepath.Join(dir, "s")
+				t.Logf("TMPDIR: %d bytes/%d characters; socket: %d bytes/%d characters", len(input), utf8.RuneCountInString(input), len(path), utf8.RuneCountInString(path))
+				ln, err := net.Listen("unix", path)
+				if err != nil {
+					t.Fatalf("fixture socket bind: %v", err)
+				}
+				if err := ln.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if len(path) > sockettest.MaxPath {
+					t.Fatalf("socket exceeds portable byte budget: %d", len(path))
+				}
+				if filepath.Dir(dir) != sockettest.Base(input) {
+					t.Fatal("privateTemp did not use existing sockettest base")
+				}
+				f := newFixture(t, nil)
+				if resp, _ := f.unwrap(); !resp.OK || resp.Result == nil || !bytes.Equal(resp.Result.KEK, testKEK) {
+					t.Fatal("fixture server exchange refused")
+				}
+				if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+					t.Fatalf("socket cleanup: entries=%v error=%v", entries, err)
+				}
+			})
+			if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("fixture directory survived cleanup: %v", err)
+			}
+		})
 	}
 }

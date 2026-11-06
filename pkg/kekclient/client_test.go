@@ -16,6 +16,9 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/relux-works/swarma-keyvault/internal/sockettest"
 )
 
 // The test binary doubles as a fake broker: with fakeBrokerEnv set it
@@ -124,11 +127,7 @@ func fakeBroker(args []string) int {
 // shortDir is a private directory with a path short enough for a socket.
 func shortDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "kc")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := sockettest.Dir(t, "kc")
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -509,5 +508,80 @@ func TestUnwrapRefusesUnsafeOptionsBeforeStarting(t *testing.T) {
 	entries, _ := os.ReadDir(opts.SocketDir)
 	if len(entries) != 0 {
 		t.Fatalf("a refused call left %v behind", entries)
+	}
+}
+
+// TMPDIR is a literal environment input, not a shortened global override.
+// A 70-character ASCII path is 70 bytes; the same character count with é can
+// exceed the Unix socket byte budget. The 55/56-byte neighbors also exercise
+// the existing helper's keep/fallback boundary (MaxPath - Reserve).
+func TestShortDirWithLongTMPDIR(t *testing.T) {
+	// Ask the existing helper for an owned parent using an over-budget input.
+	// This keeps the exact-length fixtures possible even when the caller's
+	// TMPDIR is already long, without inventing a second fallback policy.
+	setup := filepath.Join(t.TempDir(), strings.Repeat("x", 58))
+	if err := os.Mkdir(setup, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", setup)
+	parent := sockettest.Dir(t, "kc-env")
+	for _, tc := range []struct {
+		name  string
+		chars int
+		pad   string
+	}{
+		{"boundary55", 55, "x"},
+		{"boundary56", 56, "x"},
+		{"ascii70", 70, "x"},
+		{"ascii80", 80, "x"},
+		{"utf8-70-characters", 70, "é"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := filepath.Join(parent, strings.Repeat(tc.pad, tc.chars-utf8.RuneCountInString(parent)-1))
+			if err := os.Mkdir(input, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if utf8.RuneCountInString(input) != tc.chars {
+				t.Fatal("incorrect TMPDIR character count")
+			}
+			t.Setenv("TMPDIR", input)
+			var dirs []string
+			t.Run("socket-and-exchange", func(t *testing.T) {
+				dir := shortDir(t)
+				dirs = append(dirs, dir)
+				path := socketPath(dir, [8]byte{})
+				t.Logf("TMPDIR: %d bytes/%d characters; socket: %d bytes/%d characters",
+					len(input), utf8.RuneCountInString(input), len(path), utf8.RuneCountInString(path))
+				ln, err := net.Listen("unix", path)
+				if err != nil {
+					t.Fatalf("fixture socket bind: %v", err)
+				}
+				if err := ln.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if len(path) > sockettest.MaxPath {
+					t.Fatalf("socket exceeds portable byte budget: %d > %d", len(path), sockettest.MaxPath)
+				}
+				if filepath.Dir(dir) != sockettest.Base(input) {
+					t.Fatal("shortDir did not use the existing sockettest base")
+				}
+				opts := fakeOptions(t, "echo-kek", "")
+				dirs = append(dirs, opts.SocketDir)
+				sealed, _ := testEnvelope(t)
+				got, err := Unwrap(context.Background(), opts, sealed)
+				defer clear(got)
+				if err != nil || !bytes.Equal(got, testKEK()) {
+					t.Fatalf("fixture broker exchange: %v", err)
+				}
+				if entries, err := os.ReadDir(opts.SocketDir); err != nil || len(entries) != 0 {
+					t.Fatalf("socket cleanup: entries=%v error=%v", entries, err)
+				}
+			})
+			for _, dir := range dirs {
+				if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("fixture directory survived cleanup: %v", err)
+				}
+			}
+		})
 	}
 }
