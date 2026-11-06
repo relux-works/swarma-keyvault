@@ -1004,6 +1004,7 @@ func TestSSHAgentDiscardsSignatureFinishedAfterExpiry(t *testing.T) {
 // client gets no signature. The 30-second bound only has to be finite; a
 // Serve that waited for the operation would never return. A tighter wall
 // clock bound failed under a loaded full-suite run without any defect.
+// The grace value itself is pinned by TestSSHShutdownGracePinned.
 func TestSSHAgentShutdownDoesNotWaitForBlockedSign(t *testing.T) {
 	a, store := gatedFixture(t)
 	store.blockSign.Store(true)
@@ -1036,5 +1037,14 @@ func TestSSHAgentShutdownDoesNotWaitForBlockedSign(t *testing.T) {
 	}
 	if err := <-signErr; err == nil {
 		t.Fatal("the blocked request returned a signature")
+	}
+}
+
+// Claim: the shutdown grace is the reviewed 2 seconds. The shutdown test only
+// proves that Serve returns at all, so this pin is what catches a larger grace
+// (for example 20 s) slipping through review; a deliberate change updates it.
+func TestSSHShutdownGracePinned(t *testing.T) {
+	if SSHShutdownGrace != 2*time.Second {
+		t.Fatal("SSHShutdownGrace changed without updating its pin", SSHShutdownGrace)
 	}
 }
