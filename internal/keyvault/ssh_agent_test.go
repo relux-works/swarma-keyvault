@@ -271,7 +271,10 @@ func TestSSHAgentGitSigning(t *testing.T) {
 	os.WriteFile(key, pub, 0600)
 	allowed := filepath.Join(dir, "allowed_signers")
 	os.WriteFile(allowed, append([]byte("test@example.test "), pub...), 0600)
-	env := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "SSH_AUTH_SOCK=" + socket, "GIT_AUTHOR_DATE=2026-10-15T00:00:00Z", "GIT_COMMITTER_DATE=2026-10-15T00:00:00Z"}
+	// git writes the signing buffer to a temporary file under TMPDIR, or /tmp
+	// when TMPDIR is unset; give it a private one so /tmp need not be writable.
+	gitTmp := t.TempDir()
+	env := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=" + dir, "TMPDIR=" + gitTmp, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "SSH_AUTH_SOCK=" + socket, "GIT_AUTHOR_DATE=2026-10-15T00:00:00Z", "GIT_COMMITTER_DATE=2026-10-15T00:00:00Z"}
 	run := func(args ...string) []byte {
 		return sshCommand(t, env, nil, "/usr/bin/git", append([]string{"-C", dir}, args...)...)
 	}
