@@ -187,6 +187,16 @@ Declaring an encrypted channel does not demonstrate a qualified receiver.
 Typed issuance must separately validate and display the same exact payload
 under its owner-presence contract. A prepared document grants no active rights.
 
+### Exact UTF-8 owner documents
+
+`owner-document review` renders a bounded exact UTF-8 document in full;
+`owner-document verify` checks an existing detached P-256 SHA-256 low-S DER
+signature against those unchanged bytes and an independent public DER pin.
+`owner-document sign` visibly refuses before custody access: the current native
+helper has no complete-document review/confirmation handoff. See
+[the source contract, bounds and native acceptance blocker](docs/owner-document-signing.md).
+No document signature substitutes for a platform grant or enrolls authority.
+
 ### Issue the selected private repository certificate
 
 `grants issue --payload FILE|- --owner-spki-der FILE` signs the complete canonical
