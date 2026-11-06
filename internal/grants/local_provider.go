@@ -151,12 +151,14 @@ type localProvider interface {
 }
 
 type boundedLocalOutput struct {
-	buffer  bytes.Buffer
-	maximum int
+	buffer   bytes.Buffer
+	maximum  int
+	exceeded bool
 }
 
 func (b *boundedLocalOutput) Write(p []byte) (int, error) {
 	if len(p) > b.maximum-b.buffer.Len() {
+		b.exceeded = true
 		return 0, errLocalProvider
 	}
 	return b.buffer.Write(p)
@@ -166,32 +168,62 @@ func (b *boundedLocalOutput) Bytes() []byte { return b.buffer.Bytes() }
 
 type localGHProvider struct{ path string }
 
-// All failure modes after intent are conservatively UNKNOWN, including a start
-// failure. Nothing retries, probes for existence or dispatches a DELETE.
+// create preserves the receipt-only interface used by other local adapters.
 func (p localGHProvider) create(ctx context.Context, checked *checkedLocalCreate) ([]byte, error) {
-	if checked == nil || checked.request == nil || checked.request.action != "repository.create" {
-		return nil, errLocalProvider
+	raw, _, err := p.createWithAttempt(ctx, checked)
+	return raw, err
+}
+
+// All failures after durable intent remain UNKNOWN, including Start failure.
+// Evidence describes the subprocess observation, never proof of a network send.
+func (p localGHProvider) createWithAttempt(ctx context.Context, checked *checkedLocalCreate) ([]byte, *LocalProviderAttempt, error) {
+	attempt := &LocalProviderAttempt{Classification: "transport-or-unknown", Diagnostic: "response-unavailable"}
+	if ctx == nil || checked == nil || checked.request == nil || checked.request.action != "repository.create" {
+		return nil, attempt, errLocalProvider
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	target := checked.request.createTarget
 	if target.organization != LocalOrganization || target.name != LocalRepository || target.visibility != "private" {
-		return nil, errLocalProvider
+		return nil, attempt, errLocalProvider
 	}
 	input, err := json.Marshal(map[string]any{"name": target.name, "private": true})
 	if err != nil {
-		return nil, errLocalProvider
+		return nil, attempt, errLocalProvider
 	}
-	command := exec.CommandContext(ctx, p.path, "api", "--hostname", "github.com", "-X", "POST", "orgs/"+target.organization+"/repos", "--input", "-")
+	command := exec.CommandContext(ctx, p.path, "api", "--hostname", "github.com", "-X", "POST", "orgs/"+target.organization+"/repos", "--input", "-", "--include")
 	command.Stdin = bytes.NewReader(input)
 	command.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
-	stdout := &boundedLocalOutput{maximum: localReceiptLimit}
+	stdout := &boundedLocalOutput{maximum: localReceiptLimit + localHTTPHeaderLimit}
 	stderr := &boundedLocalOutput{maximum: 8192}
-	command.Stdout = stdout
-	command.Stderr = stderr
+	command.Stdout, command.Stderr = stdout, stderr
 	command.WaitDelay = subprocessWaitDelay
-	if err := command.Run(); err != nil {
-		return nil, errLocalProvider
+	if err := command.Start(); err != nil {
+		attempt.Classification, attempt.Diagnostic = "process-start-failure", "process-start-failed"
+		return nil, attempt, errLocalProvider
 	}
-	return bytes.Clone(stdout.Bytes()), nil
+	err = command.Wait()
+	raw, observed := parseLocalHTTPResponse(stdout.Bytes())
+	if observed != nil {
+		attempt = observed
+	}
+	switch {
+	case stdout.exceeded || stderr.exceeded || len(raw) > localReceiptLimit:
+		attempt.Diagnostic = "output-limit"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		attempt.Diagnostic = "deadline-exceeded"
+	case errors.Is(ctx.Err(), context.Canceled):
+		attempt.Diagnostic = "context-cancelled"
+	case err != nil:
+		attempt.Diagnostic = "process-exit-failed"
+	case observed != nil && observed.HTTPStatus >= 300:
+		return nil, attempt, errLocalProvider
+	default:
+		if observed == nil {
+			// Body-only output remains receipt-compatible, but proves no HTTP status.
+			attempt.Diagnostic = "http-metadata-unavailable"
+		}
+		return bytes.Clone(raw), attempt, nil
+	}
+	return nil, attempt, errLocalProvider
 }

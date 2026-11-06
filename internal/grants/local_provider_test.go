@@ -32,7 +32,7 @@ func TestMain(m *testing.M) {
 		os.Exit(runA2AProviderFixture(mode))
 	}
 	if mode := os.Getenv("KEYVAULT_LOCAL_GH_FIXTURE"); mode != "" {
-		want := []string{"api", "--hostname", "github.com", "-X", "POST", "orgs/relux-works/repos", "--input", "-"}
+		want := []string{"api", "--hostname", "github.com", "-X", "POST", "orgs/relux-works/repos", "--input", "-", "--include"}
 		input, err := io.ReadAll(io.LimitReader(os.Stdin, 1024))
 		var body map[string]any
 		if err != nil || !reflect.DeepEqual(os.Args[1:], want) || json.Unmarshal(input, &body) != nil || len(body) != 2 || body["name"] != LocalRepository || body["private"] != true || os.Getenv("GH_PROMPT_DISABLED") != "1" {
@@ -46,6 +46,9 @@ func TestMain(m *testing.M) {
 		closeErr := f.Close()
 		if err != nil || closeErr != nil {
 			os.Exit(94)
+		}
+		if strings.HasPrefix(mode, "evidence-") {
+			os.Exit(runLocalEvidenceFixture(mode))
 		}
 		switch mode {
 		case "success":
