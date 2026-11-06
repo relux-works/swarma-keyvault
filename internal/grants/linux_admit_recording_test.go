@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"reflect"
 	"testing"
 	"time"
@@ -287,5 +288,58 @@ func TestLinuxAdmitTrustFailuresDoNotRecord(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Claim: when the first journal write, recording a stale snapshot before its
+// freshness refusal, fails in storage, the request refuses with ErrMUState
+// (storage faults are normalized to it), the journal is byte-identical and no
+// effect runs, although later writes would succeed.
+// Control: the same request with healthy storage also refuses with
+// ErrMUState but records the snapshot, so the fault case is not vacuous.
+func TestLinuxAdmitFreshnessRecordingStorageFault(t *testing.T) {
+	for _, fault := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fault=%t", fault), func(t *testing.T) {
+			g := newLinuxRig(t)
+			issued := muNow.Add(-61 * time.Second)
+			g.v.revocations = []MURevocation{{"record", "sha256:stale-storage-fault"}}
+			linuxSnapshotRig(g, &issued, nil)
+			writes := 0
+			if fault {
+				g.r.open = func(ctx context.Context, c MUStateConfig, b MUBinding) (*muState, error) {
+					s, err := openMUState(ctx, c, b)
+					if err != nil {
+						return nil, err
+					}
+					write := s.write
+					s.write = func(f *os.File, raw []byte) (int, error) {
+						writes++
+						if writes == 1 {
+							return 0, errors.New("injected journal write failure")
+						}
+						return write(f, raw)
+					}
+					return s, nil
+				}
+			}
+			before := g.journal(t)
+			_, err := g.r.Handle(context.Background(), g.event(t, "$stale-fault"))
+			if !errors.Is(err, ErrMUState) || g.calls.Load() != 0 {
+				t.Fatalf("got %v with %d effects, want %v and none", err, g.calls.Load(), ErrMUState)
+			}
+			after := g.journal(t)
+			if fault {
+				if writes == 0 {
+					t.Fatal("setup: the injected write was never reached")
+				}
+				if !bytes.Equal(before, after) {
+					t.Fatal("journal changed although the recording write failed")
+				}
+				return
+			}
+			if len(after) <= len(before) {
+				t.Fatal("control: healthy storage did not record the stale snapshot")
+			}
+		})
 	}
 }
