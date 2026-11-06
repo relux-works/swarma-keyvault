@@ -328,6 +328,35 @@ LF and exact config bytes, and refuses existing history. Old local enrollment,
 attestation and journal formats are rejected without automatic migration,
 truncation or reset.
 
+Verify the signed local authority offline before execution:
+
+```sh
+.temp/build/swarma-keyvault grants verify \
+  --config enrollment.json --certificate signed-local-certificate.json \
+  --request local-request.json
+```
+
+`--request -` reads the envelope from stdin. `verify` uses `LoadLocalEnrollment`
+and the same stateless check as `execute`: the certificate signature and owner
+pin, requester binding and signature, exact scope and validity checks retain
+their existing error codes and precedence. Input limits match `execute`.
+Exit 0 writes one JSON object without a newline to stdout, with `verdict` set
+to `accepted`, `certificate_id`, `request_id`, `action`, `target`, `valid_at`
+and `expires_at`. The latter two are the checked observation in UTC and the
+exclusive request expiry, which cannot exceed the certificate expiry. The
+request inherits the certificate's lower time bound; it has no independent
+`not_before` field. Exit 1 leaves stdout empty on refusal and writes
+`refused: <existing error code>` to stderr. Usage errors exit 2; `--help` exits
+0 with usage on stderr. Discard stdout on any nonzero exit, including output
+write failure. `--at RFC3339` supplies an explicit observation for tests;
+otherwise the check samples current time after reading its inputs.
+
+Verification never opens or creates execution state, takes the local lock,
+starts the provider or accesses a private signer/key. The configured state
+directory and provider executable need not exist. Acceptance reports only
+stateless authority at the observation; it does not reserve a use, check replay
+or current lifecycle state, or promise that execution will succeed.
+
 ```sh
 .temp/build/swarma-keyvault grants execute \
   --config enrollment.json --certificate signed-local-certificate.json \

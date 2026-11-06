@@ -96,6 +96,43 @@ type checkedLocalCreate struct {
 	observedAt               time.Time
 }
 
+// LocalVerification contains detached public facts from a stateless check.
+// ValidAt is the observation checked; ExpiresAt is the request's exclusive
+// expiry (which check requires to be no later than the certificate's expiry).
+// This observation is not a reservation, lifecycle check or dispatch capability.
+type LocalVerification struct {
+	CertificateID string                  `json:"certificate_id"`
+	RequestID     string                  `json:"request_id"`
+	Action        string                  `json:"action"`
+	Target        LocalVerificationTarget `json:"target"`
+	ValidAt       time.Time               `json:"valid_at"`
+	ExpiresAt     time.Time               `json:"expires_at"`
+}
+
+// LocalVerificationTarget is a value copy, with no retained request payload.
+type LocalVerificationTarget struct {
+	Organization string `json:"organization"`
+	Name         string `json:"name"`
+	Visibility   string `json:"visibility"`
+}
+
+// Verify performs exactly the same authority check used by Execute before
+// opening state. It accesses no execution state, provider or private key and
+// preserves the check's errors and precedence without translating them.
+func (e *LocalEnrollment) Verify(certificate, request []byte, observedAt time.Time) (*LocalVerification, error) {
+	checked, err := e.check(certificate, request, observedAt)
+	if err != nil {
+		return nil, err
+	}
+	q := checked.request
+	return &LocalVerification{
+		CertificateID: checked.certificateID, RequestID: q.requestID, Action: q.action,
+		Target: LocalVerificationTarget{Organization: q.createTarget.organization,
+			Name: q.createTarget.name, Visibility: q.createTarget.visibility},
+		ValidAt: checked.observedAt, ExpiresAt: q.expiresAt,
+	}, nil
+}
+
 func (e *LocalEnrollment) check(certificateRaw, requestRaw []byte, observedAt time.Time) (*checkedLocalCreate, error) {
 	if e == nil {
 		return nil, errIssuerUntrusted

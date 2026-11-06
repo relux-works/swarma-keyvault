@@ -77,6 +77,9 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) >= 2 && args[0] == "grants" && args[1] == "execute" {
 		return runExecute(args[2:], stdin, stdout, stderr)
 	}
+	if len(args) >= 2 && args[0] == "grants" && args[1] == "verify" {
+		return runVerify(args[2:], stdin, stdout, stderr)
+	}
 	usage := func() int { _, _ = fmt.Fprintln(stderr, prepareUsage); return 2 }
 	if len(args) < 2 || args[0] != "grants" || args[1] != "prepare" {
 		return usage()
