@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -100,7 +101,7 @@ func TestRunSSHAgentLifecycle(t *testing.T) {
 	}
 	defer os.RemoveAll(dir)
 	socket := filepath.Join(dir, "agent.sock")
-	var logs bytes.Buffer
+	var logs syncBuffer
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSSHAgentCLIHelper$")
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "MAC_KEYVAULT_SSH_HELPER=1", "MAC_KEYVAULT_SSH_HELPER_DIR=" + dir, "MAC_KEYVAULT_SSH_HELPER_SOCKET=" + socket}
 	cmd.Stdout = &logs
@@ -164,7 +165,7 @@ func TestRunSSHAgentLifecycle(t *testing.T) {
 
 // startSSHHelper runs the CLI agent in a child process with a memory backend
 // and the given extra arguments.
-func startSSHHelper(t *testing.T, extra ...string) (*exec.Cmd, string, *bytes.Buffer) {
+func startSSHHelper(t *testing.T, extra ...string) (*exec.Cmd, string, *syncBuffer) {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "kv-cli-")
 	if err != nil {
@@ -172,7 +173,7 @@ func startSSHHelper(t *testing.T, extra ...string) (*exec.Cmd, string, *bytes.Bu
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "agent.sock")
-	logs := &bytes.Buffer{}
+	logs := &syncBuffer{}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSSHAgentCLIHelper$")
 	cmd.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "MAC_KEYVAULT_SSH_HELPER=1", "MAC_KEYVAULT_SSH_HELPER_DIR=" + dir,
 		"MAC_KEYVAULT_SSH_HELPER_SOCKET=" + socket, "MAC_KEYVAULT_SSH_HELPER_EXTRA=" + strings.Join(extra, "\x1f")}
@@ -190,10 +191,36 @@ func startSSHHelper(t *testing.T, extra ...string) (*exec.Cmd, string, *bytes.Bu
 	return cmd, socket, logs
 }
 
+// syncBuffer collects a child process's output. os/exec copies into it from
+// its own goroutine while the process runs, so every read and write takes the
+// lock; a plain bytes.Buffer read on a failure path raced with that copier.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.b.Reset()
+}
+
 // dialSSHHelper waits for the child agent's socket. The bound is generous:
 // under a loaded full-suite run, starting the test binary and a hook takes
 // seconds.
-func dialSSHHelper(t *testing.T, socket string, logs *bytes.Buffer) net.Conn {
+func dialSSHHelper(t *testing.T, socket string, logs *syncBuffer) net.Conn {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -376,5 +403,25 @@ func TestRunSSHAgentRefusesUnusableAuditLog(t *testing.T) {
 	}
 	if _, err := os.Lstat(socket); !os.IsNotExist(err) {
 		t.Fatal("socket created with an unusable audit log")
+	}
+}
+
+// Claim: a child's output copier can write a syncBuffer while the test reads
+// it, without a data race under -race, and every byte written is kept.
+func TestSyncBufferConcurrentReadWrite(t *testing.T) {
+	var b syncBuffer
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 2000; i++ {
+			b.Write([]byte("x"))
+		}
+		close(done)
+	}()
+	for i := 0; i < 2000; i++ {
+		_ = b.String()
+	}
+	<-done
+	if got := len(b.String()); got != 2000 {
+		t.Fatal("bytes lost", got)
 	}
 }
