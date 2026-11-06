@@ -82,9 +82,13 @@ open/create state, lock, reserve, check replay or launch a provider. Limits are
 `--request -` reads stdin; config/certificate cannot be stdin. Default time is
 sampled after input reads; `--at` is a test observation. Usage exits 2; refusals
 exit 1; discard stdout after any nonzero exit, including output-write failure.
+`TestLocalVerifyCLIOutput`, `TestLocalVerifyCLIUsage` and
+`TestLocalVerifyCLIInputs` in `cmd/swarma-keyvault` specify these exit codes,
+stdout and stderr.
 
-`execute` uses the enrolled provider/state, locks and rechecks, reserves and
-syncs intent before dispatch. It may return `succeeded` or `unknown`.
+`execute` is an effect route, not an agent step: run it only with the
+custodian's authorization for that exact request. It uses the enrolled
+provider/state, locks and rechecks, reserves and syncs intent before dispatch. It may return `succeeded` or `unknown`.
 UNKNOWN, lost output, interruption or journal corruption require preserving
 state and a custodian decision; do not resend with a new request ID, truncate,
 reset or release the held use. Changing configuration bytes changes the local

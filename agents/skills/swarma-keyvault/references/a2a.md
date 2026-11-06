@@ -60,7 +60,10 @@ checks. Actual live projection/provider qualification is not claimed.
 
 ## State and uncertain effects
 
-State init is separate. Execute opens existing state only and never repairs,
+`a2a-state-init` creates state and `a2a-execute` runs the provider effect;
+neither is an agent step without the custodian's authorization for that
+exact state or event. State init is separate. Execute opens existing state
+only and never repairs,
 migrates or creates a replacement journal. Keep epoch/state across registry
 refreshes. Nonce and grant-use indexes are independent: a new registry/grant
 cannot refill a used grant or replay an old nonce. Preserve UNKNOWN and failed

@@ -33,7 +33,10 @@ an OS prompt does not authorize an agent to invoke it.
 
 An agent may inspect source and prepare public documents within the task's
 permissions. Never make key creation, Keychain/Enclave inspection, signer startup,
-SSH-agent startup, KEK unwrap/rebind or private signing an agent step. Even
+SSH-agent startup, KEK unwrap/rebind or private signing an agent step. State
+initialization and effect execution (`grants execute`, `a2a-state-init`,
+`a2a-execute`, `mu-state-init`, `mu-execute`) need the custodian's
+authorization for that exact state or request; they are not agent steps either. Even
 `list`, `describe` and vault-backed `pub` can access Keychain. Public-file
 `mac-keyvault verify --spki` and offline `swarma-keyvault grants verify` are
 separate public verification routes; execute them only when the task permits
