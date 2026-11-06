@@ -166,6 +166,8 @@ func TestCertificateRebindNeverConverts(t *testing.T) {
 
 // Even a matching certificate caller receives no KEK if durable audit cannot
 // be established. The neighboring conformance test is the valid positive.
+// The unsafe mode is set with chmod and checked, so the fixture does not
+// depend on the process umask (0077 would otherwise make the file private).
 func TestCertificateAuditFailureWithholdsKEK(t *testing.T) {
 	f := certificateFixture(t)
 	if err := os.MkdirAll(filepath.Dir(f.audit.Path), 0o700); err != nil {
@@ -173,6 +175,16 @@ func TestCertificateAuditFailureWithholdsKEK(t *testing.T) {
 	}
 	if err := os.WriteFile(f.audit.Path, nil, 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.Chmod(f.audit.Path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(f.audit.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o644 {
+		t.Fatalf("setup: audit fixture mode is %v, want 0644", info.Mode().Perm())
 	}
 	resp, raw := f.unwrap()
 	requireRefused(t, resp, raw, kekclient.CodeSecurity)

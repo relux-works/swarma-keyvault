@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relux-works/swarma-keyvault/internal/sockettest"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -76,16 +77,11 @@ func sshClient(t *testing.T, a *SSHAgent) agent.ExtendedAgent {
 	return agent.NewClient(client)
 }
 
-// Darwin limits Unix socket paths to 104 bytes; testing.T.TempDir includes
-// the full test name and may exceed it before the socket suffix is added.
+// sshTempDir returns a short directory for agent sockets; see sockettest for
+// the path budget and the choice between TMPDIR and /tmp.
 func sshTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "kv-ssh-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	return dir
+	return sockettest.Dir(t, "kv-ssh-")
 }
 func sshSocket(t *testing.T, a *SSHAgent) (string, context.CancelFunc, <-chan struct{}) {
 	t.Helper()

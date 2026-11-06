@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/sockettest"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -95,11 +96,8 @@ func TestSSHAgentCLIHelper(t *testing.T) {
 // The actual CLI serves identities, handles SIGTERM cleanly and removes its
 // socket. A pre-existing path is refused without overwriting its content.
 func TestRunSSHAgentLifecycle(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "kv-cli-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := sockettest.Dir(t, "kv-cli-")
+	var err error
 	socket := filepath.Join(dir, "agent.sock")
 	var logs syncBuffer
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSSHAgentCLIHelper$")
@@ -167,11 +165,7 @@ func TestRunSSHAgentLifecycle(t *testing.T) {
 // and the given extra arguments.
 func startSSHHelper(t *testing.T, extra ...string) (*exec.Cmd, string, *syncBuffer) {
 	t.Helper()
-	dir, err := os.MkdirTemp("/tmp", "kv-cli-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := sockettest.Dir(t, "kv-cli-")
 	socket := filepath.Join(dir, "agent.sock")
 	logs := &syncBuffer{}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestSSHAgentCLIHelper$")
@@ -291,11 +285,7 @@ func TestRunSSHAgentUnlockConfirmation(t *testing.T) {
 // that grants only unlock requests, `unlock` lets signatures through without
 // asking, while `both` also asks for each signature and so refuses it.
 func TestRunSSHAgentConfirmWhenSelectsPurposes(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "kv-hook-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	dir := sockettest.Dir(t, "kv-hook-")
 	hook := filepath.Join(dir, "unlock-only")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexec /usr/bin/grep -q '\"purpose\":\"unlock\"'\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -336,11 +326,7 @@ func sshsigRequest(namespace string) []byte {
 // namespace and an authentication-style request, and writes one audit record
 // per request with the client pid; its readiness line names both settings.
 func TestRunSSHAgentGitNamespaceAndAudit(t *testing.T) {
-	auditDir, err := os.MkdirTemp("/tmp", "kv-audit-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(auditDir)
+	auditDir := sockettest.Dir(t, "kv-audit-")
 	audit := filepath.Join(auditDir, "audit.jsonl")
 	cmd, socket, logs := startSSHHelper(t, "--sign-namespace", "git", "--audit-log", audit)
 	conn := dialSSHHelper(t, socket, logs)
@@ -388,11 +374,7 @@ func TestRunSSHAgentGitNamespaceAndAudit(t *testing.T) {
 // Claim: an audit log the agent cannot use (here a symlink) stops the CLI
 // before the socket exists, so no client can reach an unaudited agent.
 func TestRunSSHAgentRefusesUnusableAuditLog(t *testing.T) {
-	auditDir, err := os.MkdirTemp("/tmp", "kv-audit-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(auditDir)
+	auditDir := sockettest.Dir(t, "kv-audit-")
 	target := filepath.Join(auditDir, "real.jsonl")
 	os.WriteFile(target, nil, 0600)
 	link := filepath.Join(auditDir, "audit.jsonl")
