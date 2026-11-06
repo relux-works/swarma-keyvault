@@ -142,6 +142,73 @@ func TestLinuxAdmitEarlyRefusalRecords(t *testing.T) {
 	}
 }
 
+// Claim: A stale snapshot below an existing mark grows its durable union without lowering that mark, then refuses without effects.
+func TestLinuxAdmitStaleBelowHighwaterRecords(t *testing.T) {
+	for role := 0; role < 2; role++ {
+		t.Run(fmt.Sprintf("signer-%d", role), func(t *testing.T) {
+			g := newLinuxRig(t)
+			snapshots := linuxAdmitRecordingBatch(g)
+			linuxAdmitRecordingVerifier(g, &snapshots)
+			e := g.event(t, "$stale-below-mark")
+			higher := snapshots[role].IssuedAt
+			g.r.config.Paused[g.v.grant] = true
+			if out, err := g.r.Handle(context.Background(), e); !errors.Is(err, ErrMUPaused) || out != nil || g.calls.Load() != 0 {
+				t.Fatal("could not seed higher marks without effects", out, err, g.calls.Load())
+			}
+			g.r.config.Paused[g.v.grant] = false
+			before := g.journal(t)
+			old := snapshots[role].Entries[0]
+			added := MURevocation{"record", "sha256:new-stale-hold"}
+			snapshots[role].Entries = append(snapshots[role].Entries, added)
+			snapshots[role].IssuedAt = muNow.Add(-61 * time.Second)
+			if !snapshots[role].IssuedAt.Before(higher) {
+				t.Fatal("fixture must be stale and below the existing mark")
+			}
+			out, err := g.r.Handle(context.Background(), e)
+			if !errors.Is(err, ErrMUState) || err.Error() != "mu-required-state-unavailable" || out != nil || g.calls.Load() != 0 {
+				t.Fatal("stale below-mark request did not refuse without effects", out, err, g.calls.Load())
+			}
+			after := g.journal(t)
+			if len(after) <= len(before) || !bytes.HasPrefix(after, before) {
+				t.Fatal("stale below-mark evidence did not grow the append-only journal")
+			}
+			s, err := openMUState(context.Background(), g.r.config.State, g.r.config.Binding)
+			if err != nil {
+				t.Fatal("stale below-mark journal could not reopen", err)
+			}
+			marks := map[string]time.Time{}
+			unions := map[string]map[MURevocation]bool{}
+			revoked := map[MURevocation]bool{}
+			for _, v := range snapshots {
+				marks[v.Signer] = higher
+				unions[v.Signer] = map[MURevocation]bool{}
+				for _, entry := range v.Entries {
+					unions[v.Signer][entry] = true
+					revoked[entry] = true
+				}
+			}
+			unionGrew := len(s.unions[snapshots[role].Signer]) == 2 && s.unions[snapshots[role].Signer][old] && s.unions[snapshots[role].Signer][added]
+			markPreserved := reflect.DeepEqual(s.highWater, marks)
+			evidenceExact := reflect.DeepEqual(s.unions, unions) && reflect.DeepEqual(s.revoked, revoked)
+			noAccounting := len(s.reservations) == 0 && len(s.nonces) == 0 && len(s.allowances) == 0
+			s.close()
+			if !unionGrew || !markPreserved || !evidenceExact || !noAccounting {
+				t.Fatal("stale below-mark union growth or higher-mark preservation failed", unionGrew, markPreserved, evidenceExact, noAccounting)
+			}
+			// A complete fresh retry of the same event proves the refusal consumed no nonce.
+			g.reopen()
+			for i := range snapshots {
+				snapshots[i].IssuedAt = muNow
+			}
+			linuxAdmitRecordingVerifier(g, &snapshots)
+			out, err = g.r.Handle(context.Background(), e)
+			if err != nil || out == nil || out.State != "succeeded" || g.calls.Load() != 1 {
+				t.Fatal("fresh complete below-mark neighbor failed", out, err, g.calls.Load())
+			}
+		})
+	}
+}
+
 // At the inclusive freshness boundary the exact evidence precedes the local
 // pause refusal, and removing the pause admits the identical unreserved event.
 func TestLinuxAdmitFreshNeighbors(t *testing.T) {

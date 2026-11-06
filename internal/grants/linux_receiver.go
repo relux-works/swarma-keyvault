@@ -25,12 +25,17 @@ import (
 // with ErrMUState before any of its snapshots are appended, even its valid
 // subset. A corrected adapter's retry is admitted normally.
 //
-// Successful admission also requires a nonempty batch, fresh nonfuture
-// snapshots and publisher entries matching the decision. Observation on a
+// On successful verifier return, an empty batch, a missing publisher snapshot,
+// or publisher entries not matching the decision also refuse the whole batch
+// with ErrMUState before any snapshot append. Valid-shaped, decision-bound
+// stale/future batches are instead recorded before ErrMUState. Observation on a
 // verifier refusal retains valid old/future evidence without advancing future
 // marks. Observation refuses a new signer when 64 signer unions already exist;
-// that capacity check is per snapshot, not a transaction over earlier appends.
+// the two pinned roles normally prevent reaching that guard. The cumulative
+// muMaxRevocations (4096) cap in absorbSigned remains reachable under those pins.
+// These capacity checks do not roll back earlier successful snapshot/chunk appends.
 // Earlier owner-root observations and storage failures have separate semantics.
+// Claim: A valid-shaped, decision-bound batch is recorded before stale/future refusal.
 type LinuxProjectedVerifier interface {
 	VerifyAdmission(MUEnvelopeEvent, time.Time) (LinuxAdmission, error)
 }

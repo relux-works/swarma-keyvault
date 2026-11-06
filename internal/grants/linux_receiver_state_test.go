@@ -211,27 +211,42 @@ func TestLinuxReceiverFinalRootSample(t *testing.T) {
 	}
 }
 
-// Claim: Missing, duplicate, misbound, stale or malformed admission metadata refuses before effect.
+// Claim: Admission metadata faults refuse without effects; trust/shape/binding faults also leave the journal byte-identical.
 func TestLinuxReceiverAdmissionMetadataRefuses(t *testing.T) {
-	changes := map[string]func(*LinuxAdmission){
-		"missing":           func(a *LinuxAdmission) { a.Snapshots = nil },
-		"wrong-signer":      func(a *LinuxAdmission) { a.Snapshots[0].Signer = "p256:other" },
-		"duplicate":         func(a *LinuxAdmission) { a.Snapshots = append(a.Snapshots, a.Snapshots[0]) },
-		"future":            func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(time.Second) },
-		"stale":             func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(-61 * time.Second) },
-		"fraction":          func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(-time.Nanosecond) },
-		"entries-not-bound": func(a *LinuxAdmission) { a.Snapshots[0].Entries = []MURevocation{{"record", "sha256:unbound"}} },
+	changes := map[string]struct {
+		change          func(*LinuxAdmission)
+		recordsEvidence bool
+	}{
+		"missing":      {func(a *LinuxAdmission) { a.Snapshots = nil }, false},
+		"wrong-signer": {func(a *LinuxAdmission) { a.Snapshots[0].Signer = "p256:other" }, false},
+		"duplicate":    {func(a *LinuxAdmission) { a.Snapshots = append(a.Snapshots, a.Snapshots[0]) }, false},
+		"future":       {func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(time.Second) }, true},
+		"stale":        {func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(-61 * time.Second) }, true},
+		"fraction":     {func(a *LinuxAdmission) { a.Snapshots[0].IssuedAt = muNow.Add(-time.Nanosecond) }, false},
+		"entries-not-bound": {func(a *LinuxAdmission) {
+			a.Snapshots[0].Entries = []MURevocation{{"record", "sha256:unbound"}}
+		}, false},
+		// Claim: A batch containing only the pinned agent root refuses before appending that valid snapshot.
+		"publisher-absent": {func(a *LinuxAdmission) {
+			a.Snapshots[0].Signer = "ed25519:synthetic-agent-revoker"
+			a.Snapshots[0].Entries = []MURevocation{{"record", "sha256:unrelated-agent-hold"}}
+		}, false},
 	}
-	for name, change := range changes {
+	for name, tc := range changes {
 		t.Run(name, func(t *testing.T) {
 			g := newLinuxRig(t)
 			g.r.verifier = linuxAdmissionFunc(func(e MUEnvelopeEvent, n time.Time) (LinuxAdmission, error) {
 				a, err := g.v.VerifyAdmission(e, n)
-				change(&a)
+				tc.change(&a)
 				return a, err
 			})
+			before := g.journal(t)
 			if _, err := g.r.Handle(context.Background(), g.event(t, "$invalid-metadata")); !errors.Is(err, ErrMUState) || g.calls.Load() != 0 {
 				t.Fatal(err, g.calls.Load())
+			}
+			// Valid-shaped stale/future evidence is recorded before refusal.
+			if !tc.recordsEvidence && !bytes.Equal(before, g.journal(t)) {
+				t.Fatal("admission trust/shape/binding refusal changed journal bytes")
 			}
 		})
 	}
