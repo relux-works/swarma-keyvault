@@ -16,11 +16,21 @@ import (
 // a second independent source read is not an acceptable implementation.
 // The receiver supplies durable continuity; a decision alone permits no effect.
 //
-// Snapshots MUST hold at most one valid snapshot per signer, and every signer
-// MUST be one of the receiver's pinned Signers. A batch that breaks this shows
-// a miswired adapter: the request refuses with ErrMUState and nothing from that
-// invocation is persisted, not even its valid snapshots. A corrected adapter's
-// retry is admitted normally.
+// Snapshots MUST hold at most 64 snapshots, at most one per signer, with every
+// signer in the receiver's pinned Signers. Each signer is a nonempty token of
+// at most 255 printable ASCII bytes (0x21..0x7e). Each snapshot's IssuedAt MUST
+// have a positive Unix second and no fractional second; Entries MUST contain
+// at most 64 distinct (Kind, ID) pairs. Kind is "record" or "key"; ID is nonempty
+// and at most 255 bytes. Invalid metadata refuses the entire snapshot batch
+// with ErrMUState before any of its snapshots are appended, even its valid
+// subset. A corrected adapter's retry is admitted normally.
+//
+// Successful admission also requires a nonempty batch, fresh nonfuture
+// snapshots and publisher entries matching the decision. Observation on a
+// verifier refusal retains valid old/future evidence without advancing future
+// marks. Observation refuses a new signer when 64 signer unions already exist;
+// that capacity check is per snapshot, not a transaction over earlier appends.
+// Earlier owner-root observations and storage failures have separate semantics.
 type LinuxProjectedVerifier interface {
 	VerifyAdmission(MUEnvelopeEvent, time.Time) (LinuxAdmission, error)
 }
