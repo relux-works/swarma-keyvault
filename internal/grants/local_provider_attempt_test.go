@@ -128,6 +128,17 @@ func TestLocalProviderHTTPPrivacy(t *testing.T) {
 			}
 		})
 	}
+	// A second header block is not unwrapped: the first block's status stands,
+	// the rest is body, and that body is no valid receipt, so the outcome stays
+	// UNKNOWN; nothing private reaches the attempt.
+	twice := append(bytes.Clone(good), localEvidenceResponse("201 Created", "\r\n", localEvidenceID, localGoodReceipt())...)
+	if body, a := parseLocalHTTPResponse(twice); a == nil || a.HTTPStatus != 403 {
+		t.Fatal("second header block replaced the first status")
+	} else if _, err := parseLocalProviderReceipt(body); !errors.Is(err, errLocalProvider) {
+		t.Fatal("second header block produced a receipt")
+	} else if safe, _ := json.Marshal(a); bytes.Contains(safe, []byte(localEvidenceSecret)) {
+		t.Fatal("second header block leaked private content")
+	}
 	for _, id := range []string{localEvidenceSecret, "Bearer " + localEvidenceSecret, "ghp_" + localEvidenceSecret, "abcd:1:2", "abcd::1:2", "ABCD:1:2:3:4:5", strings.Repeat("A", 129), "ABCD:1:2:3 extra", "ABCD:1:2:３", "ABCD:1:2:3\tsecret"} {
 		_, a := parseLocalHTTPResponse(localEvidenceResponse("403 Forbidden", "\n", id, nil))
 		if a == nil || a.HTTPStatus != 403 || a.RequestID != "" {
@@ -209,7 +220,7 @@ func TestLocalProviderAttemptProcess(t *testing.T) {
 					for {
 						select {
 						case <-tick.C:
-							if _, err := os.Stat(calls); err == nil {
+							if b, err := os.ReadFile(calls); err == nil && string(b) == "create\n" {
 								cancel()
 								done <- true
 								return
@@ -246,11 +257,22 @@ func TestLocalProviderAttemptProcess(t *testing.T) {
 					t.Fatal("uncontrolled provider failure")
 				}
 			}
-			if mode == "evidence-timeout" && a.Diagnostic != "deadline-exceeded" {
-				t.Fatal("timeout classification")
-			}
-			if mode == "evidence-cancel" && a.Diagnostic != "context-cancelled" {
-				t.Fatal("cancel classification")
+			// Each mode pins its documented diagnostic code: start failures,
+			// a non-zero exit (which outranks any emitted status), output
+			// overflow, deadline, cancellation, a complete HTTP response and
+			// body-only output.
+			wantDiag := map[string]string{
+				"success": "http-metadata-unavailable", "failure": "process-exit-failed",
+				"missing-executable": "process-start-failed", "invalid-executable": "process-start-failed", "cancelled": "process-start-failed",
+				"evidence-http-success": "http-response", "evidence-http-failure": "process-exit-failed",
+				"evidence-http-nonzero-receipt": "process-exit-failed", "evidence-http-invalid-body": "http-response",
+				"evidence-http-error-receipt": "http-response", "evidence-partial": "process-exit-failed",
+				"evidence-hostile": "process-exit-failed", "evidence-unknown": "http-metadata-unavailable",
+				"evidence-oversize": "output-limit", "stderr-limit": "output-limit",
+				"evidence-timeout": "deadline-exceeded", "evidence-cancel": "context-cancelled",
+			}[mode]
+			if wantDiag == "" || a.Diagnostic != wantDiag {
+				t.Fatalf("diagnostic %q, want %q", a.Diagnostic, wantDiag)
 			}
 			safe, marshalErr := json.Marshal(a)
 			if marshalErr != nil || bytes.Contains(safe, []byte(localEvidenceSecret)) || bytes.Contains(safe, []byte("Authorization")) || len(safe) > 512 {
@@ -381,6 +403,60 @@ func TestLocalProviderAttemptDurability(t *testing.T) {
 				}
 			} else if readErr != nil || string(actual) != "create\n" {
 				t.Fatal("provider repeated effect or changed action")
+			}
+		})
+	}
+}
+
+// Claim: a request refused before any process start (no context, no checked
+// request, or a request that is not the admitted private CREATE) reports
+// transport-or-unknown with response-unavailable and starts no process.
+// Control: the admitted request starts the fake once (TestLocalProviderAttemptProcess/success).
+func TestLocalProviderAttemptRefusedBeforeStart(t *testing.T) {
+	f := localTestFixture(t)
+	c, q := f.envelopes(t)
+	e, err := ParseLocalEnrollment(requestTestBytes(t, f.config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, err := e.check(c, q, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("KEYVAULT_LOCAL_GH_FIXTURE", "success")
+	t.Setenv("KEYVAULT_LOCAL_GH_CALLS", calls)
+	otherAction := *checked
+	otherRequest := *checked.request
+	otherRequest.action = "repository.delete"
+	otherAction.request = &otherRequest
+	publicTarget := *checked
+	publicRequest := *checked.request
+	publicRequest.createTarget.visibility = "public"
+	publicTarget.request = &publicRequest
+	for name, tc := range map[string]struct {
+		ctx     context.Context
+		checked *checkedLocalCreate
+	}{
+		"nil-context":   {nil, checked},
+		"nil-request":   {context.Background(), nil},
+		"other-action":  {context.Background(), &otherAction},
+		"public-target": {context.Background(), &publicTarget},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, a, err := (localGHProvider{path: exe}).createWithAttempt(tc.ctx, tc.checked)
+			if !errors.Is(err, errLocalProvider) || raw != nil {
+				t.Fatal("refused request produced output", err)
+			}
+			if a == nil || a.Classification != "transport-or-unknown" || a.Diagnostic != "response-unavailable" || a.HTTPStatus != 0 || a.RequestID != "" {
+				t.Fatalf("attempt %+v", a)
+			}
+			if _, statErr := os.Stat(calls); !os.IsNotExist(statErr) {
+				t.Fatal("a process started for a refused request")
 			}
 		})
 	}
