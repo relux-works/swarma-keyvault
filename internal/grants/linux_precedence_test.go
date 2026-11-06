@@ -135,3 +135,21 @@ func TestLinuxReceiverKnownRevocationRecordsSnapshot(t *testing.T) {
 		t.Fatal("snapshot not recorded on the known-revocation path", s.unions)
 	}
 }
+
+// Claim: a paused grant refuses as paused even when the decision names a
+// grant-authority action, because the contract orders pause before widening;
+// no effect runs. Control: the same widening decision unpaused refuses as
+// widening (TestLinuxReceiverWideningReachable).
+func TestLinuxReceiverPauseBeforeWidening(t *testing.T) {
+	g := newLinuxRig(t)
+	e := g.event(t, "$paused-widen")
+	from := []byte(`"action":"work.assign"`)
+	if bytes.Count(e.Envelope, from) != 1 {
+		t.Fatal("setup: envelope does not carry one work.assign action")
+	}
+	e.Envelope = bytes.Replace(e.Envelope, from, []byte(`"action":"grant.issue"`), 1)
+	g.r.config.Paused[g.v.grant] = true
+	if _, err := g.r.Handle(context.Background(), e); !errors.Is(err, ErrMUPaused) || g.calls.Load() != 0 {
+		t.Fatalf("got %v with %d effects, want %v", err, g.calls.Load(), ErrMUPaused)
+	}
+}

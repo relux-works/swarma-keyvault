@@ -148,21 +148,26 @@ func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRev
 	if d.Use != "once" && d.Use != "until_expiry" {
 		return MUDecision{}, nil, ErrMUState
 	}
-	// Defense in depth: no delegated grant may create, widen or re-delegate
-	// authority. It runs before the action-target check, which would otherwise
-	// refuse these actions with a generic code.
-	if grantAuthorityActions[d.Action] {
-		return MUDecision{}, nil, ErrMUWidening
-	}
-	if d.GrantID == "" || d.AuthorAttestation == "" || d.PublisherKey == "" || !linuxActionTarget(d.Action, d.TargetKind) {
+	if d.GrantID == "" || d.AuthorAttestation == "" || d.PublisherKey == "" {
 		return MUDecision{}, nil, ErrMUState
 	}
 	return d, revocation, nil
 }
 
+// policy applies the step-8 local checks in the contract's order: pause,
+// widening, then owner scope. The action-target check sits between widening
+// and scope, so a grant-authority action keeps its own refusal code.
 func (r *LinuxReceiver) policy(d MUDecision) error {
 	if r.config.Paused[d.GrantID] || r.config.PausedModules[d.Arguments["module"]] {
 		return ErrMUPaused
+	}
+	// Defense in depth: no delegated grant may create, widen or re-delegate
+	// authority.
+	if grantAuthorityActions[d.Action] {
+		return ErrMUWidening
+	}
+	if !linuxActionTarget(d.Action, d.TargetKind) {
+		return ErrMUState
 	}
 	if d.TargetKind == "room-scope" && !r.config.AllowedRooms[d.Arguments["room"]] {
 		return ErrMUScope
