@@ -315,6 +315,10 @@ func (g *linuxInteropRig) prepare(t *testing.T, s linuxInteropStep) (*LinuxVerif
 		if linuxConstructionRefusals[g.c.ID] == "" {
 			t.Fatal("unexpected construction refusal", g.c.ID, err)
 		}
+		// A named construction refusal is the state refusal, not any error.
+		if !errors.Is(err, ErrMUState) {
+			t.Fatalf("construction refusal %s: got %v, want %v", g.c.ID, err, ErrMUState)
+		}
 		t.Logf("LINUX_INTEROP_CONSTRUCTION_REFUSAL case=%s error=%s effects=%d reason=%s", g.c.ID, err, g.calls, linuxConstructionRefusals[g.c.ID])
 		return nil, nil, nil, event
 	}
@@ -489,6 +493,24 @@ func TestLinuxInteropVectors(t *testing.T) {
 		})
 		caseCount++
 	}
+	// Claim: the served roster and the committed cases are the same set, so a
+	// removed case file fails here just as an added unlisted one fails in
+	// loadLinuxInterop; every named construction refusal is a served case.
+	t.Run("roster-complete", func(t *testing.T) {
+		if len(cases) != len(linuxServedCases) {
+			t.Errorf("committed cases %d, served roster %d", len(cases), len(linuxServedCases))
+		}
+		for id := range linuxServedCases {
+			if _, ok := byID[id]; !ok {
+				t.Errorf("rostered case %s has no committed case file", id)
+			}
+		}
+		for id := range linuxConstructionRefusals {
+			if !linuxServedCases[id] {
+				t.Errorf("construction refusal %s is not a served case", id)
+			}
+		}
+	})
 	t.Run("positive-controls", func(t *testing.T) {
 		for _, c := range cases {
 			if c.PositiveControl == "" {
