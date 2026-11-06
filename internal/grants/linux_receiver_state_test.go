@@ -1,6 +1,7 @@
 package grants
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -347,6 +348,49 @@ func TestLinuxReceiverProcessCrash(t *testing.T) {
 				if marker, err := os.ReadFile(in.Marker); err != nil || string(marker) != "effect happened" {
 					t.Fatal("effect control", err)
 				}
+			}
+		})
+	}
+}
+
+// Claim: an adapter batch that breaks the snapshot contract (a signer outside
+// the pinned Signers, or one signer twice) refuses with ErrMUState, runs no
+// effect and leaves the journal byte-identical, even though the batch also
+// carries a valid pinned snapshot. The control is the same pinned snapshot
+// alone: it is retained and the request admits.
+func TestLinuxReceiverMiswiredSnapshotBatch(t *testing.T) {
+	entry := MURevocation{"record", "sha256:miswired-batch"}
+	for _, mode := range []string{"unpinned-signer", "duplicate-signer", "control"} {
+		t.Run(mode, func(t *testing.T) {
+			g := newLinuxRig(t)
+			issued := muNow
+			g.v.revocations = []MURevocation{entry}
+			var extra *LinuxVerifiedSnapshot
+			switch mode {
+			case "unpinned-signer":
+				extra = &LinuxVerifiedSnapshot{Signer: "p256:unpinned", IssuedAt: issued, Entries: []MURevocation{entry}}
+			case "duplicate-signer":
+				extra = &LinuxVerifiedSnapshot{Signer: g.v.publisher, IssuedAt: issued, Entries: []MURevocation{entry}}
+			}
+			linuxSnapshotRig(g, &issued, extra)
+			before := g.journal(t)
+			_, err := g.r.Handle(context.Background(), g.event(t, "$batch"))
+			if mode != "control" {
+				if !errors.Is(err, ErrMUState) || g.calls.Load() != 0 || !bytes.Equal(before, g.journal(t)) {
+					t.Fatal("miswired batch admitted or persisted", err, g.calls.Load())
+				}
+				return
+			}
+			if err != nil || g.calls.Load() != 1 {
+				t.Fatal("pinned snapshot alone refused", err, g.calls.Load())
+			}
+			s, err := openMUState(context.Background(), g.r.config.State, g.r.config.Binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.close()
+			if !s.unions[g.v.publisher][entry] {
+				t.Fatal("pinned snapshot not retained", s.unions)
 			}
 		})
 	}
