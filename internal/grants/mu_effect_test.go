@@ -65,6 +65,9 @@ func TestMUTaskBoardAssignDocking(t *testing.T) {
 	if bin, err = filepath.EvalSymlinks(bin); err != nil {
 		t.Skip("task-board path unresolved: docking not run")
 	}
+	// The CLI keeps its mutation locks under TMPDIR, outside --board-dir; give
+	// it a private TMPDIR so the run leaves nothing behind.
+	t.Setenv("TMPDIR", t.TempDir())
 	board := filepath.Join(t.TempDir(), ".task-board")
 	if err := os.Mkdir(board, 0700); err != nil {
 		t.Fatal(err)
