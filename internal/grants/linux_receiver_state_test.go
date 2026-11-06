@@ -29,7 +29,10 @@ func linuxSnapshotRig(g *linuxRig, issued *time.Time, extra *LinuxVerifiedSnapsh
 	})
 }
 
-// Claim: Per-signer marks survive local policy refusal and reopen; older marks refuse and equal/newer complete samples admit.
+// Claim: Per-signer marks survive local policy refusal and reopen; while the
+// grant stays paused the pause refusal takes precedence over rollback (step 8
+// before step 9); once unpaused, older marks refuse and equal/newer complete
+// samples admit.
 func TestLinuxReceiverSnapshotHighwater(t *testing.T) {
 	g := newLinuxRig(t)
 	issued := muNow.Add(-10 * time.Second)
@@ -43,11 +46,14 @@ func TestLinuxReceiverSnapshotHighwater(t *testing.T) {
 	g.reopen()
 	linuxSnapshotRig(g, &issued, nil)
 	issued = issued.Add(-time.Second)
+	if _, err := g.r.Handle(context.Background(), e); !errors.Is(err, ErrMUPaused) {
+		t.Fatal("pause must precede rollback", err)
+	}
+	g.r.config.Paused[g.v.grant] = false
 	if _, err := g.r.Handle(context.Background(), e); !errors.Is(err, ErrMURollback) {
 		t.Fatal(err)
 	}
 	issued = issued.Add(time.Second)
-	g.r.config.Paused[g.v.grant] = false
 	if _, err := g.r.Handle(context.Background(), e); err != nil {
 		t.Fatal("equal refused", err)
 	}

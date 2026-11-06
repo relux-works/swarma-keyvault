@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"reflect"
 	"time"
 )
@@ -78,15 +79,20 @@ func (r *LinuxReceiver) HandleProjection(ctx context.Context, raw []byte, room, 
 	return r.Handle(ctx, e)
 }
 
-func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRevocationState) (MUDecision, error) {
+// check verifies the request and records its snapshots. Storage, trust and
+// binding failures return as err at once. A step-9 refusal (a known
+// revocation or a continuity rollback) returns as revocation instead, after
+// the evidence is recorded, so the caller can apply the step-8 receiver
+// checks first (contract section 3).
+func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRevocationState) (d MUDecision, revocation error, err error) {
 	now, err := r.clock()
 	if err != nil || now.IsZero() || now.Nanosecond() != 0 {
-		return MUDecision{}, ErrMUState
+		return MUDecision{}, nil, ErrMUState
 	}
 	admission, err := r.verifier.VerifyAdmission(linuxCloneEvent(e), now)
 	for _, snapshot := range admission.Snapshots {
 		if !r.config.Signers[snapshot.Signer] {
-			return MUDecision{}, ErrMUState
+			return MUDecision{}, nil, ErrMUState
 		}
 	}
 	if err == nil && (admission.Decision.PublisherKey != r.config.PublisherKey ||
@@ -96,25 +102,27 @@ func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRev
 	if err != nil {
 		// A request refusal cannot erase independently verified evidence.
 		if persistErr := snapshots.observe(s, admission.Snapshots, now); persistErr != nil {
-			return MUDecision{}, persistErr
+			return MUDecision{}, nil, persistErr
 		}
-		return MUDecision{}, err
+		return MUDecision{}, nil, err
 	}
-	d := admission.Decision
-	if err := linuxKnownRevocation(s, d); err != nil {
+	d = admission.Decision
+	if known := linuxKnownRevocation(s, d); known != nil {
 		if persistErr := snapshots.observe(s, admission.Snapshots, now); persistErr != nil {
-			return MUDecision{}, persistErr
+			return MUDecision{}, nil, persistErr
 		}
-		return MUDecision{}, err
-	}
-	if err := snapshots.admit(s, admission.Snapshots, d, now); err != nil {
-		return MUDecision{}, err
+		revocation = known
+	} else if admitErr := snapshots.admit(s, admission.Snapshots, d, now); admitErr != nil {
+		if !errors.Is(admitErr, ErrMURollback) {
+			return MUDecision{}, nil, admitErr
+		}
+		revocation = admitErr
 	}
 	// Enforce the adapter's exact-event boundary even for a stale/miswired
 	// implementation. Signatures and authorization remain its responsibility.
 	b, err := muMessageBody(e.Envelope)
 	if err != nil {
-		return MUDecision{}, err
+		return MUDecision{}, nil, err
 	}
 	target, _ := b["target"].(map[string]any)
 	args, _ := b["arguments"].(map[string]any)
@@ -122,28 +130,34 @@ func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRev
 	if d.RequestHash != sha256.Sum256(e.Envelope) || b["author"] != d.Author || b["author_attestation"] != d.AuthorAttestation ||
 		b["aud"] != d.Audience || b["nonce"] != d.Nonce || b["action"] != d.Action || target["kind"] != d.TargetKind || target["id"] != d.TargetID ||
 		b["room"] != e.Room || b["to"] != e.Receiver || b["body_sha256"] != hex.EncodeToString(textHash[:]) || len(args) != len(d.Arguments) {
-		return MUDecision{}, ErrMUState
+		return MUDecision{}, nil, ErrMUState
 	}
 	for k, v := range args {
 		value, exists := d.Arguments[k]
 		if s, ok := v.(string); !ok || !exists || value != s {
-			return MUDecision{}, ErrMUState
+			return MUDecision{}, nil, ErrMUState
 		}
 	}
 	exp, err := time.Parse("2006-01-02T15:04:05Z", strOr(b["exp"]))
 	if err != nil || !d.Expires.Equal(exp) || !now.Before(d.Expires) {
-		return MUDecision{}, ErrMUState
+		return MUDecision{}, nil, ErrMUState
 	}
 	if d.GrantRoot != r.config.Binding.GrantRoot || d.Audience != r.config.Binding.Audience {
-		return MUDecision{}, ErrMUAudience
+		return MUDecision{}, nil, ErrMUAudience
 	}
 	if d.Use != "once" && d.Use != "until_expiry" {
-		return MUDecision{}, ErrMUState
+		return MUDecision{}, nil, ErrMUState
+	}
+	// Defense in depth: no delegated grant may create, widen or re-delegate
+	// authority. It runs before the action-target check, which would otherwise
+	// refuse these actions with a generic code.
+	if grantAuthorityActions[d.Action] {
+		return MUDecision{}, nil, ErrMUWidening
 	}
 	if d.GrantID == "" || d.AuthorAttestation == "" || d.PublisherKey == "" || !linuxActionTarget(d.Action, d.TargetKind) {
-		return MUDecision{}, ErrMUState
+		return MUDecision{}, nil, ErrMUState
 	}
-	return d, nil
+	return d, revocation, nil
 }
 
 func (r *LinuxReceiver) policy(d MUDecision) error {
@@ -203,12 +217,18 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	if !exists || registered != strOr(body["author"]) {
 		return nil, ErrMUSender
 	}
-	d, err := r.check(e, s, snapshots)
+	d, revocation, err := r.check(e, s, snapshots)
 	if err != nil {
 		return nil, err
 	}
-	// Retain each authenticated snapshot as soon as it is known, even when
-	// generation, time or local policy changes before the final admission.
+	// Step-8 receiver checks take precedence over step-9 revocation refusals;
+	// the evidence is already recorded either way.
+	if err := r.policy(d); err != nil {
+		return nil, err
+	}
+	if revocation != nil {
+		return nil, revocation
+	}
 	if err := linuxAbsorbDecision(s, d); err != nil {
 		return nil, err
 	}
@@ -220,7 +240,7 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	if err := s.absorbSigned(MUOwnerRootSigner, root); err != nil {
 		return nil, err
 	}
-	again, err := r.check(e, s, snapshots)
+	again, revocation, err := r.check(e, s, snapshots)
 	if err != nil {
 		return nil, err
 	}
@@ -233,10 +253,13 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	if !reflect.DeepEqual(before, after) {
 		return nil, ErrMUState
 	}
-	if err := linuxAbsorbDecision(s, again); err != nil {
+	if err := r.policy(again); err != nil {
 		return nil, err
 	}
-	if err := r.policy(again); err != nil {
+	if revocation != nil {
+		return nil, revocation
+	}
+	if err := linuxAbsorbDecision(s, again); err != nil {
 		return nil, err
 	}
 	effect := r.effects[again.Action]
