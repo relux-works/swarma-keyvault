@@ -7,20 +7,29 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // Claim: Base keeps an absolute temporary directory exactly up to the length
 // that leaves Reserve bytes, and falls back to /tmp one byte past it, for a
-// relative path and for an empty value.
+// path that fits by runes but not by bytes, for a relative path and for an
+// empty value.
 func TestBaseBudget(t *testing.T) {
 	fits := "/" + strings.Repeat("a", MaxPath-Reserve-1)
 	over := fits + "b"
+	// Two-byte runes: this path has fewer runes than the budget allows but
+	// more bytes, so a rune-counting Base would wrongly keep it.
+	multibyteOver := "/" + strings.Repeat("\u00e9", MaxPath-Reserve-1)
+	if len(multibyteOver) <= MaxPath-Reserve || utf8.RuneCountInString(multibyteOver) > MaxPath-Reserve {
+		t.Fatalf("setup: multibyte case is %d bytes, %d runes", len(multibyteOver), utf8.RuneCountInString(multibyteOver))
+	}
 	for _, tc := range []struct {
 		tmp, want string
 	}{
 		{"/tmp/private-run/tmp", "/tmp/private-run/tmp"},
 		{fits, fits},
 		{over, Fallback},
+		{multibyteOver, Fallback},
 		{"relative/tmp", Fallback},
 		{"", Fallback},
 	} {
