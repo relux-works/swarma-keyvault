@@ -11,10 +11,11 @@ import (
 // LocalOutcome is a local CLI observation, not an authenticated Matrix result
 // or an instance-safe DELETE capability. Unknown outcomes retain the use.
 type LocalOutcome struct {
-	State        string `json:"state"`
-	RepositoryID string `json:"repository_id,omitempty"`
-	NodeID       string `json:"node_id,omitempty"`
-	FullName     string `json:"full_name,omitempty"`
+	State        string                `json:"state"`
+	RepositoryID string                `json:"repository_id,omitempty"`
+	NodeID       string                `json:"node_id,omitempty"`
+	FullName     string                `json:"full_name,omitempty"`
+	Attempt      *LocalProviderAttempt `json:"provider_attempt,omitempty"`
 }
 
 type LocalMediator struct {
@@ -94,21 +95,31 @@ func (m *LocalMediator) Execute(ctx context.Context, certificate, request []byte
 	if _, err := m.enrollment.check(checked.certificate, checked.attestation, m.now()); err != nil {
 		return &LocalOutcome{State: "unknown"}, ErrLocalUnknown
 	}
-	raw, err := m.provider.create(ctx, checked)
+	var raw []byte
+	var attempt *LocalProviderAttempt
+	if detailed, ok := m.provider.(interface {
+		createWithAttempt(context.Context, *checkedLocalCreate) ([]byte, *LocalProviderAttempt, error)
+	}); ok {
+		raw, attempt, err = detailed.createWithAttempt(ctx, checked)
+	} else {
+		raw, err = m.provider.create(ctx, checked)
+	}
 	if err != nil {
-		return &LocalOutcome{State: "unknown"}, ErrLocalUnknown
+		return &LocalOutcome{State: "unknown", Attempt: attempt}, ErrLocalUnknown
 	}
 	receipt, err := parseLocalProviderReceipt(raw)
 	if err != nil {
-		return &LocalOutcome{State: "unknown"}, ErrLocalUnknown
+		return &LocalOutcome{State: "unknown", Attempt: attempt}, ErrLocalUnknown
 	}
 	body := binary.BigEndian.AppendUint64([]byte("LCO1"), reservation)
 	body = binary.BigEndian.AppendUint32(body, uint32(len(receipt.raw)))
 	body = append(body, receipt.raw...)
 	if err := state.append(journalOutcome, body); err != nil {
-		return &LocalOutcome{State: "unknown"}, ErrLocalUnknown
+		return &LocalOutcome{State: "unknown", Attempt: attempt}, ErrLocalUnknown
 	}
-	return localSuccessOutcome(receipt), nil
+	outcome := localSuccessOutcome(receipt)
+	outcome.Attempt = attempt
+	return outcome, nil
 }
 
 func localSuccessOutcome(r *localProviderReceipt) *LocalOutcome {
