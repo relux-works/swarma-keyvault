@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 15
     env:
       GOMAXPROCS: '2'
-      GOFLAGS: '-p=2'
+      GOFLAGS: '-mod=readonly -p=2'
       MAC_KEYVAULT_SKIP_KEYCHAIN: '1'
     steps:
       - name: Check out the PR head or pushed commit
@@ -41,6 +41,48 @@ jobs:
           cases=$(find interop/multi-use-grants/cases -maxdepth 1 -type f -name '*.json' | wc -l)
           echo "TestMUInteropVectors committed cases: $cases"
           test "$cases" -ge 72
+      - name: Check out the immutable lab fixture base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: dffe3ac5c86e2e8869efc3b869d35f845e1bd71a
+          path: .ci-lab-source
+          persist-credentials: false
+      - name: Build separately pinned lab verifier and signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'd0e442e35940972cf5fa7298df922e32c1cdf5b6024c5268115506a204abcd89  .github/fixtures/pinned-lab.bundle' | sha256sum -c -
+          fixture_source="$GITHUB_WORKSPACE/.ci-lab-source"
+          fixture_bin="$RUNNER_TEMP/lab-fixture-bin"
+          mkdir -m 700 "$fixture_bin"
+          test "$(git -C "$fixture_source" rev-parse HEAD)" = dffe3ac5c86e2e8869efc3b869d35f845e1bd71a
+          git -C "$fixture_source" fetch "$GITHUB_WORKSPACE/.github/fixtures/pinned-lab.bundle" refs/fixtures/verifier refs/fixtures/signer
+          git -C "$fixture_source" checkout --detach 12b3ffac1993cc5b35074b569018b4db7c9bbd82
+          test "$(git -C "$fixture_source" rev-parse HEAD^{tree})" = a553906c37721d8f2adbdb1051cf1cef0eb54c49
+          (
+            cd "$fixture_source"
+            go mod download
+            go mod verify
+            go build -o "$fixture_bin/swarma-keyvault" ./cmd/swarma-keyvault
+          )
+          git -C "$fixture_source" checkout --detach 1045aac3ea204722aaaf0e60dac69eb8f622a7fb
+          test "$(git -C "$fixture_source" rev-parse HEAD^{tree})" = b129a24428cdf5f2cc56fa5d9f27749c4a12065a
+          (
+            cd "$fixture_source"
+            go mod download
+            go mod verify
+            go build -o "$fixture_bin/labtestsigner" ./tools/labtestsigner
+          )
+          go mod download
+          go mod verify
+          go build -o "$fixture_bin/labcompose" ./tools/labcompose
+          for binary in swarma-keyvault labtestsigner labcompose; do
+            test -f "$fixture_bin/$binary" && test -x "$fixture_bin/$binary" && test -O "$fixture_bin/$binary"
+            test ! -L "$fixture_bin/$binary"
+          done
+          echo "LAB_KEYVAULT_CLI=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
+          echo "LAB_TEST_SIGNER=$fixture_bin/labtestsigner" >> "$GITHUB_ENV"
+          echo "LAB_COMPOSE=$fixture_bin/labcompose" >> "$GITHUB_ENV"
       # Discover all Linux-buildable Go packages with ./...; none is excluded.
       # Go excludes the Darwin-only Security.framework/Keychain cgo backend,
       # KEK code-identity inspection, sandbox-exec and Enclave helper tests,
