@@ -103,7 +103,7 @@ jobs:
 
   verifier-latency:
     name: Real verifier non-race (40/path, p95 <=80ms, max <100ms)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
       GOMAXPROCS: '2'
@@ -120,41 +120,22 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - name: Install the versioned sandbox prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu's authenticated archive supplies this exact Noble amd64 package.
+          # This is runner setup, before any candidate test executes.
+          . /etc/os-release
+          test "$ID:$VERSION_ID:$(dpkg --print-architecture)" = ubuntu:24.04:amd64
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
+          test "$(dpkg-query -W -f='${Version}' bubblewrap)" = 0.9.0-1ubuntu0.3
       - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |
           set -euo pipefail
-          # Materialize exact go.sum dependencies into this job's own cache.
-          state="$RUNNER_TEMP/verifier-private"
-          mkdir -m 700 "$state"
-          for directory in home tmp cache build dependencies; do
-            mkdir -m 700 "$state/$directory"
-          done
-          GOMODCACHE="$state/dependencies" go mod download
-          GOMODCACHE="$state/dependencies" go mod verify
-          toolchain=$(go env GOROOT)
-          command -v bwrap
-          # Fixture signing is outside timing. Exactly 40 per path; one run, zero retries.
-          # Nearest-rank p95: sorted[ceil(0.95*N)-1], rank 38 of 40.
-          # Require p95 <=80ms AND max <100ms; log actual sample counts.
-          # The measured process has no network, host home or agent socket.
-          bwrap --die-with-parent --unshare-all --clearenv \
-            --ro-bind /usr /usr --symlink usr/bin /bin \
-            --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
-            --proc /proc --dev /dev --dir /etc \
-            --ro-bind "$GITHUB_WORKSPACE" /source \
-            --ro-bind "$toolchain" /opt/go \
-            --bind "$state" /private \
-            --ro-bind "$state/dependencies" /private/dependencies \
-            --setenv PATH /opt/go/bin:/usr/bin:/bin \
-            --setenv GOROOT /opt/go --setenv GOTOOLCHAIN local \
-            --setenv HOME /private/home --setenv TMPDIR /private/tmp \
-            --setenv XDG_CACHE_HOME /private/cache --setenv GOCACHE /private/build \
-            --setenv GOMODCACHE /private/dependencies \
-            --setenv GOPROXY off --setenv GOSUMDB off \
-            --setenv GOMAXPROCS 2 --setenv GOFLAGS '-mod=readonly -p=2' \
-            --chdir /source \
-            go test -count=1 -v ./internal/grants -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion)$' | tee verifier-p95.log
+          bash scripts/verifier-latency-confined.sh 2>&1 | tee verifier-p95.log
       - name: Preserve timing samples even on failure
         if: always()
         run: |
