@@ -21,7 +21,7 @@ func (p *LinuxVerifier) VerifyAdmission(e MUEnvelopeEvent, now time.Time) (Linux
 		signers = append(signers, signer)
 	}
 	sort.Strings(signers)
-	admission := LinuxAdmission{Decision: verified.Decision}
+	admission := LinuxAdmission{Decision: verified.Decision, plan: verified.plan}
 	for _, signer := range signers {
 		entries, ok := verified.SnapshotEntries[signer]
 		if !ok {

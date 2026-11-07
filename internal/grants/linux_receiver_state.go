@@ -23,6 +23,7 @@ type LinuxVerifiedSnapshot struct {
 type LinuxAdmission struct {
 	Decision  MUDecision
 	Snapshots []LinuxVerifiedSnapshot
+	plan      linuxVerificationPlan // candidate only; legacy receiver does not commit it
 }
 
 // InitializeLinuxReceiverState explicitly provisions the MU journal and reapplies

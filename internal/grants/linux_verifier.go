@@ -95,7 +95,10 @@ var _ MUVerifier = (*LinuxVerifier)(nil)
 // VerifiedSnapshots is separate from candidate metadata: a request refusal
 // returns no candidate or accepted marks, but retains authenticated observations.
 type LinuxVerifiedDecision struct {
-	Decision      MUDecision
+	Decision MUDecision
+	// Internal proposed journal input. It is advisory and is not committed by
+	// the legacy receiver. Preserve both platform plans and exact originals.
+	plan          linuxVerificationPlan
 	SnapshotMarks map[string]time.Time
 	// SnapshotEntries retains each signer's entries from that same verified sample.
 	SnapshotEntries map[string][]MURevocation
@@ -379,8 +382,9 @@ func (p *LinuxVerifier) VerifyProjectedWithSnapshots(pe MUEnvelopeEvent, now tim
 		return LinuxVerifiedDecision{}, ErrMUState
 	}
 	v := verifier.New(c)
-	if r := v.VerifyMessage(pe.Envelope); r.Code != "accept" {
-		return LinuxVerifiedDecision{}, linuxVerifierRefuse(r.Code)
+	message := v.VerifyMessage(pe.Envelope)
+	if message.Code != "accept" {
+		return LinuxVerifiedDecision{}, linuxVerifierRefuse(message.Code)
 	}
 	target, _ := body["target"].(map[string]any)
 	action, kind, id := strOr(body["action"]), strOr(target["kind"]), strOr(target["id"])
@@ -418,6 +422,10 @@ func (p *LinuxVerifier) VerifyProjectedWithSnapshots(pe MUEnvelopeEvent, now tim
 	if err != nil {
 		return LinuxVerifiedDecision{}, ErrMUState
 	}
+	commitPlan, err := linuxPlanOriginals(message.Plan, r.Plan, pe.Envelope, grant)
+	if err != nil {
+		return LinuxVerifiedDecision{}, err
+	}
 	expires, err := time.Parse(time.RFC3339, strOr(body["exp"]))
 	if err != nil {
 		return LinuxVerifiedDecision{}, ErrMUState
@@ -445,7 +453,7 @@ func (p *LinuxVerifier) VerifyProjectedWithSnapshots(pe MUEnvelopeEvent, now tim
 	if isLinux {
 		agentSigner = p.config.AgentRevocationRoot
 	}
-	return LinuxVerifiedDecision{SnapshotMarks: marks, SnapshotEntries: bySigner, Decision: MUDecision{GrantRoot: p.config.GrantRoot, GrantID: grantID, Use: r.Plan.Use, Author: key, Audience: p.config.Audience, Nonce: strOr(body["nonce"]), Action: action, TargetKind: kind, TargetID: id, Arguments: args, AuthorAttestation: reference, PublisherKey: p.config.PublisherKey, SnapshotMarks: marks, AgentRevocationKey: agentSigner, AgentRevocations: bySigner[p.config.AgentRevocationRoot], Revocations: bySigner[p.config.PublisherKey], Expires: expires, RequestHash: sha256.Sum256(pe.Envelope)}}, nil
+	return LinuxVerifiedDecision{plan: commitPlan, SnapshotMarks: marks, SnapshotEntries: bySigner, Decision: MUDecision{GrantRoot: p.config.GrantRoot, GrantID: grantID, Use: r.Plan.Use, Author: key, Audience: p.config.Audience, Nonce: strOr(body["nonce"]), Action: action, TargetKind: kind, TargetID: id, Arguments: args, AuthorAttestation: reference, PublisherKey: p.config.PublisherKey, SnapshotMarks: marks, AgentRevocationKey: agentSigner, AgentRevocations: bySigner[p.config.AgentRevocationRoot], Revocations: bySigner[p.config.PublisherKey], Expires: expires, RequestHash: sha256.Sum256(pe.Envelope)}}, nil
 }
 
 // AdmitLinuxGrantee is the issuer-side D3 identity gate. It verifies a current

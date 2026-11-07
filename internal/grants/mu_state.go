@@ -57,16 +57,19 @@ type muReservation struct {
 }
 
 type muState struct {
-	directory, lock, file *os.File
-	link                  journalFrameLink
-	binding               MUBinding
-	allowances, nonces    map[[32]byte]*muReservation
-	reservations          map[uint64]*muReservation
-	revoked               map[MURevocation]bool            // monotonic union (r5 constraint 2)
-	highWater             map[string]time.Time             // newest accepted snapshot issued_at per signer
-	unions                map[string]map[MURevocation]bool // durable union per snapshot signer
-	write                 func(*os.File, []byte) (int, error)
-	sync                  func(*os.File) error
+	directory, lock, file                  *os.File
+	link                                   journalFrameLink
+	binding                                MUBinding
+	allowances, nonces                     map[[32]byte]*muReservation
+	reservations                           map[uint64]*muReservation
+	revoked                                map[MURevocation]bool            // monotonic union (r5 constraint 2)
+	highWater                              map[string]time.Time             // newest accepted snapshot issued_at per signer
+	unions                                 map[string]map[MURevocation]bool // durable union per snapshot signer
+	verificationNow, verificationWatermark time.Time
+	verificationIDs                        map[string][]byte // complete retained exact originals, same MU journal
+	failed                                 bool              // uncertain append poisons this open handle; reopen reconciles bytes
+	write                                  func(*os.File, []byte) (int, error)
+	sync                                   func(*os.File) error
 }
 
 func muActivation(b MUBinding) []byte {
@@ -220,6 +223,9 @@ func encodeMUReservation(r *muReservation) []byte {
 func (s *muState) replay(f *journalFrame) error {
 	switch f.kind {
 	case journalReservation:
+		if len(f.body) >= 4 && string(f.body[:4]) == "MUP1" {
+			return s.replayVerifiedReservation(f)
+		}
 		if len(f.body) != 133 || string(f.body[:4]) != "MUR1" || (f.body[4] != 1 && f.body[4] != 2) || len(s.reservations) >= muMaxReservations {
 			return ErrMUState
 		}
@@ -301,6 +307,9 @@ func (s *muState) replay(f *journalFrame) error {
 }
 
 func (s *muState) append(kind journalFrameKind, body []byte) error {
+	if s.failed {
+		return ErrMUState
+	}
 	raw, err := encodeJournalFrame(kind, s.link, body)
 	if err != nil {
 		return ErrMUState
@@ -310,13 +319,16 @@ func (s *muState) append(kind journalFrameKind, body []byte) error {
 		return ErrMUState
 	}
 	if n, err := s.write(s.file, raw); err != nil || n != len(raw) {
+		s.failed = true
 		return ErrMUState
 	}
 	if s.sync(s.file) != nil {
+		s.failed = true
 		return ErrMUState
 	}
 	f, err := readJournalFrame(bytes.NewReader(raw), s.link)
 	if err != nil {
+		s.failed = true
 		return ErrMUState
 	}
 	s.link.previous = f.digest
@@ -328,6 +340,11 @@ func (s *muState) append(kind journalFrameKind, body []byte) error {
 // allowance only for a once grant. It refuses a held allowance or nonce,
 // including one whose earlier attempt ended UNKNOWN.
 func (s *muState) reserve(u MUUse) (uint64, error) {
+	// Once this epoch contains qualified-plan reservations, legacy callers
+	// cannot omit time/history commitment or downgrade journal interpretation.
+	if s.failed || s.verificationIDs != nil {
+		return 0, ErrMUState
+	}
 	if u.GrantID == "" || u.Nonce == "" || u.Requester == "" || u.Audience != s.binding.Audience || u.GrantRoot != s.binding.GrantRoot || u.RequestHash == [32]byte{} {
 		return 0, ErrMUState
 	}
