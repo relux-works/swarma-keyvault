@@ -10,8 +10,13 @@ The contract's API baseline is commit
 `d9e5b2143f2cf1808558231b10b34c2dc0731390`; the intervening change adds requester
 callback controls only. Those tests and the repository skill are preserved.
 The existing `VerificationState([32]byte) (LinuxVerificationState, error)` port,
-`grant/1`, `swarm-envelope/2`, dependency versions and journal formats are
-unchanged. A later source change requires another independent exact-revision
+`grant/1`, `swarm-envelope/2` and dependency versions are unchanged. The existing
+outer checksummed journal framing and 276,784-byte reservation-body ceiling are
+unchanged, but `MUP1` is a new typed reservation body carrying the reservation,
+time, watermark and exact-ID history. The old `MUR1` reader refuses `MUP1`;
+a journal containing `MUP1` must not be downgraded. See
+[the provider-view compatibility details](linux-verification-provider-view.md).
+A later source change requires another independent exact-revision
 review; these historical pins are not a claim to implement at the older tree.
 
 ## Implemented restrictions

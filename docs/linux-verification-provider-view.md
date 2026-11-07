@@ -38,16 +38,17 @@ below 1,024 bytes, without source errors or protected payload. The real verifier
 now retains both message and authorization plans, their original ID bytes and
 watermarks in internal candidate metadata. Unsupported plan members refuse.
 
-A candidate helper extends the body of an existing MU reservation frame with
-`MUP1`: the existing nonce/allowance reservation, qualified time, authority expiry,
+A candidate helper writes a new typed `MUP1` reservation body within the existing
+outer checksummed MU journal framing: the existing nonce/allowance reservation,
+qualified time, authority expiry,
 watermark and complete exact-ID history are one checksummed, synced frame in
 `mu.journal`. It creates no second authority journal. The existing 276,784-byte
 reservation-body limit remains; a complete history larger than that frame
 refuses even if it fits the view limit. History is never chunked, truncated or
-evicted. Replay accepts legacy reservations and the new candidate body; old
-readers refuse the latter. Once an epoch contains a plan-aware reservation,
+evicted. Replay accepts legacy reservations and the new `MUP1` body; the old
+`MUR1` reader refuses `MUP1`. Once an epoch contains a plan-aware reservation,
 legacy reservation calls refuse, so rollback cannot silently omit its history.
-Do not downgrade a journal containing this body.
+A journal containing `MUP1` must not be downgraded.
 
 The helper checks retained time/watermark floors and byte-identical history,
 the exact request and grant/use bindings, and known durable revocations before
