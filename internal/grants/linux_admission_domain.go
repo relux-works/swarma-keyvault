@@ -64,6 +64,7 @@ type linuxDomainState struct {
 // Effects run synchronously under this gate through their outcome write; they
 // must not recursively call this domain. This is not cross-process continuity.
 type LinuxAdmissionDomain struct {
+	clock    linuxAdmissionClock
 	gate     chan struct{}
 	state    linuxDomainState
 	revision uint64
@@ -72,11 +73,15 @@ type LinuxAdmissionDomain struct {
 }
 
 func NewLinuxAdmissionDomain(u LinuxAdmissionUpdate, effects map[string]MUEffect) (*LinuxAdmissionDomain, error) {
-	s, err := linuxOwnDomainUpdate(u, nil)
+	return newLinuxAdmissionDomainWithClock(u, effects, linuxRealClock{})
+}
+func newLinuxAdmissionDomainWithClock(u LinuxAdmissionUpdate, effects map[string]MUEffect, clock linuxAdmissionClock) (*LinuxAdmissionDomain, error) {
+	clock = linuxClock(clock)
+	s, err := linuxOwnDomainUpdate(u, nil, clock)
 	if err != nil {
 		return nil, err
 	}
-	d := &LinuxAdmissionDomain{gate: make(chan struct{}, 1), state: s, revision: 1, effects: map[string]MUEffect{}}
+	d := &LinuxAdmissionDomain{clock: clock, gate: make(chan struct{}, 1), state: s, revision: 1, effects: map[string]MUEffect{}}
 	d.gate <- struct{}{}
 	for k, e := range effects {
 		d.effects[k] = e
@@ -84,7 +89,7 @@ func NewLinuxAdmissionDomain(u LinuxAdmissionUpdate, effects map[string]MUEffect
 	return d, nil
 }
 
-func linuxOwnDomainUpdate(u LinuxAdmissionUpdate, prior []MURevocation) (linuxDomainState, error) {
+func linuxOwnDomainUpdate(u LinuxAdmissionUpdate, prior []MURevocation, clock linuxAdmissionClock) (linuxDomainState, error) {
 	var s linuxDomainState
 	// Bound the additional protected policy/index projection before copying it.
 	// Charge it against the SAME 1 MiB view, not an additional allowance.
@@ -134,7 +139,7 @@ func linuxOwnDomainUpdate(u LinuxAdmissionUpdate, prior []MURevocation) (linuxDo
 	if pc.GrantRoot != rc.Binding.GrantRoot || pc.Audience != rc.Binding.Audience || pc.RoomID != rc.RoomID || pc.ReceiverMXID != rc.ReceiverMXID || pc.PublisherKey != rc.PublisherKey || pc.AgentRevocationRoot != rc.AgentRevocationRoot {
 		return s, ErrMUState
 	}
-	v, err := newLinuxProviderView(u.Provider)
+	v, err := newLinuxProviderViewWithClock(u.Provider, clock)
 	if err != nil {
 		return s, err
 	}
@@ -161,7 +166,7 @@ func linuxOwnDomainUpdate(u LinuxAdmissionUpdate, prior []MURevocation) (linuxDo
 	// Stage a real verifier advisory before final admission. The receiver still
 	// repeats the complete real verification under the final lease before reserve.
 	s.advisory, s.advisoryErr = v.advisory()
-	if time.Since(v.input.ObservedAt) >= linuxProviderStageLimit {
+	if clock.now().Sub(v.input.ObservedAt) >= linuxProviderStageLimit {
 		return linuxDomainState{}, ErrMUState
 	}
 	// Retain only independently authenticated snapshot observations. An invalid
@@ -281,7 +286,7 @@ func (d *LinuxAdmissionDomain) Replace(ctx context.Context, expected uint64, u L
 		return d.revision, ErrMUState
 	}
 	u.Provider.State.IDJournal = merged
-	s, err := linuxOwnDomainUpdate(u, d.state.roots)
+	s, err := linuxOwnDomainUpdate(u, d.state.roots, d.clock)
 	if err != nil {
 		return d.revision, err
 	}
@@ -322,11 +327,11 @@ func (d *LinuxAdmissionDomain) Invalidate(ctx context.Context) error {
 }
 
 func (d *LinuxAdmissionDomain) Handle(ctx context.Context, e MUEnvelopeEvent) (*MUOutcome, error) {
-	if ctx == nil {
+	if d == nil || ctx == nil {
 		return nil, ErrMUState
 	}
 	// Start once, BEFORE contention or journal opening. No boundary renews this.
-	final, cancel := context.WithDeadline(ctx, time.Now().Add(linuxProviderFinalLimit))
+	final, cancel := linuxClock(d.clock).withDeadline(ctx, linuxClock(d.clock).now().Add(linuxProviderFinalLimit))
 	defer cancel()
 	if err := d.lock(final); err != nil {
 		return nil, err
@@ -381,7 +386,7 @@ type linuxFinalAdmission struct {
 }
 
 func (l *linuxFinalAdmission) live() bool {
-	return l != nil && l.ctx.Err() == nil && time.Now().Before(l.deadline) && l.view.usable()
+	return l != nil && l.ctx.Err() == nil && linuxClock(l.view.clock).now().Before(l.deadline) && l.view.usable()
 }
 func (l *linuxFinalAdmission) VerifyAdmission(e MUEnvelopeEvent, now time.Time) (LinuxAdmission, error) {
 	if !l.live() || !now.Equal(l.view.input.State.Now) || !reflect.DeepEqual(e, l.view.input.Event) {

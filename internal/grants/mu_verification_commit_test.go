@@ -264,12 +264,10 @@ func TestMUVerificationCommitLateSyncRetainsHold(t *testing.T) {
 		}
 		// Finite in-process synchronous storage premise, no timeout worker and
 		// no continued operation after return. Exercise the actual 100 ms cap.
-		until := time.Now().Add(linuxProviderFinalLimit)
-		for time.Now().Before(until) {
-		}
+		c.clock.(*linuxTestClock).advance(linuxProviderFinalLimit)
 		return nil
 	}
-	if _, err := s.reserveVerifiedUntil(u, c, time.Now().Add(linuxProviderFinalLimit)); !errors.Is(err, ErrMUState) {
+	if _, err := s.reserveVerifiedUntil(u, c, c.clock.now().Add(linuxProviderFinalLimit)); !errors.Is(err, ErrMUState) {
 		t.Fatal("late sync admitted effect", err)
 	}
 	if len(s.allowances) != 1 || len(s.verificationIDs) != 2 || len(s.reservations) != 1 {

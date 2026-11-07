@@ -24,7 +24,7 @@ func linuxProviderTestInput(d *linuxVerifierDock) linuxProviderInput {
 
 func linuxProviderTestView(t *testing.T, d *linuxVerifierDock) *linuxProviderView {
 	t.Helper()
-	v, err := newLinuxProviderView(linuxProviderTestInput(d))
+	v, err := newLinuxTestProviderView(linuxProviderTestInput(d))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestLinuxProviderViewDetachedConcurrentInputUpdates(t *testing.T) {
 	d := newLinuxVerifierDock(t)
 	linuxContractScope(d, "once")
 	in := linuxProviderTestInput(d)
-	v, err := newLinuxProviderView(in)
+	v, err := newLinuxTestProviderView(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,8 +94,8 @@ func TestLinuxProviderViewDetachedConcurrentInputUpdates(t *testing.T) {
 	}()
 	for n := 0; n < 20; n++ {
 		// Check detached-copy races with the real verifier directly. The
-		// advisory path's separate 100 ms refusal is tested without race
-		// instrumentation, which can exceed that fixed budget on this host.
+		// advisory fence uses fixture time; the separate non-race gate
+		// measures the real elapsed bound with actual signed verification.
 		a, err := p.VerifyAdmission(v.input.Event, v.input.State.Now)
 		if err != nil || a.Decision.RequestHash != sha256.Sum256(original) {
 			t.Errorf("detached view raced input update: %v", err)
@@ -115,7 +115,7 @@ func TestLinuxProviderViewDetachedResultsAndExactRequest(t *testing.T) {
 	linuxContractScope(d, "once")
 	in := linuxProviderTestInput(d)
 	in.State.IDJournal["retained"] = []byte("original bytes")
-	v, err := newLinuxProviderView(in)
+	v, err := newLinuxTestProviderView(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestLinuxProviderViewRefusalPairs(t *testing.T) {
 			case "authority-expired":
 				in.State.AuthorityUntil = in.State.Now
 			}
-			v, err := newLinuxProviderView(in)
+			v, err := newLinuxTestProviderView(in)
 			if err == nil {
 				_, err = v.advisory()
 			}
@@ -241,33 +241,33 @@ func TestLinuxProviderViewBoundsAndOriginalExpiry(t *testing.T) {
 	in := linuxProviderTestInput(d)
 	in.State.AuthorityUntil = d.now.Add(time.Second)
 	start := time.Now()
-	v, err := newLinuxProviderView(in)
+	v, err := newLinuxTestProviderView(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v.deadline.After(start.Add(time.Second)) {
 		t.Fatal("original authority expiry extended")
 	}
-	again, err := newLinuxProviderView(in)
+	again, err := newLinuxTestProviderView(in)
 	if err != nil || !again.deadline.Equal(v.deadline) {
 		t.Fatal("restaging extended original expiry", err)
 	}
 	old := in
 	old.ObservedAt = time.Now().Add(-linuxProviderStageLimit)
-	if _, err := newLinuxProviderView(old); !errors.Is(err, ErrMUState) {
+	if _, err := newLinuxTestProviderView(old); !errors.Is(err, ErrMUState) {
 		t.Fatal("staging deadline refreshed", err)
 	}
 	future := in
 	future.ObservedAt = time.Now().Add(time.Hour)
-	if _, err := newLinuxProviderView(future); !errors.Is(err, ErrMUState) {
+	if _, err := newLinuxTestProviderView(future); !errors.Is(err, ErrMUState) {
 		t.Fatal("future local observation", err)
 	}
 	wallOnly := in
 	wallOnly.ObservedAt = wallOnly.ObservedAt.Round(0)
-	if _, err := newLinuxProviderView(wallOnly); !errors.Is(err, ErrMUState) {
+	if _, err := newLinuxTestProviderView(wallOnly); !errors.Is(err, ErrMUState) {
 		t.Fatal("wall-only observation could extend expiry on clock rollback", err)
 	}
-	v.deadline = time.Now().Add(-time.Nanosecond)
+	v.deadline = v.clock.now().Add(-time.Nanosecond)
 	if _, err := v.advisory(); linuxVerifierCode(err) != "time_unavailable" {
 		t.Fatal("expired local fence", err)
 	}

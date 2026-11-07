@@ -42,6 +42,7 @@ type linuxProviderInput struct {
 // exclusion across the authoritative update sources are implemented together.
 // In particular, publishing a newer view cannot invalidate an outstanding view.
 type linuxProviderView struct {
+	clock    linuxAdmissionClock
 	input    linuxProviderInput
 	deadline time.Time // monotonic local fence; never a qualified clock source
 }
@@ -135,7 +136,11 @@ func linuxProviderInputFitsBudget(in linuxProviderInput, extraBytes, extraRecord
 }
 
 func newLinuxProviderView(in linuxProviderInput) (*linuxProviderView, error) {
-	start := time.Now()
+	return newLinuxProviderViewWithClock(in, linuxRealClock{})
+}
+func newLinuxProviderViewWithClock(in linuxProviderInput, clock linuxAdmissionClock) (*linuxProviderView, error) {
+	clock = linuxClock(clock)
+	start := clock.now()
 	if !linuxProviderInputFits(in) || in.ObservedAt.IsZero() || in.ObservedAt == in.ObservedAt.Round(0) || in.ObservedAt.After(start) || start.Sub(in.ObservedAt) >= linuxProviderStageLimit ||
 		in.State.Now.IsZero() || !in.State.AuthorityUntil.After(in.State.Now) {
 		return nil, ErrMUState
@@ -215,7 +220,7 @@ func newLinuxProviderView(in linuxProviderInput) (*linuxProviderView, error) {
 	if !earliest.After(in.State.Now) {
 		return nil, ErrMUState
 	}
-	v := &linuxProviderView{deadline: in.ObservedAt.Add(earliest.Sub(in.State.Now))}
+	v := &linuxProviderView{clock: clock, deadline: in.ObservedAt.Add(earliest.Sub(in.State.Now))}
 	// NewLinuxVerifier already owns the complete policy-copy rules.
 	p, err := NewLinuxVerifier(in.Config, v, v, nil)
 	if err != nil {
@@ -248,13 +253,15 @@ func newLinuxProviderView(in linuxProviderInput) (*linuxProviderView, error) {
 			return nil, ErrMUState
 		}
 	}
-	if time.Since(in.ObservedAt) >= linuxProviderStageLimit || !time.Now().Before(v.deadline) {
+	if clock.now().Sub(in.ObservedAt) >= linuxProviderStageLimit || !linuxClock(v.clock).now().Before(v.deadline) {
 		return nil, ErrMUState
 	}
 	return v, nil
 }
 
-func (v *linuxProviderView) usable() bool { return v != nil && time.Now().Before(v.deadline) }
+func (v *linuxProviderView) usable() bool {
+	return v != nil && linuxClock(v.clock).now().Before(v.deadline)
+}
 func (v *linuxProviderView) Attestation(id string) ([]byte, error) {
 	if !v.usable() {
 		return nil, ErrMUState
@@ -303,7 +310,7 @@ func (v *linuxProviderView) VerificationState(hash [32]byte) (LinuxVerificationS
 // Elapsed-time refusal does not cancel or bound a blocking storage operation;
 // none is called here. The final storage boundary remains disabled below.
 func (v *linuxProviderView) advisory() (LinuxAdmission, error) {
-	start := time.Now()
+	start := linuxClock(v.clock).now()
 	if !v.usable() {
 		return LinuxAdmission{}, linuxVerifierRefuse("time_unavailable")
 	}
@@ -312,7 +319,7 @@ func (v *linuxProviderView) advisory() (LinuxAdmission, error) {
 		return LinuxAdmission{}, err
 	}
 	a, err := p.VerifyAdmission(linuxCloneEvent(v.input.Event), v.input.State.Now)
-	if time.Since(start) >= linuxProviderFinalLimit || !v.usable() {
+	if linuxClock(v.clock).now().Sub(start) >= linuxProviderFinalLimit || !v.usable() {
 		return LinuxAdmission{Snapshots: a.Snapshots}, linuxVerifierRefuse("time_unavailable")
 	}
 	return a, err

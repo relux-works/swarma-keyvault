@@ -22,7 +22,7 @@ func linuxDomainTestRig(t *testing.T) (*linuxCombinedRig, *LinuxAdmissionDomain,
 	g := newLinuxCombinedRig(t)
 	linuxContractScope(g.dock, "once")
 	u := linuxDomainTestUpdate(g)
-	d, err := NewLinuxAdmissionDomain(u, map[string]MUEffect{"work.assign": g.effect})
+	d, err := newLinuxTestAdmissionDomain(u, map[string]MUEffect{"work.assign": g.effect})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,8 +195,12 @@ func TestLinuxDomainCancellationAndAbsoluteBudget(t *testing.T) {
 	if err := d.lock(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	c := d.clock.(*linuxTestClock)
+	// Drain the first cancelled wait's deadline registration.
+	<-c.started
 	go func() { _, err := d.Handle(context.Background(), g.dock.event); done <- err }()
-	time.Sleep(110 * time.Millisecond)
+	<-c.started
+	c.advance(linuxProviderFinalLimit)
 	if err := <-done; err == nil {
 		t.Fatal("budget renewed after waiting")
 	}
@@ -217,7 +221,7 @@ func TestLinuxDomainCancellationAndAbsoluteBudget(t *testing.T) {
 func TestLinuxDomainSharedBudgetThroughRealVerifierAndJournal(t *testing.T) {
 	g, d, _ := linuxDomainTestRig(t)
 	v := d.state.view
-	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(linuxProviderFinalLimit))
+	ctx, cancel := d.clock.withDeadline(context.Background(), d.clock.now().Add(linuxProviderFinalLimit))
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	lease := &linuxFinalAdmission{view: v, deadline: deadline, ctx: ctx, extraBytes: d.state.extraBytes, extraRecords: d.state.extraRecords}
@@ -234,9 +238,7 @@ func TestLinuxDomainSharedBudgetThroughRealVerifierAndJournal(t *testing.T) {
 		if err := f.Sync(); err != nil {
 			return err
 		}
-		if wait := time.Until(deadline); wait > 0 {
-			time.Sleep(wait + time.Millisecond)
-		}
+		d.clock.(*linuxTestClock).advance(deadline.Sub(d.clock.now()) + time.Millisecond)
 		return nil
 	}
 	x := a.Decision
@@ -262,7 +264,7 @@ func TestLinuxDomainExpiryAndCustodyCannotRefresh(t *testing.T) {
 	if _, err := d.Replace(context.Background(), 1, u); err == nil {
 		t.Fatal("restore changed pinned epoch")
 	}
-	d.state.view.deadline = time.Now().Add(-time.Nanosecond)
+	d.state.view.deadline = d.clock.now().Add(-time.Nanosecond)
 	if _, err := d.Handle(context.Background(), g.dock.event); err == nil || g.calls != 0 {
 		t.Fatal("expired authority effected")
 	}
@@ -299,7 +301,7 @@ func TestLinuxDomainReceiverLateIntentAndCancelledReservation(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer d.unlock()
-			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(linuxProviderFinalLimit))
+			ctx, cancel := d.clock.withDeadline(context.Background(), d.clock.now().Add(linuxProviderFinalLimit))
 			defer cancel()
 			deadline, _ := ctx.Deadline()
 			l := &linuxFinalAdmission{view: d.state.view, deadline: deadline, ctx: ctx, extraBytes: d.state.extraBytes, extraRecords: d.state.extraRecords}
@@ -328,9 +330,7 @@ func TestLinuxDomainReceiverLateIntentAndCancelledReservation(t *testing.T) {
 					if kind == journalDispatchIntent {
 						intent = true
 						if mode == "late-intent" {
-							if wait := time.Until(deadline); wait > 0 {
-								time.Sleep(wait + time.Millisecond)
-							}
+							d.clock.(*linuxTestClock).advance(deadline.Sub(d.clock.now()) + time.Millisecond)
 						}
 					}
 					return nil
@@ -434,7 +434,7 @@ func TestLinuxDomainReplacementCannotExtendOriginalExpiry(t *testing.T) {
 	linuxContractScope(g.dock, "once")
 	u := linuxDomainTestUpdate(g)
 	u.Provider.State.AuthorityUntil = g.dock.now.Add(time.Second)
-	d, err := NewLinuxAdmissionDomain(u, map[string]MUEffect{"work.assign": g.effect})
+	d, err := newLinuxTestAdmissionDomain(u, map[string]MUEffect{"work.assign": g.effect})
 	if err != nil {
 		t.Fatal(err)
 	}

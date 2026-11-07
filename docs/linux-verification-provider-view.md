@@ -77,3 +77,30 @@ The API contract revision remains
 `d9e5b2143f2cf1808558231b10b34c2dc0731390`. Dependencies, requester callback
 tests, skill bytes and historical signed fixtures are unchanged. This candidate
 requires fresh review of the complete revision and a new acceptance marker.
+
+## Deterministic fence tests and real-time gate
+
+The admission implementation has a package-private clock/deadline seam. Public
+construction always uses the real monotonic clock and the unchanged 100 ms
+final fence. No environment variable, production build tag, public constructor
+or caller-supplied clock selects test time. Signed authority instants and
+original observation/expiry pairing remain separate from local elapsed time.
+
+Race-instrumented fence, refusal and acceptance tests use a clock owned by each
+fixture and run the actual signed verifier. They explicitly advance through
+expiry, contention, reservation sync and intent sync, while retaining context
+cancellation, exclusion, persisted holds, refusal observations and effect
+ordering. Synthetic elapsed time does not authenticate evidence or qualify any
+provider, storage, clock, restore or native custody premise.
+
+Hosted CI also runs `TestLinuxRealVerifierP95` without race instrumentation.
+It records all 40 fresh samples for each path: provider copy/construction plus
+real advisory verification, and staged-domain final admission through actual
+journal reservation, intent, fixture effect and outcome. Ephemeral key/signature
+and fixture setup occur outside timing; verifier construction remains inside
+advisory timing. Each sample records UTC start/end and monotonic duration.
+Nearest-rank p95 is the 38th of 40 sorted durations and must be strictly below
+60 ms, leaving 40 ms below the production fence. No warmup samples, slow samples
+or retries are discarded. A miss is a failed gate, not permission to widen a
+budget. Successful race logic tests alone do not establish real-time performance
+or clear hosted CI; the exact candidate needs its own successful hosted run.

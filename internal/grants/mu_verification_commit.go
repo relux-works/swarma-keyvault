@@ -15,6 +15,7 @@ import (
 // a journal containing it must never be downgraded. No production caller is
 // enabled until authoritative update exclusion and storage bounds are qualified.
 type muVerificationCommit struct {
+	clock                           linuxAdmissionClock // transient, never serialized or accepted from a caller
 	now, authorityUntil, watermark  time.Time
 	deadline                        time.Time // transient original monotonic fence; not a replayed clock
 	ids                             map[string][]byte
@@ -60,7 +61,7 @@ func (v *linuxProviderView) commitCandidate(a LinuxAdmission) (muVerificationCom
 			}
 		}
 	}
-	c = muVerificationCommit{now: v.input.State.Now, authorityUntil: v.input.State.AuthorityUntil, watermark: a.plan.watermark, deadline: v.deadline, ids: map[string][]byte{}, complete: true}
+	c = muVerificationCommit{clock: v.clock, now: v.input.State.Now, authorityUntil: v.input.State.AuthorityUntil, watermark: a.plan.watermark, deadline: v.deadline, ids: map[string][]byte{}, complete: true}
 	c.publisherKey, c.authorAttestation = a.Decision.PublisherKey, a.Decision.AuthorAttestation
 	for id, wire := range v.input.State.IDJournal {
 		c.ids[id] = bytes.Clone(wire)
@@ -205,7 +206,7 @@ func (s *muState) reserveVerified(u MUUse, c muVerificationCommit) (uint64, erro
 
 // The domain passes its original absolute final-admission deadline.
 func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDeadline time.Time) (uint64, error) {
-	if finalDeadline.IsZero() || c.deadline.IsZero() || !time.Now().Before(finalDeadline) || !time.Now().Before(c.deadline) {
+	if finalDeadline.IsZero() || c.deadline.IsZero() || !linuxClock(c.clock).now().Before(finalDeadline) || !linuxClock(c.clock).now().Before(c.deadline) {
 		return 0, ErrMUState
 	}
 	if c.deadline.Before(finalDeadline) {
@@ -276,7 +277,7 @@ func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDea
 	if err != nil {
 		return 0, err
 	}
-	if !time.Now().Before(finalDeadline) {
+	if !linuxClock(c.clock).now().Before(finalDeadline) {
 		return 0, ErrMUState
 	}
 	link := s.link
@@ -290,7 +291,7 @@ func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDea
 	// Synchronous file writes/fsync cannot be forcibly cancelled by this API.
 	// A late completed append remains held and refuses before any effect. This
 	// fences dispatch; it is not a qualified 100 ms storage-return guarantee.
-	if !time.Now().Before(finalDeadline) {
+	if !linuxClock(c.clock).now().Before(finalDeadline) {
 		return 0, ErrMUState
 	}
 	return r.sequence, nil
