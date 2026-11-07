@@ -1,0 +1,7 @@
+#!/usr/bin/python3 -I
+# Real tee I/O; only the destination changes for the causal logging failure.
+import json, os, pathlib, sys
+case = pathlib.Path(os.environ['RUNNER_TEMP']).parent
+config = json.loads((case/'config.json').read_text())
+args = ['/dev/full'] if config.get('tee_fail') else sys.argv[1:]
+os.execv('/usr/bin/tee', ['tee'] + args)

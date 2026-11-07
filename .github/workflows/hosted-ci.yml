@@ -137,12 +137,28 @@ jobs:
           VS_WORKFLOW_PATH: .github/workflows/hosted-ci.yml
         run: |
           set -euo pipefail
+          # Capture both statuses before another command overwrites PIPESTATUS.
+          set +e
           bash .ci-verifier-route/scripts/verifier-hosted-package.sh 2>&1 | tee verifier-setup.log
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${pipeline_status[0]}" -ne 0 ]; then
+            exit "${pipeline_status[0]}"
+          fi
+          exit "${pipeline_status[1]}"
       - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |
           set -euo pipefail
+          # Capture both statuses before another command overwrites PIPESTATUS.
+          set +e
           bash scripts/verifier-latency-confined.sh 2>&1 | tee verifier-p95.log
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${pipeline_status[0]}" -ne 0 ]; then
+            exit "${pipeline_status[0]}"
+          fi
+          exit "${pipeline_status[1]}"
       - name: Preserve timing samples even on failure
         if: always()
         run: |

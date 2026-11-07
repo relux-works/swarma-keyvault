@@ -90,3 +90,12 @@ Official platform references:
 
 - [GitHub runner context and workflow SHA](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)
 - [GitHub-hosted runner VM lifecycle and labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+
+Both workflow logging pipelines capture `PIPESTATUS` immediately after the
+pipeline, with errexit disabled only for that pipeline and capture. A nonzero
+install/verifier status wins over a simultaneous logging failure, including
+signal statuses 129/130/143/141. If the primary succeeds, a nonzero tee status
+still fails the step. Offline fixtures execute each production run block
+verbatim; package commands are inert and the verifier uses the exact cleanup
+helper with an owned populated 0555 cache. These controls qualify status
+selection only; hosted package setup and timing remain UNMEASURED.
