@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/relux-works/swarma-keyvault/internal/ownerdocument"
 )
@@ -86,14 +89,16 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	default:
-		// SignFile refuses before custody/UI on every OS until a complete native
-		// review adapter exists. Never delegate to generic `sign --data-file`.
-		der, err := p.SignFile(context.Background(), document.value)
+		// The matching macOS helper owns complete review and presence, in order.
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		der, err := p.SignFile(ctx, document.value)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		if n, err := stdout.Write(der); err != nil || n != len(der) {
+			fmt.Fprintln(stderr, ownerdocument.ErrOutcomeUnknown)
 			return 1
 		}
 		return 0

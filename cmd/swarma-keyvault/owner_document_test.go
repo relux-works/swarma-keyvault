@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,8 +70,10 @@ func TestOwnerDocumentCLIReviewVerifyRefuseNative(t *testing.T) {
 		t.Fatal(code, err)
 	}
 	output.Reset()
-	if code, err := documentRun(append([]string{"sign"}, args...), &output); code != 1 || output.Len() != 0 || !strings.Contains(err, "owner-document-native-unavailable") {
-		t.Fatal("native gap hidden", code, err)
+	if runtime.GOOS != "darwin" {
+		if code, err := documentRun(append([]string{"sign"}, args...), &output); code != 1 || output.Len() != 0 || !strings.Contains(err, "owner-document-native-unavailable") {
+			t.Fatal("native gap hidden", code, err)
+		}
 	}
 	if err := os.WriteFile(file, []byte(strings.TrimSuffix(text, "\n")), 0600); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@
 package keyvault
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/x509"
@@ -755,6 +756,27 @@ type ResolvedSigningKey struct {
 // resolved generation rather than a separate earlier describe lookup. Rejection
 // performs no private operation. It grants no additional signing authority.
 func (m *Manager) SignIfKey(addr Address, digest []byte, allow func(ResolvedSigningKey) error) (SignResult, error) {
+	return m.signIfKey(addr, digest, allow, nil)
+}
+
+// SignOwnerDocument uses only the typed native full-document backend. There is
+// no generic digest signer fallback. The final check runs after native consent.
+func (m *Manager) SignOwnerDocument(ctx context.Context, addr Address, digest, document []byte, allow func(ResolvedSigningKey) error, final func() error) (SignResult, error) {
+	if ctx == nil || final == nil || allow == nil {
+		return SignResult{}, errors.New("owner document: missing gate")
+	}
+	owned := append([]byte(nil), document...)
+	digest = append([]byte(nil), digest...)
+	return m.signIfKey(addr, digest, allow, func(key Key) ([]byte, error) {
+		signer, ok := m.backend.(ownerDocumentSigner)
+		if !ok {
+			return nil, errors.New("owner document: native backend unavailable")
+		}
+		return signer.signOwnerDocument(ctx, key, digest, owned, final)
+	})
+}
+
+func (m *Manager) signIfKey(addr Address, digest []byte, allow func(ResolvedSigningKey) error, documentDispatch func(Key) ([]byte, error)) (SignResult, error) {
 	if err := ValidateDigest(digest); err != nil {
 		return SignResult{}, err
 	}
@@ -782,7 +804,9 @@ func (m *Manager) SignIfKey(addr Address, digest []byte, allow func(ResolvedSign
 		}
 	}
 	var der []byte
-	if signer, ok := m.backend.(StoreSigner); ok {
+	if documentDispatch != nil {
+		der, err = documentDispatch(key)
+	} else if signer, ok := m.backend.(StoreSigner); ok {
 		der, err = signer.SignIn(key.Record, key.Label, digest)
 	} else {
 		der, err = m.backend.Sign(key.Label, digest)

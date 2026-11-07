@@ -1,6 +1,6 @@
 // Package ownerdocument prepares exact UTF-8 files for an attended owner
 // signature. It uses the existing mac-keyvault file-signing contract, not a
-// grant/envelope codec. Native complete-review consent is currently unavailable.
+// grant/envelope codec. Native review requires the source-matched macOS helper.
 package ownerdocument
 
 import (
@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"time"
 	"unicode/utf8"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
@@ -32,7 +34,7 @@ var (
 	ErrPublic            = errors.New("owner-document-public-key: require exact P-256 SPKI DER")
 	ErrChanged           = errors.New("owner-document-changed: source bytes differ from the reviewed document")
 	ErrConfirmation      = errors.New("owner-document-not-confirmed: complete unchanged text must be confirmed")
-	ErrNativeUnavailable = errors.New("owner-document-native-unavailable: no source-bound complete-document review/confirmation adapter; digest-only Enclave sign and SSH confirm-dialog cannot provide it")
+	ErrNativeUnavailable = errors.New("owner-document-native-unavailable: full-document AppKit/Secure Enclave review requires macOS and its matching native helper")
 	ErrSignature         = errors.New("owner-document-signature-invalid: exact document did not verify with strict low-S DER under the independent public pin")
 	ErrOutcomeUnknown    = errors.New("owner-document-outcome-unknown: private dispatch may have occurred; no signature released; do not retry")
 )
@@ -207,53 +209,21 @@ func (p *Prepared) Verify(signatureDER []byte) error {
 	return nil
 }
 
-// SignFile has no fallback on any OS. The existing Swift sign operation takes
-// only a digest/reason, and SSH confirm-dialog takes no full text. Neither is a
-// native complete-document review adapter. Refuse BEFORE constructing a manager,
-// accessing custody or creating UI. A future adapter needs independent review.
+// SignFile uses the typed full-document native route, never generic digest-only
+// signing. Linux cannot construct custody or claim native visibility/consent.
 func (p *Prepared) SignFile(ctx context.Context, path string) ([]byte, error) {
 	if p == nil || len(p.document) == 0 || ctx == nil {
-		return nil, ErrInput
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	current, err := ReadFile(path, MaxDocumentBytes)
-	if err != nil {
-		return nil, err
-	}
-	if err := p.CheckSource(current); err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNativeUnavailable
-}
-
-// The composition below is package-private, disconnected from SignFile and all
-// CLI dispatch. Synthetic tests exercise its order and failure handling. It is
-// readiness source for a future real native adapter, not an admission API.
-type completeReview interface {
-	// ReviewAndConfirm must render the complete supplied buffer unchanged,
-	// refuse unsupported layout/truncation/cancel, and return the exact bytes
-	// the human explicitly confirmed. A digest/boolean alone cannot substitute.
-	ReviewAndConfirm(context.Context, []byte) ([]byte, error)
-}
-
-func (p *Prepared) signWithReview(ctx context.Context, manager *keyvault.Manager, review completeReview, source func() ([]byte, error)) ([]byte, error) {
-	if p == nil || len(p.document) == 0 || ctx == nil || manager == nil || review == nil || source == nil {
 		return nil, ErrInput
 	}
 	check := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		current, err := source()
+		raw, err := ReadFile(path, MaxDocumentBytes)
 		if err != nil {
 			return err
 		}
-		if err := p.CheckSource(current); err != nil {
+		if err := p.CheckSource(raw); err != nil {
 			return err
 		}
 		return ctx.Err()
@@ -261,37 +231,45 @@ func (p *Prepared) signWithReview(ctx context.Context, manager *keyvault.Manager
 	if err := check(); err != nil {
 		return nil, err
 	}
-	// Give the manager its own digest buffer: callbacks cannot mutate the plan.
-	digest := p.digest
+	if runtime.GOOS != "darwin" {
+		return nil, ErrNativeUnavailable
+	}
+	store := keyvault.DefaultEnclaveStore()
+	if helper, ok := store.Helper.(keyvault.ExecEnclaveHelper); ok {
+		helper.InteractiveTimeout = 5 * time.Minute
+		store.Helper = helper
+	}
+	manager := keyvault.NewOwnerDocumentManager(store)
+	return p.signNative(ctx, manager, check)
+}
+
+func (p *Prepared) signNative(ctx context.Context, manager *keyvault.Manager, check func() error) ([]byte, error) {
+	if p == nil || manager == nil || check == nil || ctx == nil {
+		return nil, ErrInput
+	}
+	if err := check(); err != nil {
+		return nil, err
+	}
+	// Conservatively classify every error after backend admission as potentially
+	// dispatched. No timeout/cancellation or output failure is safe to auto-retry.
 	admitted := false
-	result, err := manager.SignIfKey(ownerAddress, digest[:], func(key keyvault.ResolvedSigningKey) error {
+	digest := p.digest
+	result, err := manager.SignOwnerDocument(ctx, ownerAddress, digest[:], bytes.Clone(p.document), func(key keyvault.ResolvedSigningKey) error {
 		if key.Address != ownerAddress || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
 			return ErrPublic
 		}
 		if err := check(); err != nil {
 			return err
 		}
-		confirmed, err := review.ReviewAndConfirm(ctx, bytes.Clone(p.document))
-		if err != nil {
-			return err
-		}
-		if !bytes.Equal(confirmed, p.document) {
-			return ErrConfirmation
-		}
-		if err := check(); err != nil {
-			return err
-		}
 		admitted = true
 		return nil
-	})
+	}, check)
 	if err != nil {
 		if admitted {
 			return nil, errors.Join(ErrOutcomeUnknown, err)
 		}
 		return nil, err
 	}
-	// A change/cancel after dispatch releases no signature. The native attempt
-	// might already have signed: callers must report uncertainty and never retry.
 	if err := check(); err != nil {
 		return nil, errors.Join(ErrOutcomeUnknown, err)
 	}

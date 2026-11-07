@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -379,7 +380,10 @@ func TestSyntheticPrivateRefusalDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestNativeRouteAlwaysRefusesWithoutCustody(t *testing.T) {
+func TestNonDarwinRouteRefusesWithoutCustody(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("non-Darwin refusal only; native route is exercised with synthetic custody separately")
+	}
 	file := filepath.Join(t.TempDir(), "document.txt")
 	if err := os.WriteFile(file, []byte("Exact"), 0600); err != nil {
 		t.Fatal(err)

@@ -51,11 +51,12 @@ type enclaveFile struct {
 
 // EnclaveRequest is one helper call; byte fields travel as base64.
 type EnclaveRequest struct {
-	Op       string `json:"op"`
-	Presence string `json:"presence,omitempty"`
-	Blob     []byte `json:"blob,omitempty"`
-	Digest   []byte `json:"digest,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	Document *DocumentBinding `json:"review,omitempty"`
+	Op       string           `json:"op"`
+	Presence string           `json:"presence,omitempty"`
+	Blob     []byte           `json:"blob,omitempty"`
+	Digest   []byte           `json:"digest,omitempty"`
+	Reason   string           `json:"reason,omitempty"`
 	// Interaction "none" forbids the presence prompt: a presence key then
 	// refuses instead of asking.
 	Interaction string `json:"interaction,omitempty"`

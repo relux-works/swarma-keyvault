@@ -4,8 +4,10 @@
 // Go side stores. That route needs no keychain entitlement, so an ad-hoc
 // signed binary can use it (probe 2026-10-19, owner-presence-key-261019).
 //
-// Protocol: one JSON request on stdin, one JSON response on stdout, exit 0 on
-// success and 1 with {"error":{...}} otherwise. Nothing travels in argv.
+// Protocol: bounded JSON on private stdin/stdout; exit 0 on success and 1
+// with {"error":{...}} otherwise. Nothing travels in argv. Generic operations
+// use one request/response. review-document uses confirmed/dispatch handoffs
+// in the same process before presence authentication and signature output.
 //
 //   {"op":"create","presence":"none"|"user-presence"}
 //       -> {"blob":B64,"point":B64,"presence_enforced":BOOL}
@@ -25,6 +27,8 @@
 // There is no software fallback anywhere: without the Secure Enclave every
 // operation fails.
 
+import AppKit
+import CoreText
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -226,23 +230,316 @@ func sign(_ request: [String: Any]) throws -> [String: Any] {
     ]
 }
 
-let input = FileHandle.standardInput.readData(ofLength: maxRequestBytes + 1)
-guard input.count <= maxRequestBytes,
-      let parsed = try? JSONSerialization.jsonObject(with: input),
-      let request = parsed as? [String: Any],
-      let op = request["op"] as? String
-else {
-    fail(HelperError(code: "bad_request", status: errSecParam, message: "stdin must be one JSON object with op, at most \(maxRequestBytes) bytes"))
+// Frames are bounded and newline delimited for the attended two-stage route.
+// Legacy one-shot operations may terminate their one frame with EOF.
+func readFrame() throws -> [String: Any] {
+    var input = Data()
+    while true {
+        let next = FileHandle.standardInput.readData(ofLength: 1)
+        if next.isEmpty || next[0] == 10 { break }
+        input.append(next)
+        guard input.count <= maxRequestBytes else {
+            throw HelperError(code: "bad_request", status: errSecParam, message: "request frame exceeds limit")
+        }
+    }
+    guard let parsed = try? JSONSerialization.jsonObject(with: input), let object = parsed as? [String: Any] else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "expected one bounded JSON object")
+    }
+    return object
 }
+
+func writeFrame(_ object: [String: Any]) throws {
+    let raw = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    guard raw.count < maxRequestBytes else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "response frame exceeds limit")
+    }
+    FileHandle.standardOutput.write(raw)
+    FileHandle.standardOutput.write(Data([10]))
+}
+
+// Immutable owned bytes and a closed identity. No generic reason filtering,
+// digest-prefix UI, external callback or separate-process consent token.
+struct DocumentPlan {
+    let bytes: Data
+    let text: String
+    let digest: Data
+    let point: Data
+    let spki: Data
+    let label: String
+    let reason: String
+
+    init(_ object: [String: Any]) throws {
+        guard Set(object.keys) == Set(["document", "digest", "point", "spki", "label", "reason"]) else {
+            throw HelperError(code: "bad_request", status: errSecParam, message: "document binding fields differ")
+        }
+        bytes = try decodeBase64(object["document"], "document")
+        digest = try decodeBase64(object["digest"], "digest")
+        point = try decodeBase64(object["point"], "point")
+        spki = try decodeBase64(object["spki"], "spki")
+        label = (object["label"] as? String) ?? ""
+        reason = (object["reason"] as? String) ?? ""
+        guard let decoded = String(data: bytes, encoding: .utf8), Data(decoded.utf8) == bytes,
+              !bytes.isEmpty, bytes.count <= 16384,
+              digest == Data(SHA256.hash(data: bytes)),
+              label == "works.relux.mac-keyvault.key.alexis.grants-owner-v1.v1",
+              point.count == 65, spki.count <= 1024,
+              reason == "mac-keyvault: sign exact UTF-8 document SHA256 \(digest.map { String(format: "%02x", $0) }.joined()) with alexis/grants-owner-v1 v1",
+              reason.unicodeScalars.count <= maxReasonLength,
+              !reason.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.illegalCharacters.contains($0) }) else {
+            throw HelperError(code: "bad_request", status: errSecParam, message: "document bytes/digest/key/reason mismatch")
+        }
+        let publicKey = try P256.Signing.PublicKey(x963Representation: point)
+        guard publicKey.derRepresentation == spki else {
+            throw HelperError(code: "bad_request", status: errSecParam, message: "native public point differs from exact SPKI pin")
+        }
+        // Duplicate the conservative admission at the final native boundary.
+        guard !decoded.contains("BEGIN DOCUMENT"), !decoded.contains("END DOCUMENT"), !decoded.contains("UNSIGNED exact UTF-8 document;") else {
+            throw HelperError(code: "document_display", status: errSecParam, message: "document impersonates review framing")
+        }
+        let lines = decoded.components(separatedBy: "\n")
+        guard lines.count <= 256, decoded.unicodeScalars.contains(where: { $0.value != 32 && $0.value != 10 }) else {
+            throw HelperError(code: "document_display", status: errSecParam, message: "document line/visibility bound")
+        }
+        for line in lines {
+            guard line.unicodeScalars.count <= 160, !line.hasPrefix(" "), !line.hasSuffix(" "), !line.contains("  ") else {
+                throw HelperError(code: "document_display", status: errSecParam, message: "document spacing/line bound")
+            }
+            for scalar in line.unicodeScalars {
+                let n = scalar.value
+                guard (32...126).contains(n) || (0x410...0x44f).contains(n) || n == 0x401 || n == 0x451 || "«»–—‘’“”…№".unicodeScalars.contains(scalar) else {
+                    throw HelperError(code: "document_display", status: errSecParam, message: "unsupported document scalar")
+                }
+            }
+        }
+        text = decoded
+    }
+
+    var binding: [String: Any] {
+        return ["document": bytes.base64EncodedString(), "digest": digest.base64EncodedString(),
+                "point": point.base64EncodedString(), "spki": spki.base64EncodedString(), "label": label, "reason": reason]
+    }
+
+    func matches(_ other: DocumentPlan) -> Bool {
+        return bytes == other.bytes && digest == other.digest && point == other.point && spki == other.spki && label == other.label && reason == other.reason
+    }
+}
+
+// AppKit plain text is data inside a separate bordered view. Trusted controls
+// identify the key, public SPKI hash, all digest bytes, byte count and final LF.
+// Scrolling makes every admitted line available; reaching the end does not prove
+// reading. Explicit consent remains a separate unchecked control and button.
+final class DocumentReviewWindow: NSObject, NSWindowDelegate {
+    let plan: DocumentPlan
+    let window: NSWindow
+    let textView: NSTextView
+    let scroll: NSScrollView
+    let consent: NSButton
+    let confirm: NSButton
+    var bottomSeen = false
+    var observer: NSObjectProtocol?
+
+    init(_ plan: DocumentPlan) throws {
+        self.plan = plan
+        guard Thread.isMainThread, let screen = NSScreen.main else {
+            throw HelperError(code: "document_display", status: errSecNotAvailable, message: "no native display")
+        }
+        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        let ctFont = CTFontCreateWithName(font.fontName as CFString, font.pointSize, nil)
+        let units = Array(plan.text.replacingOccurrences(of: "\n", with: "").utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: units.count)
+        guard !units.isEmpty, CTFontGetGlyphsForCharacters(ctFont, units, &glyphs, units.count), !glyphs.contains(0) else {
+            throw HelperError(code: "document_display", status: errSecParam, message: "native font has a missing glyph")
+        }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byClipping
+        paragraph.baseWritingDirection = .leftToRight
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .paragraphStyle: paragraph, .ligature: 0, .kern: 0, .foregroundColor: NSColor.textColor]
+        let longest = plan.text.components(separatedBy: "\n").map { ($0 as NSString).size(withAttributes: attributes).width }.max() ?? 0
+        let width = max(880, ceil(longest) + 100)
+        let height = min(780, screen.visibleFrame.height - 100)
+        guard width <= screen.visibleFrame.width - 80, height >= 540 else {
+            throw HelperError(code: "document_display", status: errSecNotAvailable, message: "display cannot fit complete unwrapped document lines")
+        }
+        let reviewWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        reviewWindow.title = "Review exact owner document"
+        reviewWindow.isReleasedWhenClosed = false
+        let scrollView = NSScrollView(frame: NSRect(x: 20, y: 112, width: width - 40, height: height - 290))
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.borderType = .bezelBorder
+        scrollView.autohidesScrollers = false
+        let containerWidth = scrollView.contentSize.width - 24
+        let storage = NSTextStorage(string: plan.text, attributes: attributes)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(containerSize: NSSize(width: containerWidth, height: 100000))
+        container.lineFragmentPadding = 0
+        container.widthTracksTextView = false
+        container.heightTracksTextView = false
+        container.maximumNumberOfLines = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let range = layout.glyphRange(for: container)
+        let chars = layout.characterRange(forGlyphRange: range, actualGlyphRange: nil)
+        let used = layout.usedRect(for: container)
+        var overflow = false
+        layout.enumerateLineFragments(forGlyphRange: range) { _, rect, _, _, _ in
+            if rect.minX < 0 || rect.maxX > containerWidth { overflow = true }
+        }
+        guard range.location == 0, range.length == layout.numberOfGlyphs,
+              chars.location == 0, chars.length == (plan.text as NSString).length,
+              !overflow, used.maxX <= containerWidth, used.maxY < 99900 else {
+            throw HelperError(code: "document_display", status: errSecParam, message: "native document layout is incomplete or overflows")
+        }
+        let documentView = NSTextView(frame: NSRect(x: 0, y: 0, width: scrollView.contentSize.width, height: max(scrollView.contentSize.height, ceil(used.maxY) + 48)), textContainer: container)
+        documentView.textContainerInset = NSSize(width: 12, height: 12)
+        documentView.isEditable = false
+        documentView.isSelectable = true
+        documentView.isRichText = false
+        documentView.usesFontPanel = false
+        documentView.menu = nil
+        documentView.isHorizontallyResizable = false
+        documentView.isVerticallyResizable = false
+        let consentButton = NSButton(checkboxWithTitle: "I reviewed the complete exact text and authorize this one signature.", target: nil, action: nil)
+        consentButton.frame = NSRect(x: 20, y: 70, width: width - 40, height: 26)
+        consentButton.state = .off
+        let confirmButton = NSButton(title: "Confirm text, then authenticate", target: nil, action: nil)
+        confirmButton.frame = NSRect(x: width - 330, y: 20, width: 310, height: 34)
+        confirmButton.isEnabled = false
+        self.window = reviewWindow
+        self.scroll = scrollView
+        self.textView = documentView
+        self.consent = consentButton
+        self.confirm = confirmButton
+        super.init()
+        window.delegate = self
+        window.center()
+        guard let content = window.contentView else { throw HelperError(code: "document_display", status: errSecParam, message: "no review content view") }
+        let digestHex = plan.digest.map { String(format: "%02x", $0) }.joined()
+        let spkiHash = Data(SHA256.hash(data: plan.spki)).map { String(format: "%02x", $0) }.joined()
+        let terminalLF = plan.bytes.last == 10 ? "present" : "absent"
+        let header = NSTextField(wrappingLabelWithString: "SIGNATURE REVIEW — document below is plain data\nKey: alexis/grants-owner-v1 v1 (Secure Enclave; presence required)\nPublic SPKI SHA256: \(spkiHash)\nDocument SHA256: \(digestHex)\nExact UTF-8: \(plan.bytes.count) bytes; terminal LF \(terminalLF). Scroll to the end, then confirm. No grant authority is asserted.")
+        header.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        header.frame = NSRect(x: 20, y: height - 162, width: width - 40, height: 142)
+        content.addSubview(header)
+        scroll.documentView = textView
+        content.addSubview(scroll)
+        consent.target = self
+        consent.action = #selector(updateConsent)
+        content.addSubview(consent)
+        confirm.target = self
+        confirm.action = #selector(accept)
+        content.addSubview(confirm)
+        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancelReview))
+        cancel.frame = NSRect(x: 20, y: 20, width: 120, height: 34)
+        cancel.keyEquivalent = "\u{1b}"
+        content.addSubview(cancel)
+        scroll.contentView.postsBoundsChangedNotifications = true
+        observer = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) { [weak self] _ in self?.updateConsent() }
+        textView.scroll(NSPoint.zero)
+    }
+
+    deinit { if let observer = observer { NotificationCenter.default.removeObserver(observer) } }
+
+    @objc func updateConsent() {
+        if scroll.contentView.bounds.maxY >= textView.bounds.maxY - 1 { bottomSeen = true }
+        let onScreen = window.screen.map { $0.visibleFrame.contains(window.frame) } ?? false
+        confirm.isEnabled = bottomSeen && consent.state == .on && onScreen && completeLayout()
+    }
+
+    func completeLayout() -> Bool {
+        guard Data(textView.string.utf8) == plan.bytes, let layout = textView.layoutManager, let container = textView.textContainer else { return false }
+        layout.ensureLayout(for: container)
+        let glyphs = layout.glyphRange(for: container)
+        let characters = layout.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+        let used = layout.usedRect(for: container)
+        let bounds = layout.boundingRect(forGlyphRange: glyphs, in: container)
+        return glyphs.location == 0 && glyphs.length == layout.numberOfGlyphs && characters.location == 0 && characters.length == (plan.text as NSString).length && used.maxX <= container.containerSize.width && bounds.minX >= 0 && bounds.maxX <= container.containerSize.width && used.maxY + 24 <= textView.bounds.height && container.containerSize.width <= scroll.contentSize.width - 24
+    }
+
+    @objc func accept() {
+        updateConsent()
+        guard confirm.isEnabled, window.isVisible, Data(textView.string.utf8) == plan.bytes else { return }
+        NSApplication.shared.stopModal(withCode: .OK)
+    }
+
+    @objc func cancelReview() { NSApplication.shared.stopModal(withCode: .cancel) }
+    func windowShouldClose(_ sender: NSWindow) -> Bool { cancelReview(); return false }
+
+    func run() throws {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        app.activate(ignoringOtherApps: true)
+        window.displayIfNeeded()
+        updateConsent()
+        let answer = app.runModal(for: window)
+        window.orderOut(nil)
+        guard answer == .OK, bottomSeen, consent.state == .on, Data(textView.string.utf8) == plan.bytes else {
+            throw HelperError(code: "user_canceled", status: errSecUserCanceled, message: "complete document consent canceled; nothing signed")
+        }
+    }
+}
+
+func reviewDocument(_ request: [String: Any]) throws -> [String: Any] {
+    guard Set(request.keys) == Set(["op", "blob", "presence", "review"]), request["presence"] as? String == "required",
+          let review = request["review"] as? [String: Any] else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "full review requires the closed presence-bound request")
+    }
+    let plan = try DocumentPlan(review)
+    let blob = try decodeBase64(request["blob"], "blob")
+    // Public inspection only, before review; no silent signing probe here.
+    let publicKey = try loadKey(blob, context: silentContext()).publicKey
+    guard publicKey.x963Representation == plan.point, publicKey.derRepresentation == plan.spki else {
+        throw HelperError(code: "invalid_blob", status: errSecDecode, message: "native key differs from displayed public identity")
+    }
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    app.finishLaunching()
+    try DocumentReviewWindow(plan).run()
+    var confirmed = plan.binding
+    confirmed["phase"] = "confirmed"
+    try writeFrame(confirmed)
+    // Same process and immutable plan; the Go parent now rechecks source,
+    // custody and cancellation. A boolean/digest alone cannot dispatch.
+    var dispatch = try readFrame()
+    guard dispatch.removeValue(forKey: "phase") as? String == "dispatch", plan.matches(try DocumentPlan(dispatch)) else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "final document dispatch differs from consent")
+    }
+    guard try presenceEnforced(blob) else {
+        throw HelperError(code: "presence_not_enforced", status: errSecAuthFailed, message: "owner key does not enforce presence")
+    }
+    let context = LAContext()
+    // Exact validated reason; no filtering, prefix digest or clipping.
+    context.localizedReason = plan.reason
+    let key = try loadKey(blob, context: context)
+    guard key.publicKey.x963Representation == plan.point, key.publicKey.derRepresentation == plan.spki, Data(SHA256.hash(data: plan.bytes)) == plan.digest else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "final native key/digest mismatch")
+    }
+    let digest = try sha256Digest(plan.digest)
+    let signature: P256.Signing.ECDSASignature
+    do { signature = try key.signature(for: digest) }
+    catch { throw translate(error, "owner document sign") }
+    guard publicKey.isValidSignature(signature, for: digest) else {
+        throw HelperError(code: "security", status: errSecAuthFailed, message: "native exact-byte verification failed")
+    }
+    return ["der": signature.derRepresentation.base64EncodedString(), "point": plan.point.base64EncodedString()]
+}
+
 do {
+    let request = try readFrame()
+    guard let op = request["op"] as? String else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "missing operation")
+    }
     switch op {
     case "create": emit(try create(request), exitCode: 0)
     case "public": emit(try publicKey(request), exitCode: 0)
     case "sign": emit(try sign(request), exitCode: 0)
-    default: throw HelperError(code: "bad_request", status: errSecParam, message: "unknown op \(op)")
+    case "review-document": emit(try reviewDocument(request), exitCode: 0)
+    default: throw HelperError(code: "bad_request", status: errSecParam, message: "unknown operation")
     }
 } catch let error as HelperError {
     fail(error)
 } catch {
-    fail(translate(error, op))
+    fail(translate(error, "helper"))
 }

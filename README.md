@@ -192,9 +192,10 @@ under its owner-presence contract. A prepared document grants no active rights.
 `owner-document review` renders a bounded exact UTF-8 document in full;
 `owner-document verify` checks an existing detached P-256 SHA-256 low-S DER
 signature against those unchanged bytes and an independent public DER pin.
-`owner-document sign` visibly refuses before custody access: the current native
-helper has no complete-document review/confirmation handoff. See
-[the source contract, bounds and native acceptance blocker](docs/owner-document-signing.md).
+`owner-document sign` has a typed macOS route for complete plain-text review,
+explicit confirmation, final byte/key binding and presence authentication.
+Non-macOS hosts refuse before custody access. The exact native build and runtime
+remain unqualified; see [the source contract and remaining qualification gates](docs/owner-document-signing.md).
 No document signature substitutes for a platform grant or enrolls authority.
 
 ### Issue the selected private repository certificate
