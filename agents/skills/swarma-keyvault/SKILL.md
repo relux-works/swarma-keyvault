@@ -19,6 +19,7 @@ profile publishing is outside this skill.
 | Repository certificate issue/request/execute and offline verify | [Typed local grants](references/grants.md) |
 | Application-key grants and original-event verification/execution | [a2a grants](references/a2a.md) |
 | Multi-use attestation, issue, publish, receive and root revocation | [Multi-use grants](references/multi-use.md) |
+| Linux application-key evidence, requester or receiver library composition | [Linux library composition](references/linux-library.md) |
 | Qualification, updates or refusal recovery | [Validation and recovery](references/validation-recovery.md) |
 
 ## Execution boundary
