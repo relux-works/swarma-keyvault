@@ -282,3 +282,95 @@ func TestLinuxRequesterSignerErrorNoRetry(t *testing.T) {
 		})
 	}
 }
+
+type linuxCallbackSigner struct {
+	private  ed25519.PrivateKey
+	mutate   bool
+	calls    int
+	ctx      context.Context
+	key      string
+	preimage []byte
+	signed   []byte
+	sig      []byte
+}
+
+func (s *linuxCallbackSigner) SignMessage(ctx context.Context, key string, pre []byte) ([]byte, error) {
+	s.calls++
+	s.ctx, s.key, s.preimage = ctx, key, bytes.Clone(pre)
+	if s.mutate && len(pre) > 0 {
+		pre[0] ^= 1
+	}
+	s.signed = bytes.Clone(pre)
+	s.sig = ed25519.Sign(s.private, pre)
+	return s.sig, nil
+}
+
+// Claim: The callback receives the exact context, key and platform preimage;
+// signing a mutated callback buffer refuses without an envelope or retry.
+func TestLinuxRequesterCallbackExactness(t *testing.T) {
+	spec, fixture := linuxTestSpec(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	args := make(map[string]any, len(spec.Arguments))
+	for k, v := range spec.Arguments {
+		args[k] = v
+	}
+	textHash := sha256.Sum256([]byte(spec.Text))
+	wantBody := map[string]any{
+		"type": "message/1", "author": spec.Author, "author_attestation": spec.AuthorAttestation,
+		"aud": spec.Audience, "nonce": base64.RawURLEncoding.EncodeToString(spec.Nonce),
+		"iat": spec.IssuedAt.Format("2006-01-02T15:04:05Z"), "exp": spec.IssuedAt.Add(spec.Lifetime).Format("2006-01-02T15:04:05Z"),
+		"action": spec.Action, "target": map[string]any{"kind": spec.Target.Kind, "id": spec.Target.ID},
+		"arguments": args, "room": spec.Room, "to": spec.To, "body_sha256": hex.EncodeToString(textHash[:]),
+	}
+	// Reconstruct the domain and complete signed record from the input spec,
+	// independently of both the requester and record.SigningPreimage.
+	signedRecord, err := record.Canonical(map[string]any{
+		"version": "swarm-envelope/2", "body": wantBody, "key": spec.Author, "role": "author",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPreimage := append([]byte("swarma-msg/2\n"), signedRecord...)
+	body, err := record.Canonical(wantBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idHash := sha256.Sum256(append([]byte("swarma-msg/2\n"), body...))
+	pub := fixture.private.Public().(ed25519.PublicKey)
+	for _, mutate := range []bool{false, true} {
+		name := "valid"
+		if mutate {
+			name = "mutated-preimage"
+		}
+		t.Run(name, func(t *testing.T) {
+			signer := &linuxCallbackSigner{private: fixture.private, mutate: mutate}
+			raw, err := SignLinuxRequest(ctx, spec, signer)
+			if signer.calls != 1 || signer.ctx != ctx || signer.key != spec.Author || !bytes.Equal(signer.preimage, wantPreimage) {
+				t.Fatalf("callback binding: calls=%d context=%t key=%t preimage=%t", signer.calls, signer.ctx == ctx, signer.key == spec.Author, bytes.Equal(signer.preimage, wantPreimage))
+			}
+			if !ed25519.Verify(pub, signer.signed, signer.sig) {
+				t.Fatal("fixture did not sign the bytes it supplied")
+			}
+			if mutate {
+				if bytes.Equal(signer.signed, wantPreimage) || ed25519.Verify(pub, wantPreimage, signer.sig) {
+					t.Fatal("malicious fixture must sign changed bytes, not the original preimage")
+				}
+				if !errors.Is(err, ErrLinuxRequest) || raw != nil {
+					t.Fatalf("mutated callback: err=%v envelope nil=%t", err, raw == nil)
+				}
+				return
+			}
+			if err != nil || !ed25519.Verify(pub, wantPreimage, signer.sig) {
+				t.Fatalf("valid callback: err=%v signature must verify against the expected body", err)
+			}
+			wantEnvelope, err := record.Canonical(map[string]any{
+				"version": "swarm-envelope/2", "id": "sha256:" + hex.EncodeToString(idHash[:]), "body": wantBody,
+				"signatures": []any{map[string]any{"key": spec.Author, "role": "author", "sig": base64.RawURLEncoding.EncodeToString(signer.sig)}},
+			})
+			if err != nil || !bytes.Equal(raw, wantEnvelope) {
+				t.Fatalf("valid callback did not emit the exact canonical signed envelope: %v", err)
+			}
+		})
+	}
+}
