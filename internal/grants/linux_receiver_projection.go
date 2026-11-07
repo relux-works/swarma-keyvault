@@ -31,7 +31,7 @@ func ParseLinuxProjection(raw []byte, room, eventID string) (MUEnvelopeEvent, er
 		s[k] = v
 	}
 	text, err := base64.RawURLEncoding.Strict().DecodeString(s["body_text_base64"])
-	if err != nil {
+	if err != nil || base64.RawURLEncoding.EncodeToString(text) != s["body_text_base64"] {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
 	if err := ValidateLinuxRequestText(text); err != nil {
@@ -43,7 +43,7 @@ func ParseLinuxProjection(raw []byte, room, eventID string) (MUEnvelopeEvent, er
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
 	envelope, err := base64.RawURLEncoding.Strict().DecodeString(s["envelope_base64"])
-	if err != nil || len(envelope) == 0 || len(envelope) > 65536 {
+	if err != nil || base64.RawURLEncoding.EncodeToString(envelope) != s["envelope_base64"] || len(envelope) == 0 || len(envelope) > 65536 {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
 	if _, err := record.Parse(envelope, 65536, 16); err != nil {

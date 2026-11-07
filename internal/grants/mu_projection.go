@@ -55,6 +55,9 @@ func ParseMUProjection(raw []byte, room, eventID string) (MUEnvelopeEvent, error
 	if err1 != nil || err2 != nil || len(envelope) == 0 || len(envelope) > 65536 || len(text) == 0 || len(text) > 32768 {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
+	if base64.RawURLEncoding.EncodeToString(envelope) != s["envelope_base64"] || base64.RawURLEncoding.EncodeToString(text) != s["body_text_base64"] {
+		return MUEnvelopeEvent{}, ErrMUProjection
+	}
 	if _, err := record.Parse(envelope, 65536, 16); err != nil {
 		return MUEnvelopeEvent{}, ErrMUProjection
 	}
