@@ -81,6 +81,7 @@ jobs:
             test ! -L "$fixture_bin/$binary"
           done
           echo "LAB_KEYVAULT_CLI=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
+          echo "KEYVAULT_BIN=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
           echo "LAB_TEST_SIGNER=$fixture_bin/labtestsigner" >> "$GITHUB_ENV"
           echo "LAB_COMPOSE=$fixture_bin/labcompose" >> "$GITHUB_ENV"
       # Discover all Linux-buildable Go packages with ./...; none is excluded.
