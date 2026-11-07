@@ -38,40 +38,64 @@ non-presence, extraction `none`, exact separate requester pin. **OWNER-SITTING**
 still applies: do not invoke private signing as an agent step. Request signing
 checks its signature, not a certificate's allowance.
 
-## Offline verify: inert public TEST example, do not run
+## Offline verify: runnable inert public example
 
-The repository has public software-fixture *source*, not a committed ready-made
-local enrollment/certificate/request triplet. This example denotes externally
-staged public-only serializations from `localTestFixture`, `localFixture.envelopes`
-and `localVerifyInputs("valid")` in
-`internal/grants/local_request_test.go` and `local_verify_test.go`. No fixture
-was generated or executed for this skill. The paths below are staging
-placeholders, not asserted repository files or live enrollment. The canonical
-config must be a current-user-owned regular 0600 file, not a symlink. It contains
-only public pins and declared context; its state/provider paths need not exist.
+When execution of public examples is authorized, use the committed
+[`assets/local-verify/`](../assets/local-verify/) triplet with the portable CLI.
+It was serialized from `localTestFixture` / `localFixture.envelopes` in
+`internal/grants/local_request_test.go`; only public SPKIs and signed envelopes
+are included. The ephemeral software private keys were never serialized.
+The fixed owner name and repository are required by this local profile's parser;
+the synthetic public pins do not enroll that owner or authorize that repository.
+Never install this enrollment as a runtime trust configuration.
 
-Accepted neighbor, using those matching public TEST inputs:
+On Linux with `bwrap`, from the repository root, supply the absolute path to a
+separately built, reviewed portable `cmd/swarma-keyvault` binary (`CGO_ENABLED=0`):
 
-```text
-swarma-keyvault grants verify --config /absolute/public-test/enrollment.json --certificate /absolute/public-test/certificate.json --request /absolute/public-test/request.json --at 2026-11-02T11:00:00Z
+```sh
+(
+scratch=$(mktemp -d /tmp/keyvault-public-verify.XXXXXXXX)
+trap 'rm -rf -- "$scratch"' EXIT HUP INT TERM
+mkdir -m 700 "$scratch/home" "$scratch/tmp" "$scratch/cache"
+bwrap --die-with-parent --new-session --unshare-all --clearenv \
+  --ro-bind /usr /usr --symlink usr/bin /bin \
+  --symlink usr/lib /lib --symlink usr/lib64 /lib64 \
+  --proc /proc --dev /dev --tmpfs /tmp \
+  --ro-bind "$PWD/agents/skills/swarma-keyvault" /skill \
+  --ro-bind /absolute/offline-build/swarma-keyvault /keyvault \
+  --bind "$scratch" /work --chdir /work \
+  --setenv PATH /usr/bin:/bin --setenv HOME /work/home \
+  --setenv TMPDIR /work/tmp --setenv XDG_CACHE_HOME /work/cache \
+  /bin/sh /skill/scripts/verify-public-example.sh /keyvault /skill/assets/local-verify
+)
 ```
 
-Expected from source: exit 0, one stdout JSON object without a newline,
-`verdict:"accepted"`, `certificate_id:"certificate-A"`, `request_id:"request-A"`,
-`action:"repository.create"`, private fixed target, checked UTC `valid_at` and
-exclusive `expires_at:"2026-11-02T11:30:00Z"`.
+The confinement command above mounts the binary, skill and system tools
+read-only, clears the environment and unshares all namespaces. HOME, TMPDIR and
+cache are private absolute directories; no host home, credential directory,
+socket or caller cache is mounted. The helper
+[`verify-public-example.sh`](../scripts/verify-public-example.sh) then runs just
+`grants verify` twice; it relies on this caller-established confinement. Do not
+invoke the helper outside it. The example neither builds nor downloads anything.
+If confinement is unavailable, stop without a direct-execution fallback. Cleanup
+removes only newly created scratch directories. Fixture state/provider paths
+deliberately do not exist, and this stateless verification route accesses neither.
 
-Adjacent actual verify refusal, same exact inputs at their exclusive expiry:
+The accepted observation uses `--at 2026-11-02T11:00:00Z`: exit 0 and one
+stdout object with `verdict:"accepted"`, `certificate_id:"certificate-A"`,
+`request_id:"request-A"`, `action:"repository.create"` and
+`expires_at:"2026-11-02T11:30:00Z"`. It establishes only the public checks for
+these synthetic inputs, not a reservation, live grant service or effect right.
 
-```text
-swarma-keyvault grants verify --config /absolute/public-test/enrollment.json --certificate /absolute/public-test/certificate.json --request /absolute/public-test/request.json --at 2026-11-02T11:30:00Z
-```
-
-Expected: exit 1, empty stdout, stderr
-`refused: grant validity has expired` plus LF. This is `ErrExpired` from the
-real check; `TestLocalVerifyBoundaries` and `TestLocalVerifyRefusals` specify the
-accepted neighbor and expiry refusal. These are static expectations, not results
-of a run. Never use `--at` to make an expired real grant appear current.
+The neighboring refusal changes only `--at` to `2026-11-02T11:30:00Z`, the
+request's exclusive expiry: exit 1, empty stdout and
+`refused: grant validity has expired` plus LF on stderr. The same certificate,
+request and public pins still verify cryptographically; the half-open validity
+interval causes this refusal. The helper reports both observations and fails
+if the expired case succeeds or emits stdout. `--at` is a test observation;
+never use it to make an expired real grant appear current. There is no signing,
+key creation, Keychain access, network projection, state initialization, provider
+execution or model/runtime launch in this example.
 
 ## Meaning of the verdict and execution failure
 

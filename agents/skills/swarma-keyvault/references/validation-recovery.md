@@ -2,9 +2,10 @@
 
 ## Source and installed state are separate
 
-Use an exact reviewed checkout. This skill was checked statically against
-`2683fe05e81a2b2c86948ca840604ea38e8d9899`; it claims no build/test execution,
-live credentials, installed binary, owner-presence success or provider effect.
+Use an exact reviewed checkout. Static inspection and confined public-fixture
+verification do not establish live credentials, installed adoption, owner-presence
+success or provider effects. Report actual execution separately from expected
+behavior read from source.
 Current `go.mod` declares Go 1.26.0 and toolchain go1.26.10. This is version
 evidence, not an instruction to download/build. Native custody uses macOS cgo /
 Security.framework and the paired Swift/CryptoKit Enclave helper.
@@ -28,9 +29,9 @@ never repoint an installed binary or adjust ACLs as an agent recovery step.
 
 For static work, check only diffs, frontmatter, links, actual dispatch/flag
 registrations and code symbols. Read fixture sources to state expected positive
-and refusal behavior; do not report them as executed tests. The inert local
-verify pair in [typed grants](grants.md) is a public-fixture specification,
-not a supplied serialized fixture or run result.
+and refusal behavior; do not report them as executed tests. The public fixture pair in
+[typed grants](grants.md#offline-verify-runnable-inert-public-example) has a confined
+runner for tasks that authorize execution. Merely reading it is not a run result.
 
 For separately authorized future qualification, select the lane explicitly:
 fake-backed confined source tests, read-only native public-code qualification,

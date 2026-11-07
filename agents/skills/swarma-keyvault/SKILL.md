@@ -40,7 +40,9 @@ authorization for that exact state or request; they are not agent steps either. 
 `list`, `describe` and vault-backed `pub` can access Keychain. Public-file
 `mac-keyvault verify --spki` and offline `swarma-keyvault grants verify` are
 separate public verification routes; execute them only when the task permits
-execution. The examples here are inert syntax, not execution instructions.
+execution. Signing and effect examples are inert syntax. The public-only
+verification example in [typed local grants](references/grants.md) has a confined runner; use
+it only when the task permits execution.
 
 Keep public verification, signing, enrollment, persistence, effect execution and
 installation distinct. A public pin or successful signature does not supply
