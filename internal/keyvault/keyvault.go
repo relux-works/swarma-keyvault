@@ -760,7 +760,8 @@ func (m *Manager) SignIfKey(addr Address, digest []byte, allow func(ResolvedSign
 }
 
 // SignOwnerDocument uses only the typed native full-document backend. There is
-// no generic digest signer fallback. The final check runs after native consent.
+// no generic digest signer fallback. After native consent, the final source
+// check and current signing policy must still allow dispatch.
 func (m *Manager) SignOwnerDocument(ctx context.Context, addr Address, digest, document []byte, allow func(ResolvedSigningKey) error, final func() error) (SignResult, error) {
 	if ctx == nil || final == nil || allow == nil {
 		return SignResult{}, errors.New("owner document: missing gate")
@@ -772,7 +773,20 @@ func (m *Manager) SignOwnerDocument(ctx context.Context, addr Address, digest, d
 		if !ok {
 			return nil, errors.New("owner document: native backend unavailable")
 		}
-		return signer.signOwnerDocument(ctx, key, digest, owned, final)
+		return signer.signOwnerDocument(ctx, key, digest, owned, func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := final(); err != nil {
+				return err
+			}
+			// Native review and the source check may take time. Evaluate expiry
+			// with the manager's current clock only after both have completed.
+			if err := m.authorize(key, OperationSign); err != nil {
+				return err
+			}
+			return ctx.Err()
+		})
 	})
 }
 
