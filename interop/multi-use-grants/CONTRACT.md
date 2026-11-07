@@ -10,6 +10,16 @@ Sides:
 
 ## 0. Pins
 
+Local accounting restriction: the accepted VerificationState consumer contract
+requires `use:"once"` to have exactly one action and one target at issuance and
+verification. This narrows local acceptance without changing an envelope
+grammar or the journal. The historical `M-N-use-refill` fixture retains all its
+original signed bytes, but its multi-right grant now refuses both requests with
+`mu-required-state-unavailable`. Its unsigned claim and expected verdicts record
+that disposition. Fresh fixture generation uses a single-right once grant;
+ephemeral real-verifier/receiver tests cover valid once consumption and refill
+refusal. This is not a claim of another bilateral interop revision.
+
 | What | Pin |
 | --- | --- |
 | Record format and verifier | relux-works/swarma-envelope `6c71e5226416` (r8; spec `spec/swarm-envelope-2.md`, library `record`, `verifier`) |

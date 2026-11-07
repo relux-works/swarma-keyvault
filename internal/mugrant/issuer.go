@@ -154,6 +154,12 @@ func BuildGrant(spec GrantSpec) (*Grant, error) {
 	if len(spec.Entries) == 0 || len(spec.Entries) > 64 {
 		return nil, ErrGrantSpec
 	}
+	// The receiver accounts per (grant, action, target). A once grant has
+	// exactly one right so that this existing allowance covers the whole
+	// grant. Do not mint a multi-right once grant or introduce another counter.
+	if spec.Use == UseOnce && len(spec.Entries) != 1 {
+		return nil, ErrGrantSpec
+	}
 	// The grantee MXID comes from the verified attestation of the subject key
 	// (contract section 5); a different expected MXID refuses. Both
 	// attestations must cover the whole grant interval.

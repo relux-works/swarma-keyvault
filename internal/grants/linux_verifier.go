@@ -194,7 +194,7 @@ func (p *LinuxVerifier) context(now time.Time, requestHash [32]byte) (verifier.C
 		return c, ErrMUState
 	}
 	s, err := p.state.VerificationState(requestHash)
-	if err != nil || s.Now.IsZero() || now.IsZero() || !s.Now.Equal(now) {
+	if err != nil || s.Now.IsZero() || now.IsZero() || !s.Now.Equal(now) || !linuxVerificationJournalFits(s.IDJournal) {
 		return c, linuxVerifierRefuse("time_unavailable")
 	}
 	// Preserve exact evidence: the pinned verifier refuses fractional wire
@@ -407,6 +407,9 @@ func (p *LinuxVerifier) VerifyProjectedWithSnapshots(pe MUEnvelopeEvent, now tim
 	r := v.Authorize([][]byte{grant}, req)
 	if r.Code != "accept" {
 		return LinuxVerifiedDecision{}, linuxVerifierRefuse(r.Code)
+	}
+	if err := muOnceScope(grant, r.Plan.Use); err != nil {
+		return LinuxVerifiedDecision{}, err
 	}
 	if r.Plan.Use != mugrant.UseOnce && r.Plan.Use != mugrant.UseUntilExpiry {
 		return LinuxVerifiedDecision{}, linuxVerifierRefuse("grant_use_missing")

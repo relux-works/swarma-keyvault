@@ -112,6 +112,9 @@ func (s *LinuxApplicationSource) VerificationState(requestHash [32]byte) (LinuxV
 	if err != nil {
 		return LinuxVerificationState{}, err
 	}
+	if !linuxVerificationJournalFits(state.IDJournal) {
+		return LinuxVerificationState{}, ErrMUState
+	}
 	// Preserve nil versus empty and all availability/trust flags. The zero
 	// hash remains the existing issuance-only check; it never becomes A2.
 	if state.IDJournal != nil {

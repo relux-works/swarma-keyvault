@@ -1,7 +1,7 @@
 {
   "format": "swarma-keyvault/mu-interop-case/1",
   "id": "M-N-use-refill",
-  "claim": "A once grant used by one request is not refilled by a second request with a new nonce.",
+  "claim": "The retained historical multi-right once grant is refused before either request consumes a use. Original signed bytes are unchanged; valid single-right refill controls are tested separately.",
   "positive_control": "M-P-until-expiry-second-use",
   "pins": {
     "grant_root": "p256:AimCX5a0eiBbfXOHpB7nunHC5y2QmnSRjDiWDIKwkH_b",
@@ -46,13 +46,13 @@
       "event": "$first",
       "now": "2026-11-05T18:00:00Z",
       "snapshot": "eyJib2R5Ijp7ImNvbXBsZXRlIjp0cnVlLCJlbnRyaWVzIjpbXSwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNVQxNzo1OTo1NVoiLCJpc3N1ZXIiOiJwMjU2OkF0S0pyaEZ3b08yZ19kRWYwVnZ1MlYxY0luVTVXUVh0RjdLNmJiQTNfVE93IiwidHlwZSI6InJldm9jYXRpb24vMSJ9LCJpZCI6InNoYTI1Njo0YWFmMGFjNzg4ODUyN2UxY2NiM2Q2YTg3ZjIzMjA0NGVjNjQzMjljZTVhNTMzNzYwYmFhOTEzNTU4MzM4MDllIiwic2lnbmF0dXJlcyI6W3sia2V5IjoicDI1NjpBdEtKcmhGd29PMmdfZEVmMFZ2dTJWMWNJblU1V1FYdEY3SzZiYkEzX1RPdyIsInJvbGUiOiJhdXRob3IiLCJzaWciOiJacV91QThaX1ZpLVp5U3VaS3ZVZkh4LXdob1U5Z1pxdjd4bFUtMkZyRkV4QkNpTWJ6WUs2RTRiZUFDeTdySDFHcVByMEs3cjFUX2xDZGtWSmMtdlNLQSJ9XSwidmVyc2lvbiI6InN3YXJtLWVudmVsb3BlLzIifQ",
-      "expected": "succeeded"
+      "expected": "mu-required-state-unavailable"
     },
     {
       "event": "$second",
       "now": "2026-11-05T18:00:20Z",
       "snapshot": "eyJib2R5Ijp7ImNvbXBsZXRlIjp0cnVlLCJlbnRyaWVzIjpbXSwiaXNzdWVkX2F0IjoiMjAyNi0xMS0wNVQxNzo1OTo1NVoiLCJpc3N1ZXIiOiJwMjU2OkF0S0pyaEZ3b08yZ19kRWYwVnZ1MlYxY0luVTVXUVh0RjdLNmJiQTNfVE93IiwidHlwZSI6InJldm9jYXRpb24vMSJ9LCJpZCI6InNoYTI1Njo0YWFmMGFjNzg4ODUyN2UxY2NiM2Q2YTg3ZjIzMjA0NGVjNjQzMjljZTVhNTMzNzYwYmFhOTEzNTU4MzM4MDllIiwic2lnbmF0dXJlcyI6W3sia2V5IjoicDI1NjpBdEtKcmhGd29PMmdfZEVmMFZ2dTJWMWNJblU1V1FYdEY3SzZiYkEzX1RPdyIsInJvbGUiOiJhdXRob3IiLCJzaWciOiJacV91QThaX1ZpLVp5U3VaS3ZVZkh4LXdob1U5Z1pxdjd4bFUtMkZyRkV4QkNpTWJ6WUs2RTRiZUFDeTdySDFHcVByMEs3cjFUX2xDZGtWSmMtdlNLQSJ9XSwidmVyc2lvbiI6InN3YXJtLWVudmVsb3BlLzIifQ",
-      "expected": "mu-grant-use-already-held"
+      "expected": "mu-required-state-unavailable"
     }
   ]
 }

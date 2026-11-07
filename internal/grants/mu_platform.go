@@ -200,6 +200,9 @@ func (p *MUPlatform) Verify(ev MUEvent, now time.Time) (MUDecision, error) {
 	if r.Code != "accept" {
 		return MUDecision{}, &ErrMUPlatform{r.Code}
 	}
+	if err := muOnceScope(grant, r.Plan.Use); err != nil {
+		return MUDecision{}, err
+	}
 	args := map[string]string{}
 	if a, ok := body["arguments"].(map[string]any); ok {
 		for k, x := range a {

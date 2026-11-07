@@ -42,7 +42,9 @@ func MacFamily() ([]Case, error) {
 	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:test-owner"}}
 	rooms := []mugrant.Entry{{Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "swarma-space"}}, {Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "other-space"}}}
 	current := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(append(assign, account), rooms...), nonceTag: "until-expiry"}
-	once := grantSpec{root: w.root, use: mugrant.UseOnce, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
+	// A once grant has one action and one target, so its per-right allowance
+	// is the entire grant. Until-expiry families retain their existing scope.
+	once := grantSpec{root: w.root, use: mugrant.UseOnce, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: assign, nonceTag: "until-expiry"}
 	expired := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-31 * 24 * time.Hour), ex: T0.Add(-24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
 	foreign := grantSpec{root: w.other, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(assign, account), nonceTag: "until-expiry"}
 	twin := current

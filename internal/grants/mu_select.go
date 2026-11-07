@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/relux-works/swarma-envelope/record"
+	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
 // ErrMUAmbiguous refuses a request that more than one pinned grant covers.
@@ -61,4 +62,26 @@ func muSelectGrant(registry [][]byte, author, action, kind, id string) ([]byte, 
 		return nil, ErrMUAmbiguous
 	}
 	return found, nil
+}
+
+// muOnceScope applies the local accounting restriction AFTER the pinned
+// verifier has authenticated and authorized the original grant. Its errors
+// therefore do not replace signature, time, revocation or assurance refusals.
+// One action and one target make muAllowanceKey equal the whole grant; the
+// existing journal remains the sole consumption authority.
+func muOnceScope(raw []byte, use string) error {
+	if use != mugrant.UseOnce {
+		return nil
+	}
+	e, err := muParseEnvelope(raw)
+	if err != nil {
+		return ErrMUState
+	}
+	b, _ := e["body"].(map[string]any)
+	actions, _ := b["actions"].([]any)
+	targets, _ := b["targets"].([]any)
+	if len(actions) != 1 || len(targets) != 1 {
+		return ErrMUState
+	}
+	return nil
 }

@@ -147,6 +147,7 @@ func TestGrantReasonBounds(t *testing.T) {
 	}
 	once := metaSpec(t)
 	once.Use = UseOnce
+	once.Entries = once.Entries[:1]
 	g, err = BuildGrant(once)
 	if err != nil {
 		t.Fatal(err)
