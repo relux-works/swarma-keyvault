@@ -200,8 +200,12 @@ func (s *muState) replayVerifiedReservation(f *journalFrame) error {
 }
 
 func (s *muState) reserveVerified(u MUUse, c muVerificationCommit) (uint64, error) {
-	finalDeadline := time.Now().Add(linuxProviderFinalLimit)
-	if c.deadline.IsZero() || !time.Now().Before(c.deadline) {
+	return s.reserveVerifiedUntil(u, c, c.deadline)
+}
+
+// The domain passes its original absolute final-admission deadline.
+func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDeadline time.Time) (uint64, error) {
+	if finalDeadline.IsZero() || c.deadline.IsZero() || !time.Now().Before(finalDeadline) || !time.Now().Before(c.deadline) {
 		return 0, ErrMUState
 	}
 	if c.deadline.Before(finalDeadline) {

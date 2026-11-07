@@ -269,7 +269,7 @@ func TestMUVerificationCommitLateSyncRetainsHold(t *testing.T) {
 		}
 		return nil
 	}
-	if _, err := s.reserveVerified(u, c); !errors.Is(err, ErrMUState) {
+	if _, err := s.reserveVerifiedUntil(u, c, time.Now().Add(linuxProviderFinalLimit)); !errors.Is(err, ErrMUState) {
 		t.Fatal("late sync admitted effect", err)
 	}
 	if len(s.allowances) != 1 || len(s.verificationIDs) != 2 || len(s.reservations) != 1 {

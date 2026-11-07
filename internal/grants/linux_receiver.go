@@ -51,12 +51,14 @@ type LinuxReceiverConfig struct {
 // LinuxReceiver executes with the landed MU journal; it adds no wire format,
 // runtime account activation, provider implementation or implicit trust.
 type LinuxReceiver struct {
-	config   LinuxReceiverConfig
-	verifier LinuxProjectedVerifier
-	registry MURegistry // protected sender-key mapping and account-owner lookup
-	effects  map[string]MUEffect
-	clock    func() (time.Time, error) // protected trusted clock, never event time
-	open     func(context.Context, MUStateConfig, MUBinding) (*muState, error)
+	config       LinuxReceiverConfig
+	verifier     LinuxProjectedVerifier
+	registry     MURegistry // protected sender-key mapping and account-owner lookup
+	effects      map[string]MUEffect
+	clock        func() (time.Time, error) // protected trusted clock, never event time
+	open         func(context.Context, MUStateConfig, MUBinding) (*muState, error)
+	final        *linuxFinalAdmission    // owned only by an active domain lease
+	observations []LinuxVerifiedSnapshot // domain-owned authenticated history, never an authority journal
 }
 
 func NewLinuxReceiver(c LinuxReceiverConfig, v LinuxProjectedVerifier, registry MURegistry, effects map[string]MUEffect, clock func() (time.Time, error)) *LinuxReceiver {
@@ -229,6 +231,18 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	if err := s.absorbSigned(MUOwnerRootSigner, root); err != nil {
 		return nil, err
 	}
+	if r.final != nil {
+		for _, v := range r.observations {
+			if !r.config.Signers[v.Signer] {
+				return nil, ErrMUState
+			}
+		}
+		for _, v := range r.observations {
+			if err := snapshots.observe(s, []LinuxVerifiedSnapshot{v}, r.final.view.input.State.Now); err != nil {
+				return nil, err
+			}
+		}
+	}
 	body, err := muMessageBody(e.Envelope)
 	if err != nil {
 		return nil, err
@@ -289,12 +303,23 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	if ctx.Err() != nil {
 		return nil, ErrMUState
 	}
-	seq, err := s.reserve(MUUse{Once: again.Use == "once", GrantRoot: again.GrantRoot, GrantID: again.GrantID, Action: again.Action, TargetKind: again.TargetKind, TargetID: again.TargetID,
-		Requester: again.Author, Nonce: again.Nonce, Audience: again.Audience, RequestHash: again.RequestHash})
+	use := MUUse{Once: again.Use == "once", GrantRoot: again.GrantRoot, GrantID: again.GrantID, Action: again.Action, TargetKind: again.TargetKind, TargetID: again.TargetID,
+		Requester: again.Author, Nonce: again.Nonce, Audience: again.Audience, RequestHash: again.RequestHash}
+	var seq uint64
+	if r.final != nil {
+		seq, err = r.final.reserve(s, use)
+	} else {
+		seq, err = s.reserve(use)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if err := s.markIntent(seq); err != nil {
+		return &MUOutcome{State: "unknown"}, ErrMUUnknown
+	}
+	// Intent persistence shares the original budget; a late intent keeps the
+	// reservation unknown and never dispatches an effect.
+	if ctx.Err() != nil || (r.final != nil && !r.final.live()) {
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
 	}
 	receipt, err := effect.Execute(ctx, again)

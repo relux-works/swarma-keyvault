@@ -50,14 +50,21 @@ type linuxProviderView struct {
 // budget includes collection/scalar overhead as well as all strings and original
 // wire bytes. It is a projected-content limit, not a process RSS guarantee.
 func linuxProviderInputFits(in linuxProviderInput) bool {
+	return linuxProviderInputFitsBudget(in, 0, 0)
+}
+
+func linuxProviderInputFitsBudget(in linuxProviderInput, extraBytes, extraRecords int) bool {
+	if extraBytes < 0 || extraBytes > linuxVerificationMaxViewBytes-1024 || extraRecords < 0 || extraRecords > linuxProviderMaxRecords {
+		return false
+	}
 	c := in.Config
 	if len(c.Grants) > linuxProviderMaxRecords || len(c.MacAgents) > linuxProviderMaxRecords || len(c.LinuxAgents) > linuxProviderMaxRecords ||
 		len(in.Attestations) > linuxProviderMaxRecords || len(in.Agents) > linuxProviderMaxRecords || len(in.Snapshots) > linuxProviderMaxRecords ||
 		len(in.State.IDJournal) > linuxVerificationMaxIDBindings || in.State.IDJournal == nil || in.State.Assurance.IsAvailable() {
 		return false
 	}
-	records := 2 + len(c.Grants) + len(c.MacAgents) + len(c.LinuxAgents) + len(in.Attestations) + len(in.Agents) + len(in.Snapshots)
-	remaining := linuxVerificationMaxViewBytes - 1024 // fixed scalar/collection overhead
+	records := extraRecords + 2 + len(c.Grants) + len(c.MacAgents) + len(c.LinuxAgents) + len(in.Attestations) + len(in.Agents) + len(in.Snapshots)
+	remaining := linuxVerificationMaxViewBytes - 1024 - extraBytes // fixed scalar/collection overhead
 	charge := func(n int) bool {
 		if n < 0 || n > remaining {
 			return false
