@@ -52,7 +52,9 @@ jobs:
         run: |
           set -euo pipefail
           echo 'd0e442e35940972cf5fa7298df922e32c1cdf5b6024c5268115506a204abcd89  .github/fixtures/pinned-lab.bundle' | sha256sum -c -
-          fixture_source="$GITHUB_WORKSPACE/.ci-lab-source"
+          # Keep the independent native source inventory outside the candidate module.
+          fixture_source="$RUNNER_TEMP/lab-fixture-source"
+          mv "$GITHUB_WORKSPACE/.ci-lab-source" "$fixture_source"
           fixture_bin="$RUNNER_TEMP/lab-fixture-bin"
           mkdir -m 700 "$fixture_bin"
           test "$(git -C "$fixture_source" rev-parse HEAD)" = dffe3ac5c86e2e8869efc3b869d35f845e1bd71a
