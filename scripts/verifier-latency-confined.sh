@@ -10,8 +10,34 @@ fi
 : "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE must be the absolute candidate checkout}"
 case "$RUNNER_TEMP:$GITHUB_WORKSPACE" in /*:/*) ;; *) echo 'verifier prerequisite: absolute scratch and source paths required' >&2; exit 2 ;; esac
 umask 077
+cleanup_program=$(realpath -e "$(dirname "$0")/verifier-private-cleanup.py")
+# Keep directory descriptors open across execution: cleanup never resolves an
+# untrusted replacement path. Python is isolated from ambient import settings.
+test -x /usr/bin/python3
+test -x /usr/bin/timeout
+exec {parent_fd}<"$RUNNER_TEMP"
 state=$(mktemp -d "$RUNNER_TEMP/verifier-private.XXXXXX")
-trap 'rm -rf -- "$state"' EXIT
+exec {state_fd}<"$state"
+finish() {
+  primary=$?
+  set +e
+  trap - EXIT
+  trap '' HUP INT TERM PIPE
+  cleanup_status=0
+  /usr/bin/timeout --signal=TERM --kill-after=2s 12s \
+    /usr/bin/python3 -I "$cleanup_program" "$parent_fd" "$state_fd" "${state##*/}" \
+    || cleanup_status=$?
+  if [ "$cleanup_status" -ne 0 ]; then
+    echo "verifier cleanup failed (exit $cleanup_status; primary exit $primary); invocation scratch may remain" >&2
+    if [ "$primary" -eq 0 ]; then primary=74; fi
+  fi
+  exit "$primary"
+}
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 141' PIPE
 for directory in home tmp cache build dependencies; do
   mkdir -m 700 "$state/$directory"
 done

@@ -1,0 +1,29 @@
+#!/usr/bin/python3 -I
+import json, os, pathlib, sys
+case = pathlib.Path(os.environ['HOME']).parents[2]
+c = json.loads((case/'config.json').read_text())
+with (case/'calls.log').open('a') as f: f.write('fixture go '+repr(sys.argv[1:])+'\n')
+if sys.argv[1:] == ['env','GOROOT']:
+    if c.get('discovery_exit'):
+        print('fixture original toolchain discovery error', file=sys.stderr)
+        sys.exit(c['discovery_exit'])
+    print(pathlib.Path(__file__).resolve().parent/'toolchain')
+elif sys.argv[1:] == ['mod','download']:
+    module=pathlib.Path(os.environ['GOMODCACHE'])/'example.org'/'fixture@v1.0.0'
+    module.mkdir(parents=True)
+    (module/'file.go').write_text('// fixture, never compiled\n')
+    (module/'go.mod').write_text('module example.org/fixture\n')
+    (module/'nested').mkdir()
+    (module/'nested'/'payload').write_text('populated child\n')
+    (module/'nested').chmod(int(c['mode'],8))
+    module.chmod(int(c['mode'],8))
+    (case/'observed-mode').write_text(oct(module.stat().st_mode & 0o777))
+    if c.get('symlink'):
+        (module.parent/'external-link').symlink_to(case/'outside', target_is_directory=True)
+    if c.get('download_exit'):
+        print('fixture original provisioning error', file=sys.stderr)
+        sys.exit(c['download_exit'])
+elif sys.argv[1:] == ['mod','verify']:
+    print('fixture verify only; not real Go')
+else:
+    sys.exit('unexpected fixture go invocation')

@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+import json, os, pathlib, sys
+case=pathlib.Path(os.environ['RUNNER_TEMP']).parent
+c=json.loads((case/'config.json').read_text())
+if c.get('partial') and sys.argv[-1].endswith('/tmp'):
+    print('fixture original partial setup error', file=sys.stderr)
+    sys.exit(23)
+os.execv('/usr/bin/mkdir', ['mkdir']+sys.argv[1:])

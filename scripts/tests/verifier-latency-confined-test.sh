@@ -20,7 +20,7 @@ test -z "$(ls -A "$root/runner")"
 echo 'missing-bwrap fixture: exit 127, explicit diagnostic, no state/provisioning/timing'
 
 # A namespace refusal retains original stderr and exit, with no download/retry.
-for utility in mktemp mkdir rm realpath env; do
+for utility in mktemp mkdir rm realpath env dirname; do
   ln -s "/usr/bin/$utility" "$root/bin/$utility"
 done
 cat > "$root/bin/go" <<'STUB'

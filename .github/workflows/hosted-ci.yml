@@ -120,17 +120,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install the versioned sandbox prerequisite
+      - name: Sandbox provisioning pending runner-owner disposition
         shell: bash
         run: |
           set -euo pipefail
-          # Ubuntu's authenticated archive supplies this exact Noble amd64 package.
-          # This is runner setup, before any candidate test executes.
-          . /etc/os-release
-          test "$ID:$VERSION_ID:$(dpkg --print-architecture)" = ubuntu:24.04:amd64
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap=0.9.0-1ubuntu0.3
-          test "$(dpkg-query -W -f='${Version}' bubblewrap)" = 0.9.0-1ubuntu0.3
+          # Proposed pin remains bubblewrap=0.9.0-1ubuntu0.3, Noble amd64.
+          # Its postinst attempts a global sysctl change. Official origin does
+          # not authorize that effect. No alternative provisioning is selected.
+          echo 'BLOCKED: exact bubblewrap package provisioning needs runner-owner disposition; see scripts/verifier-latency-runner.md. No timing samples collected.' >&2
+          exit 78
       - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |

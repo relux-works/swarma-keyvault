@@ -1,0 +1,2 @@
+Empty fixture toolchain directory for shell discovery only. No Go executable,
+product compilation, verifier, timing or runtime qualification is provided.

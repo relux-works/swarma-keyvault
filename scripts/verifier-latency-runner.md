@@ -7,6 +7,24 @@ The runner label selects an OS family, not an immutable image; retain the actual
 image version in each run's evidence. If the package/version is unavailable,
 setup fails; do not silently substitute a different version or runner.
 
+Provisioning is **blocked pending runner-owner disposition**. The exact official
+amd64 package has SHA256
+`2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094`.
+Its `/usr/lib/sysctl.d/50-bubblewrap.conf` sets
+`kernel.unprivileged_userns_clone=1`; its postinst invokes `sysctl --quiet`
+with `--pattern` for that knob and `--system` when sysctl exists. This attempts
+host-wide enablement where the kernel exposes the knob. Actual runner effect
+is unknown; official package origin grants no exception to the contract against
+global namespace policy changes. The workflow therefore exits 78 before setup,
+preflight, provisioning or measurement. No package install or policy command is
+authorized by this candidate.
+
+An option for owner evaluation is a preprovisioned, exact-version qualified
+runner whose existing namespace and AppArmor policies remain unchanged. Before
+any source revision could select it, the owner must qualify its immutable image,
+exact package provenance/version, unchanged policies and the same fail-closed
+preflight. This is an unelected option, not a fallback or qualification claim.
+
 The launcher requires bwrap before provisioning dependencies. It uses the same
 `--unshare-all --clearenv` sandbox for a non-product preflight and measurement.
 The preflight checks read-only source, toolchain, tools and dependency mounts,
@@ -22,10 +40,20 @@ before dependency provisioning or product startup. These are setup failures,
 not measured latency failures. The pipeline retains nonzero exit status through
 `pipefail`; the existing always-run summary step preserves any recorded output.
 
-If the hosted runner denies namespaces, its owner must provide a scoped AppArmor
-policy permitting the installed `/usr/bin/bwrap` to create them, or select an
-owner-qualified provisioned runner with the same isolation and explicit tool
-version. This candidate does not install an AppArmor override, disable global
+On exit, a bounded cleanup uses inherited descriptors for this invocation's
+private state. It grants owner write permission only on owned directories after
+execution, never on files or symlink targets, and refuses mount boundaries and
+changed directory identities. Read-only sandbox mounts remain unchanged.
+Cleanup has a 12-second timeout with a 2-second forced-termination bound,
+100,000-entry limit and depth limit 128, without retries. A cleanup error is
+reported separately; an existing nonzero primary exit is retained, while a
+successful primary exit becomes 74. HUP/INT/TERM/PIPE exit 129/130/143/141 and run the
+same cleanup. SIGKILL and machine loss cannot be trapped. Python 3 and GNU
+timeout are runner-side cleanup prerequisites, checked before state creation.
+
+If the hosted runner denies namespaces, stop for its owner to qualify a route
+within the existing isolation and policy contract. This candidate does not
+select another runner, install an AppArmor override, disable global
 namespace restrictions, share networking, use sudo for tests or run the verifier
 outside the sandbox. Package/policy disposition requires runner-owner review.
 The namespace preflight must succeed on that runner before any measurement.

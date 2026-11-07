@@ -1,0 +1,16 @@
+#!/usr/bin/python3 -I
+import json, os, pathlib, signal, sys
+case=pathlib.Path(os.environ['RUNNER_TEMP']).parent
+c=json.loads((case/'config.json').read_text())
+with (case/'calls.log').open('a') as f: f.write('fixture bwrap '+repr(sys.argv[1:])+'\n')
+# This shim never executes a product or claims real sandbox qualification.
+if '/bin/bash' in sys.argv:
+    print('fixture preflight shim; no runtime qualified')
+    sys.exit(0)
+print('fixture primary stdout; no timing data')
+print('fixture original primary stderr', file=sys.stderr)
+if c.get('cleanup_fail'): (case/'runner').chmod(0o500)
+if c.get('signal'):
+    os.kill(os.getppid(), getattr(signal, 'SIG'+c['signal']))
+    sys.exit(0)
+sys.exit(c['primary'])
