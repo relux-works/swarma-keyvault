@@ -4,8 +4,10 @@ The non-race verifier job fixes `runs-on: ubuntu-24.04` (amd64). The runner
 owner permits the exact official Ubuntu archive bubblewrap package, including
 its postinst sysctl, only on the disposable GitHub-hosted VM for this job.
 Self-hosted runners, Macs, shared hosts and local VM execution are forbidden.
-No manual sudo sysctl writes, AppArmor changes or policy changes beyond the
-package postinst are permitted. The measured-process isolation is unchanged.
+After package setup, the separate guarded workflow step permits exactly
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` on that disposable
+VM before timing. No other manual policy change is permitted. The
+measured-process isolation is unchanged.
 
 Setup requires Actions `runner.environment=github-hosted`, Linux/X64, actual
 Ubuntu 24.04/amd64 and the runner image identity/version. The fixed workflow
@@ -24,7 +26,19 @@ with HTTPS and no redirects. It checks SHA256
 then package name, exact version and amd64 metadata before `sudo dpkg --install`.
 There is no alternate source, version, dependency installation or retry. The
 installed version/architecture must match. The pinned official postinst may
-set `kernel.unprivileged_userns_clone=1`; it is the only permitted policy effect.
+set `kernel.unprivileged_userns_clone=1`; the package and postinst are unchanged.
+
+The userns step independently checks the same trusted Actions context, immutable
+workflow checkout, ImageOS `ubuntu24`, actual Linux/x86_64 and Ubuntu 24.04/amd64.
+Wrong or missing context fails before any policy write. Context is passed through
+quoted shell variables in step environment entries, never dispatch input or a
+job-level runner expression. Environment values alone do not authenticate an
+arbitrary local caller: operating authority exists only in this reviewed workflow.
+Both knobs are read BEFORE and AFTER the single write, including on failure.
+Read/write failures propagate, the first primary failure wins, and success
+requires the resulting AppArmor userns knob to equal zero. A logging failure
+also fails the workflow step. Offline inert controls exercise these paths without
+invoking privileged commands or changing the test host.
 
 The actual setup log records the expected version, official source, downloaded
 .deb SHA, installed version and BEFORE/AFTER reads of both
@@ -68,9 +82,11 @@ timeout are runner-side cleanup prerequisites, checked before state creation.
 
 If the hosted runner denies namespaces, stop for its owner to qualify a route
 within the existing isolation and policy contract. This candidate does not
-select another runner, install an AppArmor override, disable global
-namespace restrictions, share networking, use sudo for tests or run the verifier
-outside the sandbox. The scoped package permission grants no broader policy authority.
+select another runner, install an AppArmor override, change any further
+namespace restriction, share networking, use sudo for tests or run the verifier
+outside the sandbox. If loopback RTM_NEWADDR still fails, preserve its raw error
+and stop with zero samples, without retries. The scoped disposable-hosted
+permission grants no authority on a shared host, self-hosted runner or Mac.
 The namespace preflight must succeed on that runner before any measurement.
 
 The offline shell fixtures in `tests/verifier-latency-confined-test.sh` check

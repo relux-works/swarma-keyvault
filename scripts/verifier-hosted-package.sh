@@ -60,8 +60,8 @@ actual_sha=$(sha256sum "$state/bubblewrap.deb"); actual_sha=${actual_sha%% *}
 printf 'downloaded_deb_sha256=%s\n' "$actual_sha"
 [ "$actual_sha" = "$sha" ] || fail 'deb SHA256 mismatch'
 [ "$(dpkg-deb -f "$state/bubblewrap.deb" Package Version Architecture)" = "$(printf 'Package: bubblewrap\nVersion: %s\nArchitecture: amd64' "$version")" ] || fail 'deb package/version/architecture mismatch'
-# Only this exact package's official postinst may adjust policy. No manual
-# sysctl writes, AppArmor overrides, apt dependency changes or test sudo.
+# This step permits only the exact package's official postinst policy effects.
+# The separate guarded userns step owns the disposable VM's additional write.
 sudo dpkg --install "$state/bubblewrap.deb"
 [ "$(dpkg-query -W -f='${Version} ${Architecture}' bubblewrap)" = "$version amd64" ] || fail 'installed package mismatch'
 echo 'verifier package setup passed; namespace preflight still required; no timing samples collected'

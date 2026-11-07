@@ -146,6 +146,25 @@ jobs:
             exit "${pipeline_status[0]}"
           fi
           exit "${pipeline_status[1]}"
+      - name: Permit user namespaces only on the disposable GitHub-hosted Ubuntu VM
+        shell: bash
+        env:
+          VS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          VS_RUNNER_OS: ${{ runner.os }}
+          VS_RUNNER_ARCH: ${{ runner.arch }}
+          VS_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          VS_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          VS_WORKFLOW_PATH: .github/workflows/hosted-ci.yml
+        run: |
+          set -euo pipefail
+          set +e
+          bash .ci-verifier-route/scripts/verifier-hosted-userns.sh 2>&1 | tee verifier-userns.log
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          if [ "${pipeline_status[0]}" -ne 0 ]; then
+            exit "${pipeline_status[0]}"
+          fi
+          exit "${pipeline_status[1]}"
       - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |
@@ -162,6 +181,6 @@ jobs:
       - name: Preserve timing samples even on failure
         if: always()
         run: |
-          for log in verifier-setup.log verifier-p95.log; do
+          for log in verifier-setup.log verifier-userns.log verifier-p95.log; do
             if [ -f "$log" ]; then cat "$log" >> "$GITHUB_STEP_SUMMARY"; fi
           done
