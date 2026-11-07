@@ -1,2 +1,5 @@
-Empty fixture toolchain directory for shell discovery only. No Go executable,
-product compilation, verifier, timing or runtime qualification is provided.
+Inert fixture toolchain directory for shell discovery and provisioning controls.
+The regular bin/go script dispatches to the adjacent fixture, never a real Go
+compiler. No product compilation, verifier, timing or runtime qualification is
+provided. Keep fixture files regular so the native-input tripwire inspects the
+whole source tree without a symlink exemption.
