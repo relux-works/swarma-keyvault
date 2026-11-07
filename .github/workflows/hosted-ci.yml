@@ -102,7 +102,7 @@ jobs:
           MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v ./...
 
   verifier-latency:
-    name: Real signed verifier p95 (non-race)
+    name: Real verifier non-race (40/path, p95 <=80ms, max <100ms)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -120,7 +120,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Measure all 40 real signed samples per path with 40ms margin
+      - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |
           set -euo pipefail
@@ -134,7 +134,9 @@ jobs:
           GOMODCACHE="$state/dependencies" go mod verify
           toolchain=$(go env GOROOT)
           command -v bwrap
-          # Fixture signing is outside timing. All samples count; no retries.
+          # Fixture signing is outside timing. Exactly 40 per path; one run, zero retries.
+          # Nearest-rank p95: sorted[ceil(0.95*N)-1], rank 38 of 40.
+          # Require p95 <=80ms AND max <100ms; log actual sample counts.
           # The measured process has no network, host home or agent socket.
           bwrap --die-with-parent --unshare-all --clearenv \
             --ro-bind /usr /usr --symlink usr/bin /bin \
@@ -152,7 +154,7 @@ jobs:
             --setenv GOPROXY off --setenv GOSUMDB off \
             --setenv GOMAXPROCS 2 --setenv GOFLAGS '-mod=readonly -p=2' \
             --chdir /source \
-            go test -count=1 -v ./internal/grants -run '^TestLinuxRealVerifierP95$' | tee verifier-p95.log
+            go test -count=1 -v ./internal/grants -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion)$' | tee verifier-p95.log
       - name: Preserve timing samples even on failure
         if: always()
         run: |

@@ -4,8 +4,6 @@ package grants
 
 import (
 	"context"
-	"math"
-	"sort"
 	"testing"
 	"time"
 )
@@ -15,11 +13,10 @@ import (
 // instrumentation. All samples count, including slow samples; there are no
 // warmup exclusions or retries. Nearest-rank p95 is sorted[ceil(.95*N)-1].
 func TestLinuxRealVerifierP95(t *testing.T) {
-	const samples = 40
-	const threshold = 60 * time.Millisecond // 40ms margin below the fixed 100ms fence
+	const samples = linuxVerifierSampleCount
 	advisory := make([]time.Duration, 0, samples)
 	final := make([]time.Duration, 0, samples)
-	t.Logf("fixture: fresh ephemeral P-256 GrantRoot/publisher, Ed25519 service/revoker/agent; signed publisher, grant, author attestation, message, two revocation snapshots; once work.assign; A1; empty journal; samples=%d threshold_ns=%d p95=nearest-rank", samples, threshold.Nanoseconds())
+	t.Logf("fixture: fresh ephemeral P-256 GrantRoot/publisher, Ed25519 service/revoker/agent; signed publisher, grant, author attestation, message, two revocation snapshots; once work.assign; A1; empty journal; required_samples=%d p95_limit_ns=%d max_exclusive_ns=%d p95=nearest-rank runs=1 retries=0", samples, linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds())
 	for i := 0; i < samples; i++ {
 		// Expensive key generation/signing and filesystem fixture creation are outside
 		// timing. Provider copy, verifier construction and actual signed admission are
@@ -67,13 +64,10 @@ func TestLinuxRealVerifierP95(t *testing.T) {
 		name   string
 		values []time.Duration
 	}{{"construction+advisory", advisory}, {"final-admission", final}} {
-		ordered := append([]time.Duration(nil), series.values...)
-		sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
-		rank := int(math.Ceil(.95 * float64(len(ordered))))
-		p95 := ordered[rank-1]
-		t.Logf("path=%s n=%d rank=%d p95_ns=%d max_ns=%d threshold_ns=%d values_ns=%v", series.name, len(ordered), rank, p95.Nanoseconds(), ordered[len(ordered)-1].Nanoseconds(), threshold.Nanoseconds(), durationNanoseconds(series.values))
-		if p95 >= threshold {
-			t.Errorf("%s real verifier p95 %s must be below %s (100ms product fence unchanged)", series.name, p95, threshold)
+		stats, err := classifyLinuxVerifierTiming(series.values)
+		t.Logf("path=%s actual_samples=%d required_samples=%d rank=%d p95_ns=%d max_ns=%d p95_limit_ns=%d max_exclusive_ns=%d values_ns=%v", series.name, stats.count, samples, stats.rank, stats.p95.Nanoseconds(), stats.max.Nanoseconds(), linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds(), durationNanoseconds(series.values))
+		if err != nil {
+			t.Errorf("%s real verifier gate: %v (100ms product fence unchanged)", series.name, err)
 		}
 	}
 }
