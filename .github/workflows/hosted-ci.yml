@@ -120,15 +120,24 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Sandbox provisioning pending runner-owner disposition
+      - name: Check out setup from the immutable workflow source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-verifier-route
+          persist-credentials: false
+      - name: Install the exact package only on a disposable GitHub-hosted VM
         shell: bash
+        env:
+          VS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          VS_RUNNER_OS: ${{ runner.os }}
+          VS_RUNNER_ARCH: ${{ runner.arch }}
+          VS_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          VS_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          VS_WORKFLOW_PATH: .github/workflows/hosted-ci.yml
         run: |
           set -euo pipefail
-          # Proposed pin remains bubblewrap=0.9.0-1ubuntu0.3, Noble amd64.
-          # Its postinst attempts a global sysctl change. Official origin does
-          # not authorize that effect. No alternative provisioning is selected.
-          echo 'BLOCKED: exact bubblewrap package provisioning needs runner-owner disposition; see scripts/verifier-latency-runner.md. No timing samples collected.' >&2
-          exit 78
+          bash .ci-verifier-route/scripts/verifier-hosted-package.sh 2>&1 | tee verifier-setup.log
       - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
         shell: bash
         run: |
@@ -137,6 +146,6 @@ jobs:
       - name: Preserve timing samples even on failure
         if: always()
         run: |
-          if [ -f verifier-p95.log ]; then
-            cat verifier-p95.log >> "$GITHUB_STEP_SUMMARY"
-          fi
+          for log in verifier-setup.log verifier-p95.log; do
+            if [ -f "$log" ]; then cat "$log" >> "$GITHUB_STEP_SUMMARY"; fi
+          done

@@ -102,7 +102,7 @@ if "${sandbox[@]}" /bin/bash -euc '
   echo 'verifier sandbox preflight passed; no timing samples collected yet'
 else
   status=$?
-  echo "verifier sandbox preflight failed (exit $status): runner owner must supply namespace-capable bubblewrap and any scoped AppArmor policy. No timing samples collected; no isolation fallback." >&2
+  echo "verifier sandbox preflight failed (exit $status): job FAIL; required namespaces unavailable on the permitted hosted route. No timing samples collected; no isolation fallback." >&2
   exit "$status"
 fi
 # Download/verify is provisioning only, after namespace qualification and before

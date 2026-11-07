@@ -1,29 +1,44 @@
 # Hosted verifier runner prerequisite
 
-The non-race verifier job selects Ubuntu 24.04 amd64 and proposes installing
-`bubblewrap=0.9.0-1ubuntu0.3` from Ubuntu's authenticated archive. This platform
-tool pin is separate from the unchanged Go toolchain and go.sum dependencies.
-The runner label selects an OS family, not an immutable image; retain the actual
-image version in each run's evidence. If the package/version is unavailable,
-setup fails; do not silently substitute a different version or runner.
+The non-race verifier job fixes `runs-on: ubuntu-24.04` (amd64). The runner
+owner permits the exact official Ubuntu archive bubblewrap package, including
+its postinst sysctl, only on the disposable GitHub-hosted VM for this job.
+Self-hosted runners, Macs, shared hosts and local VM execution are forbidden.
+No manual sudo sysctl writes, AppArmor changes or policy changes beyond the
+package postinst are permitted. The measured-process isolation is unchanged.
 
-Provisioning is **blocked pending runner-owner disposition**. The exact official
-amd64 package has SHA256
-`2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094`.
-Its `/usr/lib/sysctl.d/50-bubblewrap.conf` sets
-`kernel.unprivileged_userns_clone=1`; its postinst invokes `sysctl --quiet`
-with `--pattern` for that knob and `--system` when sysctl exists. This attempts
-host-wide enablement where the kernel exposes the knob. Actual runner effect
-is unknown; official package origin grants no exception to the contract against
-global namespace policy changes. The workflow therefore exits 78 before setup,
-preflight, provisioning or measurement. No package install or policy command is
-authorized by this candidate.
+Setup requires Actions `runner.environment=github-hosted`, Linux/X64, actual
+Ubuntu 24.04/amd64 and the runner image identity/version. The fixed workflow
+checks out its setup helper at `github.workflow_sha` and the helper verifies its
+checkout HEAD against that immutable SHA. These are platform context values,
+not dispatch inputs. The SHA binds the reviewed workflow/setup source; the
+Ubuntu label is not itself privilege proof or an immutable image. Retain the
+actual image version and SHA in the log. These shell guards do not grant
+permission to invoke setup directly on another host by forging environment
+variables. Workflow changes still require independent review and publication.
 
-An option for owner evaluation is a preprovisioned, exact-version qualified
-runner whose existing namespace and AppArmor policies remain unchanged. Before
-any source revision could select it, the owner must qualify its immutable image,
-exact package provenance/version, unchanged policies and the same fail-closed
-preflight. This is an unelected option, not a fallback or qualification claim.
+Setup downloads only
+`https://security.ubuntu.com/ubuntu/pool/main/b/bubblewrap/bubblewrap_0.9.0-1ubuntu0.3_amd64.deb`
+with HTTPS and no redirects. It checks SHA256
+`2461f1beee9cb04c8942739fe1a2b37e7b7c2a3d518f0779dc75f9245baa3094`,
+then package name, exact version and amd64 metadata before `sudo dpkg --install`.
+There is no alternate source, version, dependency installation or retry. The
+installed version/architecture must match. The pinned official postinst may
+set `kernel.unprivileged_userns_clone=1`; it is the only permitted policy effect.
+
+The actual setup log records the expected version, official source, downloaded
+.deb SHA, installed version and BEFORE/AFTER reads of both
+`kernel.unprivileged_userns_clone` and
+`kernel.apparmor_restrict_unprivileged_userns`. Failed reads are explicitly
+`unavailable` with their actual read exit and diagnostic, never synthetic zero.
+An EXIT trap records available AFTER evidence on download/verification/install
+failure and retains the primary nonzero status. The workflow's pipefail makes
+setup failure a job failure before measurement; its always-run summary retains
+both setup and measurement logs. Namespace refusal is an explicit job failure
+with the original diagnostic and no numeric p95 result.
+
+Actual hosted execution is **UNMEASURED**. Offline command shims validate
+control flow only; this source disposition is not runtime qualification.
 
 The launcher requires bwrap before provisioning dependencies. It uses the same
 `--unshare-all --clearenv` sandbox for a non-product preflight and measurement.
@@ -55,7 +70,7 @@ If the hosted runner denies namespaces, stop for its owner to qualify a route
 within the existing isolation and policy contract. This candidate does not
 select another runner, install an AppArmor override, disable global
 namespace restrictions, share networking, use sudo for tests or run the verifier
-outside the sandbox. Package/policy disposition requires runner-owner review.
+outside the sandbox. The scoped package permission grants no broader policy authority.
 The namespace preflight must succeed on that runner before any measurement.
 
 The offline shell fixtures in `tests/verifier-latency-confined-test.sh` check
@@ -72,3 +87,6 @@ Official platform references:
 - [Ubuntu package versions](https://packages.ubuntu.com/bubblewrap)
 - [Ubuntu namespace and AppArmor policy](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890)
 - [Bubblewrap sandbox construction](https://github.com/containers/bubblewrap/blob/v0.9.0/README.md)
+
+- [GitHub runner context and workflow SHA](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)
+- [GitHub-hosted runner VM lifecycle and labels](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
