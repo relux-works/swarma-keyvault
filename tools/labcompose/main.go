@@ -1,4 +1,4 @@
-// labcompose connects the unchanged lab wrapper/watcher to a closed read pipe.
+// labcompose connects the lab wrapper/watcher to a closed read pipe.
 package main
 
 import (
@@ -44,8 +44,8 @@ func main(){
  }
  cert,e:=os.ReadFile(in.Certificate);if e!=nil{os.Exit(2)};req,e:=os.ReadFile(in.Request);if e!=nil{os.Exit(2)}
  cli,e:=os.ReadFile(in.Policy.CLI);if e!=nil{os.Exit(2)};h:=sha256.Sum256(cli);in.Policy.CLIHash=hex.EncodeToString(h[:])
- admission,err:=new(wrapper.Verifier).Verify(ctx,wpipe{p},in.Policy,cert,req,in.At)
- result:=map[string]any{"done":true,"admitted":err==nil,"admission":admission,"read_calls":p.calls}
- if err!=nil{result["error"]="lab admission refused"}
+ observation,err:=new(wrapper.Verifier).Verify(ctx,wpipe{p},in.Policy,cert,req,in.At)
+ result:=map[string]any{"done":true,"verified":err==nil,"observation":observation,"read_calls":p.calls}
+ if err!=nil{result["error"]="lab verification refused"}
  json.NewEncoder(os.Stdout).Encode(result)
 }

@@ -91,6 +91,9 @@ func (n *fakeNode) Call(ctx context.Context, method string, args ...any) (json.R
 	return bytes.Clone(raw), nil
 }
 func (n *fakeNode) set(t *testing.T, method string, v any, args ...any) {
+	if method == "name_show" && len(args) == 1 {
+		args = append(args, map[string]any{"nameEncoding": "ascii", "valueEncoding": "ascii", "allowExpired": false})
+	}
 	n.data[callKey(method, args...)] = marshal(t, v)
 }
 
@@ -151,8 +154,8 @@ func fresh(t *testing.T) *fixture {
 	f.resign(t)
 	f.ownerRecord = map[string]any{"swarma": map[string]any{"keyvault_owner_spki": base64.RawURLEncoding.EncodeToString(f.ownerDER), "keyvault_certificate_sha256": hash(f.certificate), "keyvault_seal": f.seal}}
 	f.requesterRecord = map[string]any{"swarma": map[string]any{"keyvault_requester_spki": base64.RawURLEncoding.EncodeToString(f.requesterDER)}}
-	f.ownerName = nameShow{Name: f.p.OwnerName, Value: string(marshal(t, f.ownerRecord)), TxID: strings.Repeat("d", 64), Vout: 0, Address: "LAB-OWNER", ExpiresIn: 1000}
-	f.requesterName = nameShow{Name: f.p.RequesterName, Value: string(marshal(t, f.requesterRecord)), TxID: strings.Repeat("e", 64), Vout: 0, Address: "LAB-REQUESTER", ExpiresIn: 1000}
+	f.ownerName = nameShow{Name: f.p.OwnerName, Value: string(marshal(t, f.ownerRecord)), TxID: strings.Repeat("d", 64), Vout: 0, Address: "LAB-OWNER", ExpiresIn: 1000, Height: 99, NameEncoding: "ascii", ValueEncoding: "ascii"}
+	f.requesterName = nameShow{Name: f.p.RequesterName, Value: string(marshal(t, f.requesterRecord)), TxID: strings.Repeat("e", 64), Vout: 0, Address: "LAB-REQUESTER", ExpiresIn: 1000, Height: 99, NameEncoding: "ascii", ValueEncoding: "ascii"}
 	f.n = &fakeNode{data: map[string]json.RawMessage{}}
 	f.refreshNames(t)
 	f.n.set(t, "getblockchaininfo", tip{"regtest", f.best, 100, false})
@@ -171,18 +174,18 @@ func (f *fixture) refreshNames(t *testing.T) {
 	f.n.set(t, "name_show", f.ownerName, f.p.OwnerName)
 	f.n.set(t, "name_show", f.requesterName, f.p.RequesterName)
 	makeTX := func(n nameShow) map[string]any {
-		return map[string]any{"txid": n.TxID, "blockhash": f.block, "confirmations": 2, "vout": []any{map[string]any{"n": 0, "scriptPubKey": map[string]any{"address": n.Address, "nameOp": map[string]string{"op": "name_update", "name": n.Name, "value": n.Value}}}, map[string]any{"n": 1, "scriptPubKey": map[string]string{"hex": "6a20" + hash(f.certificate)}}}}
+		return map[string]any{"txid": n.TxID, "blockhash": f.block, "confirmations": 2, "vout": []any{map[string]any{"n": 0, "scriptPubKey": map[string]any{"address": n.Address, "nameOp": map[string]string{"op": "name_update", "name": n.Name, "value": n.Value, "name_encoding": "ascii", "value_encoding": "ascii"}}}, map[string]any{"n": 1, "scriptPubKey": map[string]string{"hex": "6a20" + hash(f.certificate)}}}}
 	}
 	f.anchor = makeTX(f.ownerName)
 	f.requesterTX = makeTX(f.requesterName)
 	f.n.set(t, "getrawtransaction", f.anchor, f.ownerName.TxID, true)
 	f.n.set(t, "getrawtransaction", f.requesterTX, f.requesterName.TxID, true)
 }
-func (f *fixture) verify(t *testing.T, v *Verifier, want bool) *Admission {
+func (f *fixture) verify(t *testing.T, v *Verifier, want bool) *Observation {
 	t.Helper()
 	result, err := v.Verify(context.Background(), f.n, f.p, f.certificate, f.request, f.at)
 	if want {
-		if err != nil || result == nil || result.Decision != "admit-lab-only" || result.CertificateSHA256 != hash(f.certificate) {
+		if err != nil || result == nil || result.Verdict != "verified-lab-observation" || result.CertificateSHA256 != hash(f.certificate) {
 			t.Fatalf("positive: %v %+v", err, result)
 		}
 	} else if err == nil || result != nil {
@@ -198,7 +201,7 @@ func TestThinSlice(t *testing.T) {
 	if a.CertificateID != "alexis-sim-to-ivan-agent-sim" || a.RequestID != "local-lab-request" {
 		t.Fatal(a)
 	}
-	// Harmless local admission is just an in-memory value, with no execute call.
+	// This repeatable observation carries no admission reservation or effect.
 	original := bytes.Clone(f.n.data[callKey("gettxout", f.seal.TxID, 0, true)])
 	f.n.set(t, "gettxout", nil, f.seal.TxID, 0, true) // mempool spend: include_mempool=true
 	f.verify(t, v, false)
@@ -404,7 +407,7 @@ func TestFullRecordBounds(t *testing.T) {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			f := fresh(t)
 			raw := marshal(t, f.ownerName)
-			f.n.data[callKey("name_show", f.p.OwnerName)] = append(raw, bytes.Repeat([]byte{' '}, size-len(raw))...)
+			f.n.data[callKey("name_show", f.p.OwnerName, nameOptions())] = append(raw, bytes.Repeat([]byte{' '}, size-len(raw))...)
 			f.verify(t, &Verifier{}, size == 4096)
 		})
 	}

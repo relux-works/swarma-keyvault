@@ -3,7 +3,9 @@
 This is an offline/regtest-only library experiment. `Verifier.Verify` reads
 public facts through an independently installed own-node `Node` read broker,
 then invokes an unchanged `swarma-keyvault grants verify` executable using
-closed argv. The only admission effect is an in-memory `Admission` value.
+closed argv. It returns a repeatable in-memory `Observation` with verdict
+`verified-lab-observation`. This value carries no admission authority or
+single-use reservation. The component is a verification observation adapter.
 It cannot run on mainnet and never invokes `execute`, an issuer, a wallet, a
 hardware provider, a network client or a watcher.
 
@@ -34,7 +36,7 @@ implied. This is the existing local certificate/request format, not `grant/1`
 on `swarm-envelope/2`, and cannot be substituted for that platform route.
 
 The name record vocabulary below is a **lab proposal**, not a published or
-approved owner record schema. Each complete UTF-8 value must fit 520 bytes.
+approved owner record schema. Each complete value must fit 520 bytes.
 The owner name carries `swarma.keyvault_owner_spki`,
 `swarma.keyvault_certificate_sha256` (SHA-256 of the exact signed envelope bytes)
 and `swarma.keyvault_seal` with exact `txid`/`vout`. The requester name carries
@@ -42,6 +44,27 @@ and `swarma.keyvault_seal` with exact `txid`/`vout`. The requester name carries
 canonical unpadded base64url of canonical P-256 SPKI DER. Unknown record fields
 are preserved by not rewriting either record. Duplicate JSON members, aliases
 that attempt to select a pin, malformed keys and expired names refuse.
+
+This experiment supports Namecoin's byte-preserving ASCII route. Every
+`name_show` call supplies a second argument exactly
+`{"allowExpired":false,"nameEncoding":"ascii","valueEncoding":"ascii"}`.
+Both response encoding fields must be present and equal `ascii`. The decoded
+name and complete record value must contain only bytes `0x20` through `0x7f`,
+matching the official ASCII validator. Encoding error fields refuse, even when
+a value is also present. No text normalization or replacement is performed.
+The node must also use ASCII name/value configuration for `getrawtransaction`
+name operations; their complete `name_encoding` and `value_encoding` fields
+are required and encoding errors refuse. Other node encoding configurations
+are outside this lab interface and fail closed.
+
+The interface is bound to [Namecoin Core source
+`c68e6837b62065243ef6d1acac51446cc35047d2`](https://github.com/namecoin/namecoin-core/tree/c68e6837b62065243ef6d1acac51446cc35047d2):
+`src/rpc/names.cpp` defines the `name_show` options and projections;
+`src/names/encoding.cpp` defines byte-preserving ASCII validation and emits
+encoding/error fields; `src/core_io.cpp` projects transaction name operations
+using the configured encodings. Controls include the actual option argument,
+complete encoding fields, missing/mismatched fields and encoding errors. This
+source comparison does not qualify a running node or RPC transport.
 
 The wrapper checks regtest genesis and node readiness, both current name
 outputs and confirmed canonical blocks, the owner's exact name-committed
@@ -54,13 +77,18 @@ action, target, cycle and exclusive expiry are checked by the unchanged CLI.
 
 A private `closed-<exact certificate hash>` refusal latch survives verifier
 object/process restart when the same owner-private root is retained. An observed
-spend, unknown seal, anchor reorg, mid-observation name change or changed tip
+confirmed owner issuance-generation replacement, spend, unknown seal, anchor
+reorg, mid-observation name change or changed tip
 closes that certificate. A first-block spend is final for this lab policy;
 restoring the UTXO after a reorg does not reopen it. The root must not be deleted
 or recreated during a run. This is a small refusal latch, not a durable
 multi-host lifecycle service. Persistence relies on successful local filesystem
 writes/fsync; I/O failure still refuses the current instance. There is no
 crash-consistency qualification or cross-process concurrency qualification.
+Confirmed generation replacement is checked against canonical transaction
+history before parsing the replacement record or resolving the requester.
+Restoring the original public branch and constructing a fresh verifier with
+the same retained root still refuses after successful latch persistence.
 
 `Node.Call` must honor context cancellation and return fresh own-node replies,
 never cached successes on transport or health failure. The wrapper bounds name
@@ -75,6 +103,15 @@ prototype does not qualify live stale-node detection, protected time, atomic
 chain/effect admission, durable replay prevention or revocation between calls.
 Use of the explicit test observation must never become a production clock.
 
+Repeated verification of the same request is intentional and does not consume
+it. Verification at a later explicit timestamp can still succeed on an
+unchanged tip; this component has no 30-minute no-block STOP timer. The
+integrating admission layer must supply durable anti-replay across restarts,
+trusted time and an independent watcher enforcing the exclusive 30-minute
+no-block STOP. That integration needs its own whole-system review, including
+duplicate requests/restarts and the timer boundary. No admission provider or
+effect executor is supplied by this library.
+
 Run the controls in a separate offline sandbox with read-only source/tooling,
 private 0700 HOME/TMP/cache, no signing socket and a CLI built from the pinned
 unchanged base:
@@ -86,7 +123,7 @@ LAB_KEYVAULT_CLI=/absolute/private/build/swarma-keyvault \
 
 Tests call the actual existing `local-prepare` with separate DER files, use
 only the test-only in-process low-S signer, and call actual `grants verify`
-through the wrapper. The test keys are never serialized. Positive admission,
+through the wrapper. The test keys are never serialized. Positive observation,
 negative causal controls, exact byte boundaries and restart refusal are covered.
 The package has no release signer, production Enclave fallback, BIP47 contact,
 mirror direction or four-actor orchestration. Fresh independent review and an

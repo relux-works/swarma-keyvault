@@ -25,7 +25,7 @@ import (
 
 const RegtestGenesis = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
 
-var ErrRefused = errors.New("lab admission refused")
+var ErrRefused = errors.New("lab verification refused")
 
 // Node must be the verifier's independently configured own-node read broker.
 // Never implement this from request-supplied snapshots in a live composition.
@@ -47,8 +47,9 @@ type Policy struct {
 	SealVout                                     int
 }
 
-// Verifier serializes a short lab session. A detected seal spend/unknown seal,
-// reorg or changed tip creates a private refusal latch for these exact bytes.
+// Verifier serializes a short lab session. A confirmed issuance replacement,
+// detected seal spend/unknown seal, reorg or changed tip creates a private
+// refusal latch for these exact bytes.
 // Reusing the same private policy root preserves the latch across restarts.
 // This is not a long-running watcher or a distributed lifecycle service.
 type Verifier struct {
@@ -56,8 +57,11 @@ type Verifier struct {
 	closed bool
 }
 
-type Admission struct {
-	Decision          string `json:"decision"`
+// Observation records a repeatable verification at an explicit lab timestamp.
+// It neither reserves a request nor authorizes an effect. Durable admission and
+// the independent stale-node watcher belong to the integrating application.
+type Observation struct {
+	Verdict           string `json:"verdict"`
 	CertificateID     string `json:"certificate_id"`
 	RequestID         string `json:"request_id"`
 	CertificateSHA256 string `json:"certificate_sha256"`
@@ -82,6 +86,7 @@ type nameShow struct {
 	Address       string `json:"address"`
 	Expired       bool   `json:"expired"`
 	ExpiresIn     int    `json:"expires_in"`
+	Height        int    `json:"height"`
 	NameEncoding  string `json:"name_encoding"`
 	ValueEncoding string `json:"value_encoding"`
 }
@@ -93,10 +98,42 @@ type record struct {
 		Seal        *point `json:"keyvault_seal"`
 	} `json:"swarma"`
 }
+type nameOperation struct {
+	Op            string          `json:"op"`
+	Name          string          `json:"name"`
+	Value         string          `json:"value"`
+	NameEncoding  string          `json:"name_encoding"`
+	ValueEncoding string          `json:"value_encoding"`
+	NameError     json.RawMessage `json:"name_error"`
+	ValueError    json.RawMessage `json:"value_error"`
+}
+
+// Project the official RPC spellings exactly. encoding/json's normal struct
+// matching would otherwise accept aliases such as NAME_ENCODING.
+func (op *nameOperation) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ErrRefused
+	}
+	for key, dst := range map[string]any{
+		"op": &op.Op, "name": &op.Name, "value": &op.Value,
+		"name_encoding": &op.NameEncoding, "value_encoding": &op.ValueEncoding,
+	} {
+		if field, ok := fields[key]; ok {
+			if json.Unmarshal(field, dst) != nil {
+				return ErrRefused
+			}
+		}
+	}
+	op.NameError = fields["name_error"]
+	op.ValueError = fields["value_error"]
+	return nil
+}
+
 type script struct {
-	Hex     string                           `json:"hex"`
-	Address string                           `json:"address"`
-	NameOp  struct{ Op, Name, Value string } `json:"nameOp"`
+	Hex     string        `json:"hex"`
+	Address string        `json:"address"`
+	NameOp  nameOperation `json:"nameOp"`
 }
 type transaction struct {
 	TxID          string `json:"txid"`
@@ -215,48 +252,86 @@ func call(ctx context.Context, n Node, method string, out any, args ...any) erro
 	return uniqueJSON(raw, max, out)
 }
 
-func resolve(ctx context.Context, n Node, name string) (nameShow, record, error) {
+// This lab uses the byte-preserving ASCII route, including nameOp projections
+// from getrawtransaction. The broker must use Namecoin's ASCII configuration
+// for those transaction projections; no decoding or normalization is allowed.
+func ascii(s string) bool {
+	for i := range s {
+		if s[i] < 0x20 || s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func nameOptions() map[string]any {
+	return map[string]any{"nameEncoding": "ascii", "valueEncoding": "ascii", "allowExpired": false}
+}
+
+func resolveName(ctx context.Context, n Node, name string) (nameShow, error) {
 	var v nameShow
+	var fields map[string]json.RawMessage
+	if err := call(ctx, n, "name_show", &fields, name, nameOptions()); err != nil {
+		return v, err
+	}
+	if _, ok := fields["name_error"]; ok {
+		return v, ErrRefused
+	}
+	if _, ok := fields["value_error"]; ok {
+		return v, ErrRefused
+	}
+	for key, dst := range map[string]any{
+		"name": &v.Name, "value": &v.Value, "txid": &v.TxID,
+		"vout": &v.Vout, "address": &v.Address, "expired": &v.Expired,
+		"expires_in": &v.ExpiresIn, "name_encoding": &v.NameEncoding,
+		"value_encoding": &v.ValueEncoding, "height": &v.Height,
+	} {
+		raw, ok := fields[key]
+		if !ok || bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, dst) != nil {
+			return v, ErrRefused
+		}
+	}
+	if v.Name != name || v.Expired || v.ExpiresIn <= 0 || v.Height < 0 || v.Vout < 0 || !digest(v.TxID) || v.Address == "" ||
+		v.NameEncoding != "ascii" || v.ValueEncoding != "ascii" || !ascii(v.Name) || !ascii(v.Value) {
+		return v, ErrRefused
+	}
+	return v, nil
+}
+
+func parseRecord(v nameShow) (record, error) {
 	var r record
-	if err := call(ctx, n, "name_show", &v, name); err != nil {
-		return v, r, err
-	}
-	if v.Name != name || v.Expired || v.ExpiresIn <= 0 || v.Vout < 0 || !digest(v.TxID) || v.Address == "" ||
-		(v.NameEncoding != "" && v.NameEncoding != "utf8") || (v.ValueEncoding != "" && v.ValueEncoding != "utf8") {
-		return v, r, ErrRefused
-	}
 	var outer map[string]json.RawMessage
 	if err := uniqueJSON([]byte(v.Value), 520, &outer); err != nil {
-		return v, r, err
+		return r, err
 	}
 	// encoding/json matches struct fields case-insensitively. Project the exact
 	// public record keys explicitly so spelling aliases cannot select a pin.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(outer["swarma"], &fields); err != nil {
-		return v, r, ErrRefused
+		return r, ErrRefused
 	}
 	for key, dst := range map[string]*string{"keyvault_owner_spki": &r.Swarma.Owner, "keyvault_requester_spki": &r.Swarma.Requester, "keyvault_certificate_sha256": &r.Swarma.Certificate} {
 		if raw, ok := fields[key]; ok {
 			if err := json.Unmarshal(raw, dst); err != nil {
-				return v, r, ErrRefused
+				return r, ErrRefused
 			}
 		}
 	}
 	if raw, ok := fields["keyvault_seal"]; ok {
 		var f map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &f); err != nil {
-			return v, r, ErrRefused
+			return r, ErrRefused
 		}
 		p := &point{}
 		if err := json.Unmarshal(f["txid"], &p.TxID); err != nil {
-			return v, r, ErrRefused
+			return r, ErrRefused
 		}
 		if err := json.Unmarshal(f["vout"], &p.Vout); err != nil {
-			return v, r, ErrRefused
+			return r, ErrRefused
 		}
 		r.Swarma.Seal = p
 	}
-	return v, r, nil
+	return r, nil
 }
 
 func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
@@ -272,7 +347,9 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 		if o.Script.NameOp.Name == v.Name {
 			count++
 			if o.N != v.Vout || o.Script.Address != v.Address || o.Script.NameOp.Value != v.Value ||
-				(o.Script.NameOp.Op != "name_update" && o.Script.NameOp.Op != "name_firstupdate") {
+				(o.Script.NameOp.Op != "name_update" && o.Script.NameOp.Op != "name_firstupdate") ||
+				o.Script.NameOp.NameEncoding != "ascii" || o.Script.NameOp.ValueEncoding != "ascii" ||
+				len(o.Script.NameOp.NameError) != 0 || len(o.Script.NameOp.ValueError) != 0 {
 				return tx, ErrRefused
 			}
 		}
@@ -287,7 +364,7 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 	if err := call(ctx, n, "getblockheader", &header, tx.Blockhash); err != nil {
 		return tx, err
 	}
-	if header.Height < 0 || header.Confirmations < 1 {
+	if header.Height < 0 || header.Height != v.Height || header.Confirmations < 1 {
 		return tx, ErrRefused
 	}
 	var canonical string
@@ -297,10 +374,11 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 	return tx, nil
 }
 
-// Verify returns only a harmless in-memory admission. It never invokes execute.
+// Verify returns only a repeatable verification observation, never admission.
+// It does not implement replay reservation, a 30-minute idle STOP or a provider.
 // at is an explicit lab observation; it is not a protected production clock.
 // Recheck all inputs on every attempt: there is no cached-enrollment fallback.
-func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, request []byte, at time.Time) (*Admission, error) {
+func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, request []byte, at time.Time) (*Observation, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed || n == nil || len(certificate) == 0 || len(certificate) > 98304 || len(request) == 0 || len(request) > 12288 || at.IsZero() {
@@ -326,22 +404,6 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if err := call(ctx, n, "getblockhash", &genesis, 0); err != nil || genesis != RegtestGenesis {
 		return nil, ErrRefused
 	}
-	owner, o, err := resolve(ctx, n, p.OwnerName)
-	if err != nil {
-		return nil, err
-	}
-	requester, r, err := resolve(ctx, n, p.RequesterName)
-	if err != nil {
-		return nil, err
-	}
-	op, err := public(o.Swarma.Owner)
-	if err != nil {
-		return nil, err
-	}
-	rp, err := public(r.Swarma.Requester)
-	if err != nil || bytes.Equal(op, rp) {
-		return nil, ErrRefused
-	}
 	certHash := hash(certificate)
 	if !privateRoot(p.PrivateRoot) {
 		return nil, ErrRefused
@@ -365,12 +427,43 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 			}
 		}
 	}
-	if !digest(o.Swarma.Certificate) || o.Swarma.Certificate != certHash || o.Swarma.Seal == nil || owner.TxID != p.AnchorTxID || o.Swarma.Seal.TxID != p.SealTxID || o.Swarma.Seal.Vout != p.SealVout {
-		return nil, ErrRefused
+	owner, err := resolveName(ctx, n, p.OwnerName)
+	if err != nil {
+		return nil, err
 	}
 	anchor, err := checkedName(ctx, n, owner)
-	if err != nil || anchor.Blockhash != p.AnchorBlock {
+	if err != nil {
 		closeObservation()
+		return nil, ErrRefused
+	}
+	// Establish canonical confirmation before treating an issuance replacement
+	// as final. Persist closure BEFORE parsing the replacement's record or
+	// resolving the requester: neither can hide a confirmed generation change.
+	if owner.TxID != p.AnchorTxID || anchor.Blockhash != p.AnchorBlock {
+		closeObservation()
+		return nil, ErrRefused
+	}
+	o, err := parseRecord(owner)
+	if err != nil {
+		return nil, err
+	}
+	if !digest(o.Swarma.Certificate) || o.Swarma.Certificate != certHash || o.Swarma.Seal == nil || o.Swarma.Seal.TxID != p.SealTxID || o.Swarma.Seal.Vout != p.SealVout {
+		return nil, ErrRefused
+	}
+	requester, err := resolveName(ctx, n, p.RequesterName)
+	if err != nil {
+		return nil, err
+	}
+	r, err := parseRecord(requester)
+	if err != nil {
+		return nil, err
+	}
+	op, err := public(o.Swarma.Owner)
+	if err != nil {
+		return nil, err
+	}
+	rp, err := public(r.Swarma.Requester)
+	if err != nil || bytes.Equal(op, rp) {
 		return nil, ErrRefused
 	}
 	if _, err := checkedName(ctx, n, requester); err != nil {
@@ -396,12 +489,12 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	}
 	// A name can be updated independently of the observed block tip. Re-resolve
 	// both names; no changed pin/value/generation is admitted in this observation.
-	ownerAfter, _, err := resolve(ctx, n, p.OwnerName)
+	ownerAfter, err := resolveName(ctx, n, p.OwnerName)
 	if err != nil || ownerAfter != owner {
 		closeObservation()
 		return nil, ErrRefused
 	}
-	requesterAfter, _, err := resolve(ctx, n, p.RequesterName)
+	requesterAfter, err := resolveName(ctx, n, p.RequesterName)
 	if err != nil || requesterAfter != requester {
 		closeObservation()
 		return nil, ErrRefused
@@ -416,7 +509,7 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 		closeObservation()
 		return nil, err
 	}
-	return &Admission{"admit-lab-only", facts.CertificateID, facts.RequestID, certHash, anchor.Blockhash}, nil
+	return &Observation{"verified-lab-observation", facts.CertificateID, facts.RequestID, certHash, anchor.Blockhash}, nil
 }
 
 func checkSeal(ctx context.Context, n Node, p point, address, best string) error {
