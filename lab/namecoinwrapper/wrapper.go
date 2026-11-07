@@ -37,9 +37,11 @@ type Node interface {
 }
 
 // Policy is independently installed lab policy, never derived from certificate
-// or request fields. The existing local profile has fixed wire owner/repository
-// labels; all keys in this experiment are simulated throwaway keys.
+// or request fields. All keys in this experiment are simulated throwaway keys.
 type Policy struct {
+	// ExpectedOwner is independent identity policy, never a name-record or
+	// payload value. Empty preserves the original Alexis test profile.
+	ExpectedOwner                                string
 	OwnerName, RequesterName                     string
 	Account, Device, Deployment, Executor, Cycle string
 	CLI, CLIHash, PrivateRoot                    string
@@ -566,6 +568,10 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 }
 
 func verifyCLI(ctx context.Context, p Policy, owner, requester string, cert, req []byte, at time.Time) (*verification, error) {
+	expectedOwner := p.ExpectedOwner
+	if expectedOwner == "" {
+		expectedOwner = "@alexis:gr.relux.works"
+	}
 	if !filepath.IsAbs(p.PrivateRoot) || filepath.Clean(p.PrivateRoot) != p.PrivateRoot || !filepath.IsAbs(p.CLI) || !digest(p.CLIHash) {
 		return nil, ErrRefused
 	}
@@ -588,7 +594,7 @@ func verifyCLI(ctx context.Context, p Policy, owner, requester string, cert, req
 	}
 	defer os.RemoveAll(dir)
 	config := map[string]any{
-		"type": "grants-local-enrollment-2", "owner_mxid": "@alexis:gr.relux.works", "owner_spki": owner, "requester_spki": requester,
+		"type": "grants-local-enrollment-2", "owner_mxid": expectedOwner, "owner_spki": owner, "requester_spki": requester,
 		"subject":      map[string]string{"account_mxid": p.Account, "device_id": p.Device},
 		"audience":     map[string]string{"deployment_id": p.Deployment, "executor_id": p.Executor},
 		"cycle":        map[string]string{"cycle_id": p.Cycle, "runtime": "codex", "channel": "encrypted-dm"},
@@ -603,7 +609,11 @@ func verifyCLI(ctx context.Context, p Policy, owner, requester string, cert, req
 			return nil, ErrRefused
 		}
 	}
-	cmd := exec.CommandContext(ctx, p.CLI, "grants", "verify", "--config", filepath.Join(dir, "config.json"), "--certificate", filepath.Join(dir, "certificate.json"), "--request", filepath.Join(dir, "request.json"), "--at", at.UTC().Format(time.RFC3339))
+	args := []string{"grants", "verify", "--config", filepath.Join(dir, "config.json"), "--certificate", filepath.Join(dir, "certificate.json"), "--request", filepath.Join(dir, "request.json"), "--at", at.UTC().Format(time.RFC3339)}
+	if p.ExpectedOwner != "" {
+		args = append(args, "--owner-mxid", expectedOwner)
+	}
+	cmd := exec.CommandContext(ctx, p.CLI, args...)
 	cmd.Env = []string{"HOME=" + dir, "TMPDIR=" + dir, "XDG_CACHE_HOME=" + dir, "PATH=/nonexistent"}
 	cmd.Dir = dir
 	out := &cappedBuffer{limit: 8192}

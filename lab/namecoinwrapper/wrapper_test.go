@@ -114,9 +114,14 @@ type fixture struct {
 
 func fresh(t *testing.T) *fixture {
 	t.Helper()
+	return freshDirection(t, false)
+}
+
+func freshDirection(t *testing.T, reverse bool) *fixture {
+	t.Helper()
 	cli := os.Getenv("LAB_KEYVAULT_CLI")
 	if cli == "" {
-		t.Fatal("LAB_KEYVAULT_CLI must name a separately built unchanged dffe3ac5 CLI")
+		t.Fatal("LAB_KEYVAULT_CLI must name the separately built pinned verifier CLI")
 	}
 	b, err := os.ReadFile(cli)
 	if err != nil {
@@ -130,18 +135,26 @@ func fresh(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.p = Policy{OwnerName: "d/alexis-sim", RequesterName: "d/ivan-agent-sim", Account: "@ivan-agent-sim:example.invalid", Device: "LAB", Deployment: "lab", Executor: "ivan-agent-sim", Cycle: "codex-dm", CLI: cli, CLIHash: hash(b), PrivateRoot: root}
+	ownerMXID, certificateID := "@alexis:gr.relux.works", "alexis-sim-to-ivan-agent-sim"
+	if reverse {
+		f.at = time.Now().UTC().Truncate(time.Second)
+		ownerMXID, certificateID = "@ivan:example.invalid", "ivan-sim-to-alexis-agent-sim"
+		f.p.ExpectedOwner = ownerMXID
+		f.p.OwnerName, f.p.RequesterName = "d/ivan-sim", "d/alexis-agent-sim"
+		f.p.Account, f.p.Executor = "@alexis-agent-sim:example.invalid", "alexis-agent-sim"
+	}
 	f.p.AnchorTxID, f.p.AnchorBlock, f.p.SealTxID, f.p.SealVout = strings.Repeat("d", 64), f.block, f.seal.TxID, f.seal.Vout
 	subject := map[string]string{"account_mxid": f.p.Account, "device_id": f.p.Device}
 	audience := map[string]string{"deployment_id": f.p.Deployment, "executor_id": f.p.Executor}
 	cycle := map[string]string{"cycle_id": f.p.Cycle, "runtime": "codex", "channel": "encrypted-dm"}
-	draft := map[string]any{"audience": audience, "certificate_id": "alexis-sim-to-ivan-agent-sim", "cycles": []any{cycle}, "expires_at": f.at.Add(time.Hour).Format(time.RFC3339), "not_before": f.at.Add(-time.Minute).Format(time.RFC3339), "name": "matrix-grants-poc-261031", "organization": "relux-works", "subject": subject}
+	draft := map[string]any{"audience": audience, "certificate_id": certificateID, "cycles": []any{cycle}, "expires_at": f.at.Add(time.Hour).Format(time.RFC3339), "not_before": f.at.Add(-time.Minute).Format(time.RFC3339), "name": "matrix-grants-poc-261031", "organization": "relux-works", "subject": subject}
 	// Actual unchanged CLI local-prepare takes the two separate public DER files.
 	for name, raw := range map[string][]byte{"owner.der": f.ownerDER, "requester.der": f.requesterDER, "plan.json": marshal(t, draft)} {
 		if err := os.WriteFile(filepath.Join(root, name), raw, 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command(cli, "grants", "local-prepare", "--plan", filepath.Join(root, "plan.json"), "--owner-mxid", "@alexis:gr.relux.works", "--issuer-spki-der", filepath.Join(root, "owner.der"), "--requester-spki-der", filepath.Join(root, "requester.der"))
+	cmd := exec.Command(cli, "grants", "local-prepare", "--plan", filepath.Join(root, "plan.json"), "--owner-mxid", ownerMXID, "--issuer-spki-der", filepath.Join(root, "owner.der"), "--requester-spki-der", filepath.Join(root, "requester.der"))
 	cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -152,6 +165,10 @@ func fresh(t *testing.T) *fixture {
 	f.certificate = signed(t, f.owner, "swarma-grants/local-certificate/1", "grants-signed-local-certificate-1", payload)
 	f.operation = map[string]any{"type": "grants-local-operation-1", "request_id": "local-lab-request", "certificate_id": draft["certificate_id"], "entry_id": "repo-create", "cycle_id": f.p.Cycle, "operation_use_id": "codex-dm/create", "subject": subject, "audience": audience, "action": "repository.create", "target": map[string]string{"organization": "relux-works", "name": "matrix-grants-poc-261031", "visibility": "private"}, "expires_at": f.at.Add(30 * time.Minute).Format(time.RFC3339)}
 	f.resign(t)
+	if reverse {
+		f.certificate = signerCertificate(t, f, root, payload, ownerMXID)
+		f.request = signerRequest(t, f, root)
+	}
 	f.ownerRecord = map[string]any{"swarma": map[string]any{"keyvault_owner_spki": base64.RawURLEncoding.EncodeToString(f.ownerDER), "keyvault_certificate_sha256": hash(f.certificate), "keyvault_seal": f.seal}}
 	f.requesterRecord = map[string]any{"swarma": map[string]any{"keyvault_requester_spki": base64.RawURLEncoding.EncodeToString(f.requesterDER)}}
 	f.ownerName = nameShow{Name: f.p.OwnerName, Value: string(marshal(t, f.ownerRecord)), TxID: strings.Repeat("d", 64), Vout: 0, Address: "LAB-OWNER", ExpiresIn: 1000, Height: 99, NameEncoding: "ascii", ValueEncoding: "ascii"}

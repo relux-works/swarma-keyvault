@@ -19,7 +19,155 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/grants"
 )
+
+// These are signer component controls. They do not qualify a reverse verifier
+// or wrapper. Both owner identities use freshly generated synthetic keys.
+func TestExpectedOwnerSigner(t *testing.T) {
+	root := t.TempDir()
+	custody := filepath.Join(root, "actors")
+	if err := generate(custody); err != nil {
+		t.Fatal(err)
+	}
+	ownerFile, requesterFile := filepath.Join(custody, "owner.der"), filepath.Join(custody, "requester.der")
+	ownerDER, requesterDER := read(t, ownerFile), read(t, requesterFile)
+	ownerKey := filepath.Join(custody, "owner.pk8")
+	owner := keyAt(t, ownerKey)
+	payloadPath := filepath.Join(root, "prepared.json")
+	const domain = "swarma-grants/local-certificate/1"
+	check := func(t *testing.T, label string, args []string, want int, diagnostic string) []byte {
+		t.Helper()
+		var out, stderr bytes.Buffer
+		code := run(args, &out, &stderr)
+		t.Logf("%s exit=%d stdout_bytes=%d stderr=%q", label, code, out.Len(), stderr.String())
+		if code != want || !strings.Contains(stderr.String(), diagnostic) {
+			t.Fatalf("%s: exit=%d stderr=%q", label, code, stderr.String())
+		}
+		if want != 0 && out.Len() != 0 {
+			t.Fatal("refusal emitted output")
+		}
+		return bytes.Clone(out.Bytes())
+	}
+	for _, identity := range []struct{ owner, subject string }{
+		{grants.LocalOwnerMXID, "@ivan-agent:example.invalid"},
+		{"@ivan:example.invalid", "@alexis-agent:example.invalid"},
+	} {
+		t.Run(identity.owner, func(t *testing.T) {
+			draft := map[string]any{"certificate_id": "lab-owner-control", "subject": map[string]any{"account_mxid": identity.subject, "device_id": "LAB-AGENT"}, "audience": map[string]any{"deployment_id": "lab-thin-slice", "executor_id": "lab-verify-only"}, "cycles": []any{map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}}, "not_before": "2026-11-07T14:00:00Z", "expires_at": "2026-11-09T14:00:00Z", "organization": grants.LocalOrganization, "name": grants.LocalRepository}
+			prepared, err := grants.PrepareLocalRepositoryCertificate(jsonBytes(t, draft), identity.owner, ownerDER, requesterDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+			save(t, payloadPath, prepared.Payload)
+			base := []string{"certificate", "--payload", payloadPath, "--digest", hex.EncodeToString(prepared.Digest[:]), "--key", ownerKey, "--owner-spki", ownerFile, "--requester-spki", requesterFile}
+			explicit := append(append([]string(nil), base...), "--owner-mxid", identity.owner)
+			positive := func(label string, args []string) {
+				t.Helper()
+				raw := check(t, label, args, 0, "")
+				var outer map[string]string
+				if err := json.Unmarshal(raw, &outer); err != nil {
+					t.Fatal(err)
+				}
+				payload, err := base64.RawURLEncoding.DecodeString(outer["payload"])
+				if err != nil || !bytes.Equal(payload, prepared.Payload) || outer["type"] != "grants-signed-local-certificate-1" || len(raw) >= 98304 {
+					t.Fatal("exact envelope contract changed")
+				}
+				sig, err := base64.RawURLEncoding.DecodeString(outer["signature"])
+				if err != nil || !ecdsa.VerifyASN1(&owner.PublicKey, prepared.Digest[:], sig) {
+					t.Fatal("signature invalid")
+				}
+				var pair struct{ R, S *big.Int }
+				rest, err := asn1.Unmarshal(sig, &pair)
+				if err != nil || len(rest) != 0 || pair.S == nil || pair.S.Cmp(new(big.Int).Rsh(new(big.Int).Set(owner.Params().N), 1)) > 0 {
+					t.Fatal("noncanonical signature")
+				}
+				if digestFor(domain, payload) != base[4] || digestFor("swarma-grants/certificate/1", payload) == base[4] {
+					t.Fatal("domain changed")
+				}
+			}
+			positive("explicit-owner-positive", explicit)
+			if identity.owner == grants.LocalOwnerMXID {
+				positive("omitted-Alexis-default", base)
+			} else {
+				check(t, "mirror-omission", base, 1, "issuer-untrusted")
+			}
+			// An absent key makes reaching key loading observable in diagnostics.
+			preflight := append([]string(nil), explicit...)
+			preflight[6] = filepath.Join(custody, "ABSENT.pk8")
+			for _, value := range []string{"@other:example.invalid", "invalid", "@ivan:", "@ivan:bad host", "@ivan:example.invalid\n", strings.Repeat("x", 513)} {
+				args := append([]string(nil), preflight...)
+				args[len(args)-1] = value
+				check(t, "wrong-or-malformed-owner-before-key", args, 1, "issuer-untrusted")
+			}
+			for _, option := range [][]string{{"--owner-mxid="}, {"--owner-mxid", ""}, {"--owner-mxid"}, {"--owner-mxid", identity.owner, "--owner-mxid=" + identity.owner}, {"-owner-mxid", identity.owner, "--owner-mxid", identity.owner}, {"--owner-mxid=" + identity.owner, "-owner-mxid=" + identity.owner}} {
+				check(t, "empty-missing-or-duplicate-owner", append(append([]string(nil), base...), option...), 2, "")
+			}
+			for _, mode := range []string{"keygen", "unknown"} {
+				args := []string{mode, "--owner-mxid", identity.owner, "--dir", filepath.Join(root, "must-not-exist")}
+				check(t, "wrong-mode-before-effects", args, 2, "")
+				if _, err := os.Stat(args[4]); !os.IsNotExist(err) {
+					t.Fatal("wrong mode created custody")
+				}
+			}
+			operationPath := filepath.Join(root, "operation.json")
+			operation := map[string]any{"type": "grants-local-operation-1", "request_id": "lab-owner-mode-control", "certificate_id": draft["certificate_id"], "entry_id": "repo-create", "cycle_id": "codex-dm", "operation_use_id": "codex-dm/create", "subject": draft["subject"], "audience": draft["audience"], "action": "repository.create", "target": map[string]any{"organization": grants.LocalOrganization, "name": grants.LocalRepository, "visibility": "private"}, "expires_at": "2026-11-08T14:00:00Z"}
+			save(t, operationPath, jsonBytes(t, operation))
+			prepareArgs := []string{"prepare-request", "--payload", operationPath, "--requester-spki", requesterFile}
+			rd := check(t, "valid-request-preparation", prepareArgs, 0, "")
+			requestArgs := []string{"request", "--payload", operationPath, "--requester-spki", requesterFile, "--digest", string(rd), "--key", filepath.Join(custody, "requester.pk8")}
+			for _, args := range [][]string{prepareArgs, requestArgs} {
+				check(t, "valid-mode-without-owner", args, 0, "")
+				wrongMode := append(append([]string(nil), args...), "--owner-mxid", identity.owner)
+				if args[0] == "request" {
+					wrongMode[8] = filepath.Join(custody, "ABSENT.pk8")
+				}
+				check(t, "owner-option-wrong-mode-before-key", wrongMode, 2, "")
+				check(t, "valid-mode-neighbor", args, 0, "")
+			}
+			for _, field := range []string{"purpose", "owner", "requester", "scope", "same-pins", "digest", "key"} {
+				args := append([]string(nil), preflight...)
+				var changed map[string]any
+				if err := json.Unmarshal(prepared.Payload, &changed); err != nil {
+					t.Fatal(err)
+				}
+				want := "issuer-untrusted"
+				switch field {
+				case "purpose":
+					changed["issuer"].(map[string]any)["purpose"] = "other-purpose"
+					want = "bad-schema"
+				case "owner":
+					changed["issuer"].(map[string]any)["owner_mxid"] = "@other:example.invalid"
+				case "requester":
+					args[10] = filepath.Join(custody, "adversary.der")
+					want = "requester-key-mismatch"
+				case "same-pins":
+					args[10] = ownerFile
+					want = "requester-key-mismatch"
+				case "scope":
+					changed["entries"].([]any)[0].(map[string]any)["target"].(map[string]any)["name"] = "other-repository"
+					changed["entries"].([]any)[1].(map[string]any)["target"].(map[string]any)["name"] = "other-repository"
+					want = "resource-mismatch"
+				case "digest":
+					args[4] = strings.Repeat("0", 64)
+					want = "prepared digest mismatch"
+				case "key":
+					args[6] = filepath.Join(custody, "adversary.pk8")
+					want = "test key does not match public pin"
+				}
+				if field == "purpose" || field == "owner" || field == "scope" {
+					raw := jsonBytes(t, changed)
+					save(t, payloadPath, raw)
+					args[4] = digestFor(domain, raw)
+				}
+				check(t, "refuse-"+field, args, 1, want)
+				save(t, payloadPath, prepared.Payload)
+				positive("valid-neighbor-after-"+field, explicit)
+			}
+		})
+	}
+}
 
 var fixtureExport = flag.String("lab-public-output", "", "optional absolute public-only fixture output directory")
 var fixtureCustody = flag.String("lab-private-custody", "", "optional private local throwaway actor custody directory")

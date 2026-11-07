@@ -18,7 +18,7 @@ are refused. The wrapper checks cancellation again after its final seal read
 before returning an observation. The separate supervisor kill/reap bound remains
 required.
 
-The pinned existing CLI's `grants verify` accepts `--config`, `--certificate`,
+The default CLI's `grants verify` accepts `--config`, `--certificate`,
 `--request` and the explicit test observation `--at`. It does **not** accept
 owner/requester SPKI file flags. The documented `grants-local-enrollment-2`
 configuration is the adapter: independently installed subject/audience/cycle
@@ -36,8 +36,20 @@ anchor facts independently when admitting the run, never from request fields.
 Use an ASCII private root: the existing KeyVault configuration grammar rejects
 non-ASCII string bytes rather than repairing or normalizing them.
 
-The local profile retains its existing wire labels, including the fixed owner
-identifier and repository target. Here they describe simulated test actors:
+The local profile retains its existing wire format and repository target.
+`Policy.ExpectedOwner` is independently installed identity policy. An empty
+field preserves the original Alexis owner and original verifier argv. A
+nonempty field sets both enrollment `owner_mxid` and the existing configurable
+verifier's `--owner-mxid` option to exactly that value. The verifier must support
+that option and remain pinned by `CLIHash`. A legacy verifier refuses explicit
+owner configuration. Never derive this field from a certificate, name record,
+request, or public key. For a reverse fixture use `@ivan:example.invalid`, owner name
+`d/ivan-sim`, requester name `d/alexis-agent-sim`, and independently installed
+Alexis-agent subject/audience/cycle and issuance/seal facts. Name strings alone
+do not select the owner. The existing `labcompose` JSON `Policy` object exposes
+this field without another parser or option format.
+
+Here the labels describe simulated test actors:
 Alexis-sim signs with an ephemeral software P-256 key; Ivan-agent-sim signs the
 request using a distinct ephemeral software P-256 key. No real owner's key,
 Matrix device authentication, encrypted delivery or generic platform grant is
@@ -122,18 +134,43 @@ duplicate requests/restarts and the timer boundary. No admission provider or
 effect executor is supplied by this library.
 
 Run the controls in a separate offline sandbox with read-only source/tooling,
-private 0700 HOME/TMP/cache, no signing socket and a CLI built from the pinned
-unchanged base:
+private 0700 HOME/TMP/cache and no signing socket. For default controls, use a
+CLI built from the pinned unchanged forward base:
 
 ```sh
 LAB_KEYVAULT_CLI=/absolute/private/build/swarma-keyvault \
-  go test ./lab/namecoinwrapper -count=1 -v
+  go test ./lab/namecoinwrapper -skip TestMirror -count=1 -v
 ```
 
-Tests call the actual existing `local-prepare` with separate DER files, use
-only the test-only in-process low-S signer, and call actual `grants verify`
-through the wrapper. The test keys are never serialized. Positive observation,
+For reverse controls use the exact admitted configurable verifier, the exact
+explicit-owner signer and the candidate `tools/labcompose` build, each as a
+separate executable. Build them in the offline sandbox from the immutable
+source graph supplied for review, then run:
+
+```sh
+LAB_KEYVAULT_CLI=/absolute/private/build/configurable-keyvault \
+LAB_TEST_SIGNER=/absolute/private/build/labtestsigner \
+LAB_COMPOSE=/absolute/private/build/labcompose \
+  go test ./lab/namecoinwrapper ./lab/sealwatch -count=1 -v
+```
+
+Default controls call the actual existing `local-prepare` with separate DER
+files, use the test-only in-process low-S signer, and call actual `grants verify`
+through the wrapper. Reverse controls additionally require `LAB_TEST_SIGNER`
+pointing to the separately built explicit-owner lab signer. They serialize only
+freshly generated synthetic keys in private temporary custody, invoke its actual
+certificate and request modes, and remove custody with the fixture. The two
+signing roles share one test UID and process; this is not a security boundary
+against same-UID actors or proof of cross-host custody. Public node replies are
+inert stubs, not live freshness evidence. Positive observation,
 negative causal controls, exact byte boundaries and restart refusal are covered.
-The package has no release signer, production Enclave fallback, BIP47 contact,
-mirror direction or four-actor orchestration. Fresh independent review and an
-exact-source Meta marker are required before any live composition.
+The unchanged seal watcher consumes that same reverse certificate digest and
+seal in causal UNSPENT, mempool SUSPEND and first-block FINALREVOKED controls.
+Restoring the old transcript and signing a fresh request cannot reopen the
+wrapper's successfully persisted refusal latch. This does not qualify crash
+consistency, protected time or a real 30-minute idle STOP.
+The package has no release signer, production Enclave fallback, BIP47 contact
+or four-actor orchestration. These reverse source controls are not a new
+regtest, native qualification or admission. Fresh independent WHOLE review of
+both exact source graphs and an exact-source Meta marker are required before
+any composition claim or live use; component acceptance does not supply them.

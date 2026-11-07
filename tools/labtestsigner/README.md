@@ -47,11 +47,22 @@ schema and no trailing LF. Its separate review supplies the exact digest.
 that digest through existing KeyVault APIs and reject any mismatch before
 loading the key. They require the local key's SPKI to match its independent pin.
 
+Certificate mode also accepts `--owner-mxid EXPECTED_OWNER`. Supply this from
+independently installed test policy, never from the payload, key, requester or
+name record. Omission preserves `@alexis:gr.relux.works`. For a synthetic
+Ivan-to-Alexis-agent certificate, prepare the payload with the existing
+`local-prepare --owner-mxid '@ivan:example.invalid'`, then pass
+`--owner-mxid '@ivan:example.invalid'` to `labtestsigner certificate` as well.
+That same payload refuses with the omitted default or a different expected
+owner. Empty, missing and duplicate owner options refuse; the option is invalid
+in `keygen`, `prepare-request` and `request` modes. Owner syntax and exact owner
+binding are checked by the existing issuance API before any private key read.
+
 Certificate signatures cover `swarma-grants/local-certificate/1`, LF, and exact
 payload bytes. Requests cover `swarma-grants/local-request/2`, LF, and exact
-payload bytes. They use SHA-256 and strict low-S P-256 DER. Certificate owner and
-purpose remain `@alexis:gr.relux.works` and `grants-owner-v1`; the certificate
-binds SHA-256 of requester DER. Envelopes remain
+payload bytes. They use SHA-256 and strict low-S P-256 DER. Certificate owner
+must match the independent expectation; purpose remains `grants-owner-v1`.
+The certificate binds SHA-256 of requester DER. Envelopes remain
 `grants-signed-local-certificate-1` and `grants-local-request-2`. No wire type is
 added. The serialized certificate must be under 98304 bytes and request under
 12288 bytes.
@@ -61,7 +72,9 @@ The thin slice names are `id/swarma-poc-alexis` and
 Enrollment uses the existing `grants-local-enrollment-2` schema with unpadded
 base64url SPKI strings. The CLI verifies `repository.create` on the fixed
 `relux-works/matrix-grants-poc-261031` target. It performs no repository action.
-The reverse owner direction requires a separate KeyVault change.
+The signer component controls cover both synthetic owner directions. Reverse
+verifier, wrapper and assembly qualification require their separate exact
+source graphs and independent reviews; this option does not qualify them.
 
 Integration checks drive the unchanged CLI with a public-only enrollment, an
 explicit observation instant and absent state/provider paths:
