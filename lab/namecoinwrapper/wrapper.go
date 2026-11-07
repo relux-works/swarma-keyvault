@@ -509,6 +509,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 		closeObservation()
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		closeObservation()
+		return nil, err
+	}
 	return &Observation{"verified-lab-observation", facts.CertificateID, facts.RequestID, certHash, anchor.Blockhash}, nil
 }
 

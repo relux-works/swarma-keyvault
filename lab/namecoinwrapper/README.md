@@ -9,6 +9,15 @@ single-use reservation. The component is a verification observation adapter.
 It cannot run on mainnet and never invokes `execute`, an issuer, a wallet, a
 hardware provider, a network client or a watcher.
 
+The Linux `labcompose` read broker owns private, pollable copies of its inherited
+protocol pipes. Cancellation closes those copies and interrupts both request
+writes and reply reads; it also bounds the final output write. A canceled pipe
+is terminal: partial requests and late replies are never retried. Inherited
+descriptors remain open with unchanged flags. Non-pollable protocol endpoints
+are refused. The wrapper checks cancellation again after its final seal read
+before returning an observation. The separate supervisor kill/reap bound remains
+required.
+
 The pinned existing CLI's `grants verify` accepts `--config`, `--certificate`,
 `--request` and the explicit test observation `--at`. It does **not** accept
 owner/requester SPKI file flags. The documented `grants-local-enrollment-2`
