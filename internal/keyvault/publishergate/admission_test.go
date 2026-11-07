@@ -23,16 +23,21 @@ import (
 // Every authority/peer below is a synthetic test double. It neither observes
 // macOS identity nor establishes custody, durable replay or protected policy.
 type syntheticBoundary struct {
-	policy      admissionPolicy
-	raw         []byte
-	peer        string
-	clock       time.Time
-	policyErr   error
-	policyReads int
-	authCalls   int
-	afterAuth   func()
-	finalPolicy func()
-	finalClock  func()
+	policy       admissionPolicy
+	raw          []byte
+	peer         string
+	clock        time.Time
+	policyErr    error
+	policyReads  int
+	authCalls    int
+	afterAuth    func()
+	finalPolicy  func()
+	finalClock   func()
+	originErr    error
+	originChecks int
+	originHook   func()
+	noOrigin     bool
+	badOrigin    bool
 }
 
 func fixtureBoundary() *syntheticBoundary {
@@ -51,15 +56,39 @@ func (s *syntheticBoundary) currentPolicy(context.Context) (admissionPolicy, err
 	return s.policy, s.policyErr
 }
 
-func (s *syntheticBoundary) authenticateAndCopyMessage(_ context.Context, _ admissionPolicy) ([]byte, error) {
+func (s *syntheticBoundary) authenticateAndCopyMessage(_ context.Context, p admissionPolicy) ([]byte, receivedMessage, error) {
 	s.authCalls++
 	if s.peer != "admitted-synthetic-peer" {
-		return nil, errors.New("synthetic foreign peer; not an OS observation")
+		return nil, nil, errors.New("synthetic foreign peer; not an OS observation")
 	}
 	if s.afterAuth != nil {
 		s.afterAuth()
 	}
-	return bytes.Clone(s.raw), nil
+	if s.noOrigin {
+		return bytes.Clone(s.raw), nil, nil
+	}
+	hash := sha256.Sum256(s.raw)
+	if s.badOrigin {
+		hash[0] ^= 1
+	}
+	return bytes.Clone(s.raw), &syntheticMessage{source: s, policy: p, hash: hash}, nil
+}
+
+type syntheticMessage struct {
+	source *syntheticBoundary
+	policy admissionPolicy
+	hash   [32]byte
+}
+
+func (m *syntheticMessage) revalidateOriginal(_ context.Context, p admissionPolicy, hash [32]byte) error {
+	m.source.originChecks++
+	if m.source.originHook != nil {
+		m.source.originHook()
+	}
+	if !sameAdmission(p, m.policy) || hash != m.hash {
+		return errors.New("synthetic message binding mismatch")
+	}
+	return m.source.originErr
 }
 
 func (s *syntheticBoundary) now() time.Time {

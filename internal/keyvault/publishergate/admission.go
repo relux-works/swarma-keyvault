@@ -3,6 +3,7 @@ package publishergate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"time"
 )
 
@@ -11,13 +12,17 @@ import (
 type Code string
 
 const (
-	CallerRefused     Code = "caller_refused"
-	OperationRefused  Code = "operation_refused"
-	PolicyUnavailable Code = "policy_unavailable"
-	PolicyStale       Code = "policy_stale"
-	ClockRefused      Code = "clock_refused"
-	ResourceLimit     Code = "resource_limit"
-	NativeUnavailable Code = "native_unavailable"
+	CallerRefused         Code = "caller_refused"
+	OperationRefused      Code = "operation_refused"
+	PolicyUnavailable     Code = "policy_unavailable"
+	PolicyStale           Code = "policy_stale"
+	ClockRefused          Code = "clock_refused"
+	ResourceLimit         Code = "resource_limit"
+	NativeUnavailable     Code = "native_unavailable"
+	KeyMismatch           Code = "key_mismatch"
+	ReplayRefused         Code = "replay_refused"
+	StateUnavailable      Code = "state_unavailable"
+	PrivateOutcomeUnknown Code = "private_outcome_unknown"
 )
 
 type Refusal struct{ Code Code }
@@ -28,7 +33,10 @@ func refusal(code Code) error    { return &Refusal{Code: code} }
 // Receiver is deliberately opaque. No caller-supplied JSON, PID, path, hash,
 // environment, connection token or policy file can construct its boundary.
 // There is currently no native implementation on any platform, including Mac.
-type Receiver struct{ boundary admissionBoundary }
+type Receiver struct {
+	boundary    admissionBoundary
+	publication publicationBoundary
+}
 
 // NewReceiver refuses until a separately reviewed native adapter and protected
 // policy authority exist. It does not inspect the host, load policy or fall back
@@ -38,8 +46,14 @@ func NewReceiver() (*Receiver, error) { return nil, refusal(NativeUnavailable) }
 // AdmittedRequest records only message admission, not private-operation
 // authorization. A future publisher must still enforce exclusive custody,
 // protected replay reservation, actual-key binding and the final revoke fence.
-// There is no constructor from Request and no signing API in this package.
-type AdmittedRequest struct{ request Request }
+// There is no constructor from Request. PublishCurrent obtains admission itself
+// and cannot take this object as permission to enter a private operation.
+type AdmittedRequest struct {
+	request     Request
+	messageHash [32]byte
+	policy      admissionPolicy
+	message     receivedMessage
+}
 
 func (a *AdmittedRequest) Request() Request {
 	if a == nil {
@@ -70,8 +84,17 @@ type admissionPolicy struct {
 // prove only the Go ordering and closed-schema logic, never these OS properties.
 type admissionBoundary interface {
 	currentPolicy(context.Context) (admissionPolicy, error)
-	authenticateAndCopyMessage(context.Context, admissionPolicy) ([]byte, error)
+	authenticateAndCopyMessage(context.Context, admissionPolicy) ([]byte, receivedMessage, error)
 	now() time.Time
+}
+
+// receivedMessage retains the original OS-authenticated message, not a caller
+// assertion, PID, connect-time peer or a hash standing in for process identity.
+// A native implementation must retain its actual-message evidence and bind the
+// immutable copied bytes to it. The hash below is only that payload binding.
+// No production implementation or public constructor exists.
+type receivedMessage interface {
+	revalidateOriginal(context.Context, admissionPolicy, [32]byte) error
 }
 
 // Admit receives one authenticated immutable message from its sealed boundary.
@@ -92,15 +115,16 @@ func (r *Receiver) Admit(ctx context.Context) (*AdmittedRequest, error) {
 	if err := checkTime(p, r.boundary.now()); err != nil {
 		return nil, err
 	}
-	raw, err := r.boundary.authenticateAndCopyMessage(ctx, p)
-	if err != nil {
+	raw, message, err := r.boundary.authenticateAndCopyMessage(ctx, p)
+	if err != nil || message == nil {
 		// Do not leak arbitrary boundary/native error strings.
 		return nil, refusal(CallerRefused)
 	}
 	if len(raw) > MaxRequestBytes {
 		return nil, refusal(ResourceLimit)
 	}
-	req, err := DecodeRequest(bytes.Clone(raw))
+	raw = bytes.Clone(raw)
+	req, err := DecodeRequest(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +154,7 @@ func (r *Receiver) Admit(ctx context.Context) (*AdmittedRequest, error) {
 	if ctx.Err() != nil {
 		return nil, refusal(OperationRefused)
 	}
-	return &AdmittedRequest{request: req}, nil
+	return &AdmittedRequest{request: req, messageHash: sha256.Sum256(raw), policy: p, message: message}, nil
 }
 
 func checkTime(p admissionPolicy, now time.Time) error {

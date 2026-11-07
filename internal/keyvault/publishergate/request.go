@@ -1,5 +1,6 @@
 // Package publishergate contains the bounded message-admission portion of the
-// publisher-call/1 design. It has no native adapter, key access or signing path.
+// publisher-call/1 design and its conditional typed publication sequence. It
+// has no native adapter or available production key capability.
 // Parsed requests and message admission are not permission to use a private key.
 package publishergate
 
