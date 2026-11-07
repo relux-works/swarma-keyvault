@@ -194,9 +194,11 @@ func (p *LinuxVerifier) context(now time.Time, requestHash [32]byte) (verifier.C
 		return c, ErrMUState
 	}
 	s, err := p.state.VerificationState(requestHash)
-	if err != nil || s.Now.IsZero() || now.IsZero() || !s.Now.Truncate(time.Second).Equal(now.Truncate(time.Second)) {
+	if err != nil || s.Now.IsZero() || now.IsZero() || !s.Now.Equal(now) {
 		return c, linuxVerifierRefuse("time_unavailable")
 	}
+	// Preserve exact evidence: the pinned verifier refuses fractional wire
+	// instants rather than accepting a value rounded into its time window.
 	c.Assurance = s.Assurance
 	journal := map[string]any{}
 	for id, wire := range s.IDJournal {
@@ -213,8 +215,8 @@ func (p *LinuxVerifier) context(now time.Time, requestHash [32]byte) (verifier.C
 		{&c.AgentRevocationRoot, map[string]any{"key": p.config.AgentRevocationRoot, "purpose": "registry-revocation", "attestation_root": p.config.ServiceRoot}},
 		{&c.GrantRevocationPublisher, p.config.Publisher},
 		{&c.DeviceAttestations, map[string]any{}},
-		{&c.Time, map[string]any{"trusted": s.Trusted, "fresh": s.Fresh, "authority_until": s.AuthorityUntil.UTC().Format(time.RFC3339)}},
-		{&c.Now, s.Now.UTC().Format(time.RFC3339)}, {&c.WatermarkAvailable, s.WatermarkAvailable}, {&c.Watermark, s.Watermark.UTC().Format(time.RFC3339)},
+		{&c.Time, map[string]any{"trusted": s.Trusted, "fresh": s.Fresh, "authority_until": s.AuthorityUntil.UTC().Format(time.RFC3339Nano)}},
+		{&c.Now, s.Now.UTC().Format(time.RFC3339Nano)}, {&c.WatermarkAvailable, s.WatermarkAvailable}, {&c.Watermark, s.Watermark.UTC().Format(time.RFC3339Nano)},
 		{&c.IDJournalAvailable, s.IDJournalAvailable && s.IDJournal != nil}, {&c.IDJournal, journal},
 	}
 	for _, v := range values {
