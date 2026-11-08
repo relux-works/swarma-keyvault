@@ -178,7 +178,9 @@ func freshDirection(t *testing.T, reverse bool) *fixture {
 	f.n.set(t, "getblockchaininfo", tip{"regtest", f.best, 100, false})
 	f.n.set(t, "getblockhash", RegtestGenesis, 0)
 	f.n.set(t, "getblockhash", f.block, 99)
-	f.n.set(t, "getblockheader", map[string]any{"height": 99, "confirmations": 2}, f.block)
+	f.n.set(t, "getblockhash", f.best, 100)
+	f.n.set(t, "getblockheader", map[string]any{"hash": f.best, "height": 100, "confirmations": 1}, f.best)
+	f.n.set(t, "getblockheader", map[string]any{"hash": f.block, "height": 99, "confirmations": 2}, f.block)
 	f.n.set(t, "gettxout", map[string]any{"bestblock": f.best, "confirmations": 3, "scriptPubKey": map[string]string{"address": "LAB-OWNER"}}, f.seal.TxID, f.seal.Vout, true)
 	return f
 }
@@ -209,6 +211,18 @@ func (f *fixture) verify(t *testing.T, v *Verifier, want bool) *Observation {
 		t.Fatalf("negative admitted: %v %+v", err, result)
 	}
 	return result
+}
+
+// A real extension increments active transaction and header depths together.
+func setExtendedTip(t *testing.T, f *fixture, network string) {
+	best := strings.Repeat("f", 64)
+	f.n.set(t, "getblockchaininfo", tip{network, best, 101, false})
+	f.n.set(t, "getblockhash", best, 101)
+	f.n.set(t, "getblockheader", map[string]any{"hash": best, "height": 101, "confirmations": 1}, best)
+	f.n.set(t, "getblockheader", map[string]any{"hash": f.block, "height": 99, "confirmations": 3}, f.block)
+	f.anchor["confirmations"], f.requesterTX["confirmations"] = 3, 3
+	f.n.set(t, "getrawtransaction", f.anchor, f.ownerName.TxID, true)
+	f.n.set(t, "getrawtransaction", f.requesterTX, f.requesterName.TxID, true)
 }
 
 func TestThinSlice(t *testing.T) {

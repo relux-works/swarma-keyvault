@@ -69,11 +69,11 @@ func TestMainnetPersistedRefusal(t *testing.T) {
 			case "mempool-spend", "one-block-spend":
 				f.n.set(t, "gettxout", nil, f.seal.TxID, f.seal.Vout, true)
 				if state == "one-block-spend" {
-					f.n.set(t, "getblockchaininfo", tip{"main", strings.Repeat("f", 64), 101, false})
+					setExtendedTip(t, f, "main")
 				}
 			case "reorg":
 				setOrphanBranch(t, f)
-				f.n.set(t, "getblockchaininfo", tip{"main", strings.Repeat("9",64), 100, false})
+				f.n.set(t, "getblockchaininfo", tip{"main", strings.Repeat("9", 64), 100, false})
 			case "issuance-replacement":
 				f.ownerName.TxID = strings.Repeat("f", 64)
 				f.refreshNames(t)

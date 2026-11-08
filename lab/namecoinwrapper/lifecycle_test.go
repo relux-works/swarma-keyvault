@@ -24,8 +24,9 @@ func TestConfirmedGenerationReplacementCannotReopen(t *testing.T) {
 	f.ownerName.Height = 101
 	f.refreshNames(t)
 	f.anchor["blockhash"] = newer
+	f.anchor["confirmations"] = 1
 	f.n.set(t, "getrawtransaction", f.anchor, f.ownerName.TxID, true)
-	f.n.set(t, "getblockheader", map[string]any{"height": 101, "confirmations": 1}, newer)
+	f.n.set(t, "getblockheader", map[string]any{"hash": newer, "height": 101, "confirmations": 1}, newer)
 	f.n.set(t, "getblockhash", newer, 101)
 	f.n.set(t, "getblockchaininfo", tip{"regtest", newer, 101, false})
 	f.n.set(t, "gettxout", map[string]any{"bestblock": newer, "confirmations": 4, "scriptPubKey": map[string]string{"address": "LAB-OWNER"}}, f.seal.TxID, 0, true)

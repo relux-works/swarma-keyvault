@@ -190,6 +190,36 @@ type transaction struct {
 	Vout          []transactionOutput `json:"vout"`
 }
 
+func (tx *transaction) UnmarshalJSON(raw []byte) error {
+	return exactProjection(raw, map[string]any{"txid": &tx.TxID, "blockhash": &tx.Blockhash,
+		"confirmations": &tx.Confirmations, "vout": &tx.Vout})
+}
+
+// Lifecycle evidence requires the complete official projection, including zero
+// versus absent values. Do not accept case aliases for these identity fields.
+func exactProjection(raw []byte, projection map[string]any) error {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return ErrRefused
+	}
+	for key, dst := range projection {
+		field, present := fields[key]
+		if !present || bytes.Equal(field, []byte("null")) || json.Unmarshal(field, dst) != nil {
+			return ErrRefused
+		}
+	}
+	return nil
+}
+
+type blockHeader struct {
+	Hash                  string
+	Height, Confirmations int
+}
+
+func (h *blockHeader) UnmarshalJSON(raw []byte) error {
+	return exactProjection(raw, map[string]any{"hash": &h.Hash, "height": &h.Height, "confirmations": &h.Confirmations})
+}
+
 type transactionOutput struct {
 	N      int    `json:"n"`
 	Script script `json:"scriptPubKey"`
@@ -442,14 +472,12 @@ func checkedGeneration(ctx context.Context, n Node, v nameShow) (transaction, er
 	if count != 1 {
 		return tx, ErrRefused
 	}
-	var header struct {
-		Height        int `json:"height"`
-		Confirmations int `json:"confirmations"`
-	}
+	var header blockHeader
 	if err := call(ctx, n, "getblockheader", &header, tx.Blockhash); err != nil {
 		return tx, err
 	}
-	if header.Height < 0 || header.Height != v.Height || header.Confirmations < 1 {
+	if header.Hash != tx.Blockhash || header.Height < 1 || header.Height != v.Height ||
+		header.Confirmations < 1 || header.Confirmations != tx.Confirmations {
 		return tx, ErrRefused
 	}
 	var canonical string
@@ -497,6 +525,16 @@ type closureEvidence struct {
 
 func validTip(t tip, network string) bool {
 	return t.Chain == network && !t.IBD && t.Height > 0 && digest(t.Hash)
+}
+
+// Check a tip's own independent header and canonical height mapping. All reads
+// use the caller's existing context and broker budget; none renew a deadline.
+func checkedTip(ctx context.Context, n Node, t tip, network string) bool {
+	var header blockHeader
+	var canonical string
+	return validTip(t, network) && call(ctx, n, "getblockheader", &header, t.Hash) == nil &&
+		header.Hash == t.Hash && header.Height == t.Height && header.Confirmations == 1 &&
+		call(ctx, n, "getblockhash", &canonical, t.Height) == nil && canonical == t.Hash && ctx.Err() == nil
 }
 
 // displacedBlock uses an independently pinned block, never an unconfirmed
@@ -547,7 +585,9 @@ func sameNameIdentity(a, b nameShow) bool {
 // an encoding failure cannot hide an established canonical generation change.
 func stableGeneration(ctx context.Context, n Node, name nameShow, tx transaction, network string) bool {
 	var before, after tip
-	if call(ctx, n, "getblockchaininfo", &before) != nil || !validTip(before, network) || name.Height > before.Height {
+	if call(ctx, n, "getblockchaininfo", &before) != nil || !checkedTip(ctx, n, before, network) ||
+		name.Height < 1 || name.Height > before.Height || tx.Confirmations != before.Height-name.Height+1 ||
+		(name.Height == before.Height) != (tx.Blockhash == before.Hash) {
 		return false
 	}
 	again, _, err := resolveNameIdentity(ctx, n, name.Name)
@@ -556,6 +596,7 @@ func stableGeneration(ctx context.Context, n Node, name nameShow, tx transaction
 	}
 	repeated, err := checkedGeneration(ctx, n, again)
 	return err == nil && repeated.TxID == tx.TxID && repeated.Blockhash == tx.Blockhash &&
+		repeated.Confirmations == tx.Confirmations &&
 		call(ctx, n, "getblockchaininfo", &after) == nil && after == before && ctx.Err() == nil
 }
 
@@ -587,10 +628,13 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if err := call(ctx, n, "getblockchaininfo", &before); err != nil {
 		return nil, err
 	}
-	if before.Chain != network || before.IBD || before.Height < 1 || !digest(before.Hash) {
+	if !validTip(before, network) {
 		return nil, ErrRefused
 	}
 	if err := call(ctx, n, "getblockhash", &genesis, 0); err != nil || genesis != expectedGenesis {
+		return nil, ErrRefused
+	}
+	if !checkedTip(ctx, n, before, network) {
 		return nil, ErrRefused
 	}
 	certHash := hash(certificate)
@@ -650,6 +694,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 		}
 		return refuse(ErrRefused)
 	}
+	if owner.Height > before.Height || anchor.Confirmations != before.Height-owner.Height+1 ||
+		(owner.Height == before.Height) != (anchor.Blockhash == before.Hash) {
+		return refuse(ErrRefused)
+	}
 	if err := decodeNameValue(&owner, fields); err != nil {
 		return refuse(err)
 	}
@@ -686,6 +734,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 				closeObservation(evidence)
 			}
 		}
+		return refuse(ErrRefused)
+	}
+	if requester.Height > before.Height || requesterTX.Confirmations != before.Height-requester.Height+1 ||
+		(requester.Height == before.Height) != (requesterTX.Blockhash == before.Hash) {
 		return refuse(ErrRefused)
 	}
 	if err := checkedNameValue(requesterTX, requester); err != nil {
@@ -743,7 +795,14 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 		return refuse(ErrRefused)
 	}
 	if after != before {
-		closeObservation(closureEvidence{Reason: "observed-tip-change", Before: &before, After: &after})
+		// One hash cannot identify two heights. A differing projection alone
+		// proves no lifecycle event. Establish the changed tip independently,
+		// bracketed by equal observations, before making refusal durable.
+		var repeated tip
+		if after.Hash != before.Hash && checkedTip(ctx, n, after, network) &&
+			call(ctx, n, "getblockchaininfo", &repeated) == nil && repeated == after && ctx.Err() == nil {
+			closeObservation(closureEvidence{Reason: "observed-tip-change", Before: &before, After: &after})
+		}
 		return refuse(ErrRefused)
 	}
 	// Last public check includes mempool spends, after names, tip and CLI.

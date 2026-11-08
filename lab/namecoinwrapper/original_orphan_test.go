@@ -19,6 +19,7 @@ func setOrphanBranch(t *testing.T, f *fixture) {
 	f.n.set(t, "getblockheader", map[string]any{"hash": canonical, "height": 99, "confirmations": 2}, canonical)
 	f.n.set(t, "getblockhash", canonical, 99)
 	f.n.set(t, "getblockhash", best, 100)
+	f.n.set(t, "getblockheader", map[string]any{"hash": best, "height": 100, "confirmations": 1}, best)
 	f.n.set(t, "getblockchaininfo", tip{"regtest", best, 100, false})
 }
 

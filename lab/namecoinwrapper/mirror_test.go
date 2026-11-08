@@ -211,15 +211,16 @@ func TestMirrorLifecycleRefusesRestoration(t *testing.T) {
 				f.refreshNames(t)
 				newer := strings.Repeat("1", 64)
 				f.anchor["blockhash"] = newer
+				f.anchor["confirmations"] = 1
 				f.n.set(t, "getrawtransaction", f.anchor, f.ownerName.TxID, true)
-				f.n.set(t, "getblockheader", map[string]any{"height": 101, "confirmations": 1}, newer)
+				f.n.set(t, "getblockheader", map[string]any{"hash": newer, "height": 101, "confirmations": 1}, newer)
 				f.n.set(t, "getblockhash", newer, 101)
 				f.n.set(t, "getblockchaininfo", tip{"regtest", newer, 101, false})
 				f.n.set(t, "gettxout", map[string]any{"bestblock": newer, "confirmations": 4, "scriptPubKey": map[string]string{"address": "LAB-OWNER"}}, f.seal.TxID, 0, true)
 			} else {
 				f.n.set(t, "gettxout", nil, f.seal.TxID, f.seal.Vout, true)
 				if state == "confirmed-spend" {
-					f.n.set(t, "getblockchaininfo", tip{"regtest", strings.Repeat("f", 64), 101, false})
+					setExtendedTip(t, f, "regtest")
 				}
 			}
 			f.verify(t, v, false)

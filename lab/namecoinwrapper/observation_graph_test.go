@@ -112,7 +112,7 @@ func TestObservationLifecycleActualGraph(t *testing.T) {
 						f.anchor["confirmations"] = 0
 					}
 					f.n.set(t, "getrawtransaction", f.anchor, f.ownerName.TxID, true)
-					f.n.set(t, "getblockheader", map[string]any{"height": 101, "confirmations": 1}, newer)
+					f.n.set(t, "getblockheader", map[string]any{"hash": newer, "height": 101, "confirmations": 1}, newer)
 					f.n.set(t, "getblockhash", newer, 101)
 					f.n.set(t, "getblockchaininfo", tip{"regtest", newer, 101, false})
 					var fields map[string]any
@@ -168,7 +168,7 @@ func TestObservationLifecycleActualGraph(t *testing.T) {
 					changes := map[string]json.RawMessage{cliKey(args...): marshal(t, fields)}
 					if permanent {
 						changes[cliKey("getrawtransaction", show.TxID, "true")] = marshal(t, tx)
-						changes[cliKey("getblockheader", newer)] = marshal(t, map[string]any{"height": 101, "confirmations": 1})
+						changes[cliKey("getblockheader", newer)] = marshal(t, map[string]any{"hash": newer, "height": 101, "confirmations": 1})
 						changes[cliKey("getblockhash", "101")] = marshal(t, newer)
 						changes[cliKey("getblockchaininfo")] = marshal(t, tip{"regtest", newer, 101, false})
 					}
@@ -185,7 +185,13 @@ func TestObservationLifecycleActualGraph(t *testing.T) {
 						permanent = true
 						raw = marshal(t, tip{"regtest", strings.Repeat("f", 64), 101, false})
 					}
-					transition([]string{"getblockchaininfo"}, 2, map[string]json.RawMessage{cliKey("getblockchaininfo"): raw})
+					changes := map[string]json.RawMessage{cliKey("getblockchaininfo"): raw}
+					if mode == "tip-change" {
+						newer := strings.Repeat("f", 64)
+						changes[cliKey("getblockheader", newer)] = marshal(t, map[string]any{"hash": newer, "height": 101, "confirmations": 1})
+						changes[cliKey("getblockhash", "101")] = marshal(t, newer)
+					}
+					transition([]string{"getblockchaininfo"}, 2, changes)
 				case "unknown-seal":
 					permanent = true
 					delete(f.n.data, callKey("gettxout", f.seal.TxID, f.seal.Vout, true))
