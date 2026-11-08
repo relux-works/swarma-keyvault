@@ -611,3 +611,10 @@ Go regression entry point: `go test ./lab/namecoinwrapper ./lab/sealwatch -run
 `scripts/keyvault-test-confined.sh` on macOS and keep the Keychain skip gate.
 Test logs and disposable artifacts belong under `.temp/`. These checks establish
 JSON boundary behavior, not production transport or effect qualification.
+
+Name-value records follow the same projection boundary at `swarma`, each known
+`keyvault_*` member and the seal's `txid`/`vout`. Alias-only optional members also
+refuse, including fields unused by that owner/requester role. Unknown non-alias
+members remain ignored; whitespace and member order are not canonicalized.
+`TestW7RecordExactProjection` and `TestW7RecordProjectionGraph` cover parser and
+anchored-graph refusal, unchanged latch state and valid restoration controls.

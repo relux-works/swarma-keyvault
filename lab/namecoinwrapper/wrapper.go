@@ -432,29 +432,17 @@ func parseRecord(v nameShow) (record, error) {
 	// encoding/json matches struct fields case-insensitively. Project the exact
 	// public record keys explicitly so spelling aliases cannot select a pin.
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(outer["swarma"], &fields); err != nil {
+	if err := projectFields(outer, map[string]any{"swarma": &fields}, true); err != nil {
 		return r, ErrRefused
 	}
-	for key, dst := range map[string]*string{"keyvault_owner_spki": &r.Swarma.Owner, "keyvault_requester_spki": &r.Swarma.Requester, "keyvault_certificate_sha256": &r.Swarma.Certificate} {
-		if raw, ok := fields[key]; ok {
-			if err := json.Unmarshal(raw, dst); err != nil {
-				return r, ErrRefused
-			}
-		}
-	}
-	if raw, ok := fields["keyvault_seal"]; ok {
-		var f map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &f); err != nil {
-			return r, ErrRefused
-		}
-		p := &point{}
-		if err := json.Unmarshal(f["txid"], &p.TxID); err != nil {
-			return r, ErrRefused
-		}
-		if err := json.Unmarshal(f["vout"], &p.Vout); err != nil {
-			return r, ErrRefused
-		}
-		r.Swarma.Seal = p
+	// Owner and requester records use different subsets. Optional known keys
+	// still reject aliases; unrelated extensions, whitespace and order are not
+	// a canonicality contract here. The outer scanner covers all duplicates.
+	if err := projectFields(fields, map[string]any{
+		"keyvault_owner_spki": &r.Swarma.Owner, "keyvault_requester_spki": &r.Swarma.Requester,
+		"keyvault_certificate_sha256": &r.Swarma.Certificate, "keyvault_seal": &r.Swarma.Seal,
+	}, false); err != nil {
+		return r, ErrRefused
 	}
 	return r, nil
 }

@@ -5,6 +5,11 @@ import (
 	"unicode"
 )
 
+func (p *point) UnmarshalJSON(raw []byte) error {
+	*p = point{}
+	return exactProjection(raw, map[string]any{"txid": &p.TxID, "vout": &p.Vout})
+}
+
 type sealOutput struct {
 	Bestblock     string
 	Confirmations int
