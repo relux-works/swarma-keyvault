@@ -8,6 +8,25 @@ malformed, unconfirmed or unavailable generation claim is not canonical
 replacement evidence. Retain the same private root across restart; a restored
 original branch and newly signed request cannot reopen a persisted closure.
 
+The original anchor is independently pinned, so its canonical displacement can
+also be established when Core projects its transaction with zero confirmations
+or its header with minus one. The wrapper reads the pinned header's height and
+requires two equal, different canonical hashes at that height between matching
+valid tip observations, a matching canonical block header and confirmation depth,
+and the canonical hash at the observed tip height. Missing replies, inconsistent heights, changing hashes
+or tips provide no displacement proof. These bounded sequential reads do not
+form an atomic Core snapshot and cannot exclude an unobserved transition away
+and back between calls.
+
+Malformed values, unavailable requester history, failed second name reads and
+unavailable or malformed tip replies refuse the attempt without persisting a
+lifecycle claim. A healthy restoration with a fresh valid request can recover.
+Confirmed replacements are rechecked with matching name identity, confirmed
+canonical generation and stable tips before closure, including replacements
+whose value cannot be decoded. The separate conservative unknown/spent seal
+policy still persists refusal. Each new latch records its evidence reason;
+old latch files retain their refusal meaning.
+
 This is a lab observation library with default regtest compatibility and an
 explicit independent mainnet policy. `Verifier.Verify` reads
 public facts through an independently installed own-node `Node` read broker,
@@ -126,7 +145,7 @@ action, target, cycle and exclusive expiry are checked by the unchanged CLI.
 A private `closed-<exact certificate hash>` refusal latch survives verifier
 object/process restart when the same owner-private root is retained. An observed
 confirmed owner issuance-generation replacement, spend, unknown seal, anchor
-reorg, mid-observation name change or changed tip
+reorg, confirmed mid-observation name-generation change or valid changed tip
 closes that certificate. A first-block spend is final for this lab policy;
 restoring the UTXO after a reorg does not reopen it. The root must not be deleted
 or recreated during a run. This is a small refusal latch, not a durable

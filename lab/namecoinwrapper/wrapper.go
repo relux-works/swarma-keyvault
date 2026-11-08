@@ -97,6 +97,23 @@ type tip struct {
 	Height int    `json:"blocks"`
 	IBD    bool   `json:"initialblockdownload"`
 }
+
+// A missing boolean is not evidence that IBD is false. Require the complete
+// official projection before a changed tip can carry persistent meaning.
+func (t *tip) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return ErrRefused
+	}
+	for key, dst := range map[string]any{"chain": &t.Chain, "bestblockhash": &t.Hash, "blocks": &t.Height, "initialblockdownload": &t.IBD} {
+		field, present := fields[key]
+		if !present || bytes.Equal(field, []byte("null")) || json.Unmarshal(field, dst) != nil {
+			return ErrRefused
+		}
+	}
+	return nil
+}
+
 type point struct {
 	TxID string `json:"txid"`
 	Vout int    `json:"vout"`
@@ -466,6 +483,82 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 	return tx, err
 }
 
+// A latch records the evidence class, rather than turning every refusal into
+// an assertion that a canonical lifecycle event occurred. Seal uncertainty is
+// deliberately a separate conservative policy, not proof of a spend.
+type closureEvidence struct {
+	Reason    string `json:"reason"`
+	Block     string `json:"block,omitempty"`
+	Canonical string `json:"canonical,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	Before    *tip   `json:"before,omitempty"`
+	After     *tip   `json:"after,omitempty"`
+}
+
+func validTip(t tip, network string) bool {
+	return t.Chain == network && !t.IBD && t.Height > 0 && digest(t.Hash)
+}
+
+// displacedBlock uses an independently pinned block, never an unconfirmed
+// replacement claim. Core retains the original block's height when its header
+// has confirmations=-1 and its transaction has confirmations=0. Two equal
+// canonical hashes, bracketed by equal valid tips, establish the observed
+// displacement without requiring either orphan projection to be confirmed.
+// These are bounded sequential observations, not an atomic Core snapshot;
+// transitions away and back between reads cannot be excluded by this API.
+func displacedBlock(ctx context.Context, n Node, block, network string) (closureEvidence, bool) {
+	var before, after tip
+	var header struct {
+		Hash   string `json:"hash"`
+		Height *int   `json:"height"`
+	}
+	var canonicalHeader struct {
+		Hash          string `json:"hash"`
+		Height        *int   `json:"height"`
+		Confirmations *int   `json:"confirmations"`
+	}
+	var first, second string
+	var tipHash string
+	if !digest(block) || call(ctx, n, "getblockchaininfo", &before) != nil || !validTip(before, network) ||
+		call(ctx, n, "getblockheader", &header, block) != nil || header.Hash != block || header.Height == nil ||
+		*header.Height < 1 || *header.Height > before.Height {
+		return closureEvidence{}, false
+	}
+	h := *header.Height
+	if call(ctx, n, "getblockhash", &first, h) != nil || !digest(first) || first == block ||
+		(h == before.Height && first != before.Hash) ||
+		(h < before.Height && first == before.Hash) ||
+		call(ctx, n, "getblockheader", &canonicalHeader, first) != nil || canonicalHeader.Hash != first || canonicalHeader.Height == nil ||
+		*canonicalHeader.Height != h || canonicalHeader.Confirmations == nil || *canonicalHeader.Confirmations != before.Height-h+1 ||
+		call(ctx, n, "getblockhash", &tipHash, before.Height) != nil || tipHash != before.Hash ||
+		call(ctx, n, "getblockhash", &second, h) != nil || second != first ||
+		call(ctx, n, "getblockchaininfo", &after) != nil || after != before || ctx.Err() != nil {
+		return closureEvidence{}, false
+	}
+	return closureEvidence{Reason: "canonical-block-displacement", Block: block, Canonical: first, Height: h, Before: &before, After: &after}, true
+}
+
+func sameNameIdentity(a, b nameShow) bool {
+	return a.Name == b.Name && a.TxID == b.TxID && a.Vout == b.Vout && a.Address == b.Address && a.Height == b.Height
+}
+
+// Recheck identity and confirmed generation under equal valid tip observations
+// before persisting a replacement. Value decoding is intentionally excluded:
+// an encoding failure cannot hide an established canonical generation change.
+func stableGeneration(ctx context.Context, n Node, name nameShow, tx transaction, network string) bool {
+	var before, after tip
+	if call(ctx, n, "getblockchaininfo", &before) != nil || !validTip(before, network) || name.Height > before.Height {
+		return false
+	}
+	again, _, err := resolveNameIdentity(ctx, n, name.Name)
+	if err != nil || !sameNameIdentity(again, name) {
+		return false
+	}
+	repeated, err := checkedGeneration(ctx, n, again)
+	return err == nil && repeated.TxID == tx.TxID && repeated.Blockhash == tx.Blockhash &&
+		call(ctx, n, "getblockchaininfo", &after) == nil && after == before && ctx.Err() == nil
+}
+
 // Verify returns only a repeatable verification observation, never admission.
 // It does not implement replay reservation, a 30-minute idle STOP or a provider.
 // at is an explicit lab observation; it is not a protected production clock.
@@ -508,13 +601,14 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if _, err := os.Lstat(latch); !os.IsNotExist(err) {
 		return nil, ErrRefused
 	}
-	closeObservation := func() {
+	closeObservation := func(evidence closureEvidence) {
 		v.closed = true
 		// Even an I/O failure keeps this instance closed. The caller must retain
 		// this private root; removing its state is an explicit reset, not recovery.
 		f, err := os.OpenFile(latch, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err == nil {
-			_, _ = f.Write([]byte("refused\n"))
+			raw, _ := json.Marshal(evidence)
+			_, _ = f.Write(append(raw, '\n'))
 			_ = f.Sync()
 			_ = f.Close()
 			if parent, err := os.Open(p.PrivateRoot); err == nil {
@@ -523,62 +617,79 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 			}
 		}
 	}
+	// A missing name or a later temporary projection error can also follow an
+	// original issuance reorg. Independently test the pinned block before any
+	// refusal return; availability errors alone never establish displacement.
+	refuse := func(err error) (*Observation, error) {
+		if !v.closed {
+			if evidence, displaced := displacedBlock(ctx, n, p.AnchorBlock, network); displaced {
+				closeObservation(evidence)
+			}
+		}
+		return nil, err
+	}
 	owner, fields, err := resolveNameIdentity(ctx, n, p.OwnerName)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	anchor, err := checkedGeneration(ctx, n, owner)
 	if err != nil {
 		// Preserve the original issuance's reorg latch. This is a positive
 		// canonical contradiction of independently pinned original issuance,
 		// not a claimed replacement or an upstream availability failure.
-		if err == errNoncanonicalGeneration && owner.TxID == p.AnchorTxID && anchor.Blockhash == p.AnchorBlock {
-			closeObservation()
-		}
 		// Unconfirmed, malformed or unavailable evidence is a refusal, not
 		// proof of a canonical replacement. Do not persist such a claim.
-		return nil, ErrRefused
+		return refuse(ErrRefused)
 	}
 	// Establish canonical confirmation before treating an issuance replacement
 	// as final. Persist closure BEFORE parsing the replacement's record or
 	// resolving the requester: neither can hide a confirmed generation change.
 	if owner.TxID != p.AnchorTxID || anchor.Blockhash != p.AnchorBlock {
-		closeObservation()
-		return nil, ErrRefused
+		if stableGeneration(ctx, n, owner, anchor, network) {
+			closeObservation(closureEvidence{Reason: "confirmed-issuance-replacement", Block: anchor.Blockhash, Height: owner.Height})
+		}
+		return refuse(ErrRefused)
 	}
 	if err := decodeNameValue(&owner, fields); err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	if err := checkedNameValue(anchor, owner); err != nil {
-		closeObservation()
-		return nil, err
+		return refuse(err)
 	}
 	o, err := parseRecord(owner)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	if !digest(o.Swarma.Certificate) || o.Swarma.Certificate != certHash || o.Swarma.Seal == nil || o.Swarma.Seal.TxID != p.SealTxID || o.Swarma.Seal.Vout != p.SealVout {
-		return nil, ErrRefused
+		return refuse(ErrRefused)
 	}
 	requester, err := resolveName(ctx, n, p.RequesterName)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	r, err := parseRecord(requester)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	op, err := public(o.Swarma.Owner)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	rp, err := public(r.Swarma.Requester)
 	if err != nil || bytes.Equal(op, rp) {
-		return nil, ErrRefused
+		return refuse(ErrRefused)
 	}
-	if _, err := checkedName(ctx, n, requester); err != nil {
-		closeObservation()
-		return nil, err
+	requesterTX, err := checkedGeneration(ctx, n, requester)
+	if err != nil {
+		if err == errNoncanonicalGeneration {
+			if evidence, displaced := displacedBlock(ctx, n, requesterTX.Blockhash, network); displaced {
+				closeObservation(evidence)
+			}
+		}
+		return refuse(ErrRefused)
+	}
+	if err := checkedNameValue(requesterTX, requester); err != nil {
+		return refuse(err)
 	}
 	found := 0
 	for _, out := range anchor.Vout {
@@ -587,41 +698,61 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 		}
 	}
 	if found != 1 {
-		return nil, ErrRefused
+		return refuse(ErrRefused)
 	}
 	if err := checkSeal(ctx, n, *o.Swarma.Seal, owner.Address, before.Hash); err != nil {
-		closeObservation()
-		return nil, err
+		closeObservation(closureEvidence{Reason: "seal-spent-or-unknown"})
+		return refuse(err)
 	}
 	facts, err := verifyCLI(ctx, p, o.Swarma.Owner, r.Swarma.Requester, certificate, request, at)
 	if err != nil {
-		return nil, err
+		return refuse(err)
 	}
 	// A name can be updated independently of the observed block tip. Re-resolve
 	// both names; no changed pin/value/generation is admitted in this observation.
-	ownerAfter, err := resolveName(ctx, n, p.OwnerName)
-	if err != nil || ownerAfter != owner {
-		closeObservation()
-		return nil, ErrRefused
+	ownerAfter, ownerFields, err := resolveNameIdentity(ctx, n, p.OwnerName)
+	if err != nil {
+		return refuse(ErrRefused)
 	}
-	requesterAfter, err := resolveName(ctx, n, p.RequesterName)
-	if err != nil || requesterAfter != requester {
-		closeObservation()
-		return nil, ErrRefused
+	if !sameNameIdentity(ownerAfter, owner) {
+		if changed, err := checkedGeneration(ctx, n, ownerAfter); err == nil &&
+			(ownerAfter.TxID != owner.TxID || changed.Blockhash != anchor.Blockhash) && stableGeneration(ctx, n, ownerAfter, changed, network) {
+			closeObservation(closureEvidence{Reason: "confirmed-owner-generation-change", Block: changed.Blockhash, Height: ownerAfter.Height})
+		}
+		return refuse(ErrRefused)
+	}
+	if decodeNameValue(&ownerAfter, ownerFields) != nil || ownerAfter != owner {
+		return refuse(ErrRefused)
+	}
+	requesterAfter, requesterFields, err := resolveNameIdentity(ctx, n, p.RequesterName)
+	if err != nil {
+		return refuse(ErrRefused)
+	}
+	if !sameNameIdentity(requesterAfter, requester) {
+		if changed, err := checkedGeneration(ctx, n, requesterAfter); err == nil &&
+			(requesterAfter.TxID != requester.TxID || changed.Blockhash != requesterTX.Blockhash) && stableGeneration(ctx, n, requesterAfter, changed, network) {
+			closeObservation(closureEvidence{Reason: "confirmed-requester-generation-change", Block: changed.Blockhash, Height: requesterAfter.Height})
+		}
+		return refuse(ErrRefused)
+	}
+	if decodeNameValue(&requesterAfter, requesterFields) != nil || requesterAfter != requester {
+		return refuse(ErrRefused)
 	}
 	var after tip
-	if err := call(ctx, n, "getblockchaininfo", &after); err != nil || after != before {
-		closeObservation()
-		return nil, ErrRefused
+	if err := call(ctx, n, "getblockchaininfo", &after); err != nil || !validTip(after, network) {
+		return refuse(ErrRefused)
+	}
+	if after != before {
+		closeObservation(closureEvidence{Reason: "observed-tip-change", Before: &before, After: &after})
+		return refuse(ErrRefused)
 	}
 	// Last public check includes mempool spends, after names, tip and CLI.
 	if err := checkSeal(ctx, n, *o.Swarma.Seal, owner.Address, before.Hash); err != nil {
-		closeObservation()
-		return nil, err
+		closeObservation(closureEvidence{Reason: "seal-spent-or-unknown"})
+		return refuse(err)
 	}
 	if err := ctx.Err(); err != nil {
-		closeObservation()
-		return nil, err
+		return refuse(err)
 	}
 	return &Observation{"verified-lab-observation", facts.CertificateID, facts.RequestID, certHash, anchor.Blockhash}, nil
 }

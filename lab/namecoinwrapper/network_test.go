@@ -72,7 +72,8 @@ func TestMainnetPersistedRefusal(t *testing.T) {
 					f.n.set(t, "getblockchaininfo", tip{"main", strings.Repeat("f", 64), 101, false})
 				}
 			case "reorg":
-				f.n.set(t, "getblockhash", strings.Repeat("f", 64), 99)
+				setOrphanBranch(t, f)
+				f.n.set(t, "getblockchaininfo", tip{"main", strings.Repeat("9",64), 100, false})
 			case "issuance-replacement":
 				f.ownerName.TxID = strings.Repeat("f", 64)
 				f.refreshNames(t)

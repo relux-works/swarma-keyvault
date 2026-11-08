@@ -39,5 +39,10 @@ func TestFinalSealCallbackCancellation(t *testing.T) {
 		}
 	}
 	f.n.mutate = nil
-	f.verify(t, v, false)
+	// Cancellation after a successful seal reply proves no lifecycle change.
+	// The current attempt refused, but healthy fresh requests can recover.
+	f.operation["request_id"] = "fresh-valid-after-final-callback-cancellation"
+	f.resign(t)
+	f.verify(t, v, true)
+	f.verify(t, new(Verifier), true)
 }

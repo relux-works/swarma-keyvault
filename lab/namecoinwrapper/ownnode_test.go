@@ -19,13 +19,43 @@ func TestMain(m *testing.M) {
 			os.Exit(3)
 		}
 		var fixture struct {
-			Network string
-			Replies map[string]json.RawMessage
+			Network     string
+			Replies     map[string]json.RawMessage
+			Counts      map[string]int
+			Transitions []struct {
+				Args       []string
+				Occurrence int
+				Replies    map[string]json.RawMessage
+			}
 		}
 		if json.Unmarshal(raw, &fixture) != nil || os.Args[3] != "-chain="+fixture.Network || os.Args[4] != "-rpcclienttimeout=2" {
 			os.Exit(4)
 		}
 		key, _ := json.Marshal(os.Args[5:])
+		// Ordered, inert offline observations across actual one-shot CLI
+		// children. Only this test fixture mutates its own private transcript.
+		if len(fixture.Transitions) > 0 {
+			if fixture.Counts == nil {
+				fixture.Counts = map[string]int{}
+			}
+			fixture.Counts[string(key)]++
+			for _, transition := range fixture.Transitions {
+				args, _ := json.Marshal(transition.Args)
+				if string(args) == string(key) && fixture.Counts[string(key)] == transition.Occurrence {
+					for k, v := range transition.Replies {
+						if v == nil {
+							delete(fixture.Replies, k)
+						} else {
+							fixture.Replies[k] = v
+						}
+					}
+				}
+			}
+			updated, err := json.Marshal(fixture)
+			if err != nil || os.WriteFile(strings.TrimPrefix(os.Args[1], "-conf="), updated, 0600) != nil {
+				os.Exit(7)
+			}
+		}
 		reply, ok := fixture.Replies[string(key)]
 		if !ok {
 			os.Exit(5)
