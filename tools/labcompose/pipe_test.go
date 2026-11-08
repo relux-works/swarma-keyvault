@@ -182,9 +182,15 @@ func TestInheritedProtocolHelper(t *testing.T) {
 	if mode == "" {
 		return
 	}
+	owned := strings.HasPrefix(mode, "owned-")
+	mode = strings.TrimPrefix(mode, "owned-")
 	flagsIn, _, _ := syscall.Syscall(syscall.SYS_FCNTL, 0, syscall.F_GETFL, 0)
 	flagsOut, _, _ := syscall.Syscall(syscall.SYS_FCNTL, 1, syscall.F_GETFL, 0)
-	p, err := openProtocol()
+	open := openProtocol
+	if owned {
+		open = openOwnedProtocol
+	}
+	p, err := open()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +212,9 @@ func TestInheritedProtocolHelper(t *testing.T) {
 		t.Fatalf("inherited %s: %v", mode, err)
 	}
 	p.Close()
+	if owned {
+		os.Exit(0)
+	}
 	// Owned endpoints closed; inherited stdin/stdout still belong to the caller.
 	if _, err := os.Stdin.Stat(); err != nil {
 		t.Fatal(err)
@@ -222,7 +231,7 @@ func TestInheritedProtocolHelper(t *testing.T) {
 }
 
 func TestInheritedProtocolCancellation(t *testing.T) {
-	for _, mode := range []string{"write", "read", "responsive"} {
+	for _, mode := range []string{"write", "read", "responsive", "owned-write", "owned-read", "owned-responsive"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -241,12 +250,13 @@ func TestInheritedProtocolCancellation(t *testing.T) {
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
-			if mode != "write" {
+			baseMode := strings.TrimPrefix(mode, "owned-")
+			if baseMode != "write" {
 				reader := bufio.NewReader(out)
 				if _, err := reader.ReadBytes('\n'); err != nil {
 					t.Fatal(err)
 				}
-				if mode == "responsive" {
+				if baseMode == "responsive" {
 					if _, err := in.Write([]byte("{\"result\":true}\n")); err != nil {
 						t.Fatal(err)
 					}

@@ -53,12 +53,24 @@ func (r mirrorWatchRPC) Call(ctx context.Context, method string, args ...any) (i
 // The same reverse certificate digest and exact seal feed the unchanged
 // watcher. Public transaction inputs drive the states, not supplied verdicts.
 func TestMirrorSealWatcherLifecycle(t *testing.T) {
+	for _, network := range []string{"regtest", "main"} {
+		t.Run(network, func(t *testing.T) { mirrorSealWatcherLifecycle(t, network) })
+	}
+}
+
+func mirrorSealWatcherLifecycle(t *testing.T, network string) {
 	f := freshDirection(t, true)
+	genesis := RegtestGenesis
+	if network == "main" {
+		genesis = MainnetGenesis
+		f.p.Network, f.p.Genesis = network, genesis
+		f.n.set(t, "getblockhash", genesis, 0)
+	}
 	now := time.Now()
-	b := watch.Binding{Seal: watch.Point{TxID: f.seal.TxID, Vout: uint32(f.seal.Vout)}, SealScript: "51", Anchor: watch.Anchor{Tip: watch.Tip{Height: 99, Hash: f.block}, TxID: f.p.AnchorTxID}, Commitment: hash(f.certificate), Genesis: RegtestGenesis, Chain: "regtest", StartTip: watch.Tip{Height: 100, Hash: f.best}, Deadline: now.Add(time.Minute), ProofValidUntil: f.at.Add(time.Hour), LastBlockAt: now.Add(-time.Minute)}
+	b := watch.Binding{Seal: watch.Point{TxID: f.seal.TxID, Vout: uint32(f.seal.Vout)}, SealScript: "51", Anchor: watch.Anchor{Tip: watch.Tip{Height: 99, Hash: f.block}, TxID: f.p.AnchorTxID}, Commitment: hash(f.certificate), Genesis: genesis, Chain: network, StartTip: watch.Tip{Height: 100, Hash: f.best}, Deadline: now.Add(time.Minute), ProofValidUntil: f.at.Add(time.Hour), LastBlockAt: now.Add(-time.Minute)}
 	l := watch.DefaultLimits()
 	l.Polls = 1
-	f.n.set(t, "getblockchaininfo", map[string]any{"chain": "regtest", "blocks": 100, "headers": 100, "bestblockhash": f.best, "initialblockdownload": false})
+	f.n.set(t, "getblockchaininfo", map[string]any{"chain": network, "blocks": 100, "headers": 100, "bestblockhash": f.best, "initialblockdownload": false})
 	f.n.set(t, "getblockhash", f.best, 100)
 	f.n.set(t, "getrawtransaction", f.anchor, f.p.AnchorTxID, true, f.block)
 	f.n.set(t, "getrawmempool", []string{}, false)
@@ -88,7 +100,7 @@ func TestMirrorSealWatcherLifecycle(t *testing.T) {
 	b.Prior = observe(watch.Suspend)
 	f.verify(t, &Verifier{}, false)
 	newer := strings.Repeat("1", 64)
-	f.n.set(t, "getblockchaininfo", map[string]any{"chain": "regtest", "blocks": 101, "headers": 101, "bestblockhash": newer, "initialblockdownload": false})
+	f.n.set(t, "getblockchaininfo", map[string]any{"chain": network, "blocks": 101, "headers": 101, "bestblockhash": newer, "initialblockdownload": false})
 	f.n.set(t, "getblockhash", newer, 101)
 	f.n.set(t, "getblock", map[string]any{"hash": newer, "height": 101, "tx": []any{map[string]any{"txid": strings.Repeat("2", 64), "vin": []any{map[string]any{"coinbase": "00"}}}, spend}}, newer, 2)
 	b.Prior = observe(watch.FinalRevoked)

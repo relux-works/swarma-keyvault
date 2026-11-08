@@ -36,6 +36,27 @@ func openProtocol() (*pipe, error) {
 	return newPipe(in, out)
 }
 
+// openOwnedProtocol is the portable supervisor route. The supervisor creates
+// dedicated anonymous pipes and transfers the child endpoints exclusively;
+// no other process may retain aliases to these file descriptions. Unlike the
+// legacy opener this contract explicitly permits changing flags and closing
+// inherited stdin/stdout. It requires no /proc or external platform tools.
+func openOwnedProtocol() (*pipe, error) {
+	for _, f := range []*os.File{os.Stdin, os.Stdout} {
+		st, err := f.Stat()
+		if err != nil || st.Mode()&os.ModeNamedPipe == 0 {
+			return nil, fmt.Errorf("owned protocol requires dedicated pipes")
+		}
+	}
+	if err := syscall.SetNonblock(0, true); err != nil {
+		return nil, err
+	}
+	if err := syscall.SetNonblock(1, true); err != nil {
+		return nil, err
+	}
+	return newPipe(os.NewFile(0, "owned-protocol-input"), os.NewFile(1, "owned-protocol-output"))
+}
+
 // newPipe takes ownership, including on failure. Only pollable pipes qualify.
 func newPipe(in, out *os.File) (*pipe, error) {
 	if err := in.SetReadDeadline(time.Time{}); err != nil {

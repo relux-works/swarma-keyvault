@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Labcompose verification observation input",
+  "description": "Verification mode contract. Watch mode retains the existing sealwatch.Binding contract and independently matched network policy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["Mode", "Policy", "Certificate", "Request", "At"],
+  "properties": {
+    "Mode": {"const": "verify"},
+    "Certificate": {"type": "string", "pattern": "^/"},
+    "Request": {"type": "string", "pattern": "^/"},
+    "At": {"type": "string", "format": "date-time"},
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["OwnerName", "RequesterName", "Account", "Device", "Deployment", "Executor", "Cycle", "CLI", "CLIHash", "PrivateRoot", "AnchorTxID", "AnchorBlock", "SealTxID", "SealVout"],
+      "dependentRequired": {"Network": ["Genesis"], "Genesis": ["Network"]},
+      "properties": {
+        "Network": {"enum": ["", "main", "regtest"]},
+        "Genesis": {"type": "string"},
+        "ExpectedOwner": {"type": "string"},
+        "OwnerName": {"type": "string", "minLength": 1, "maxLength": 255},
+        "RequesterName": {"type": "string", "minLength": 1, "maxLength": 255},
+        "Account": {"type": "string"},
+        "Device": {"type": "string"},
+        "Deployment": {"type": "string"},
+        "Executor": {"type": "string"},
+        "Cycle": {"type": "string"},
+        "CLI": {"type": "string", "pattern": "^/"},
+        "CLIHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "PrivateRoot": {"type": "string", "pattern": "^/"},
+        "AnchorTxID": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "AnchorBlock": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "SealTxID": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "SealVout": {"type": "integer", "minimum": 0}
+      },
+      "allOf": [
+        {"if": {"required": ["Network"], "properties": {"Network": {"const": "main"}}}, "then": {"properties": {"Genesis": {"const": "000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770"}}}},
+        {"if": {"required": ["Network"], "properties": {"Network": {"const": "regtest"}}}, "then": {"properties": {"Genesis": {"const": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"}}}},
+        {"if": {"required": ["Network"], "properties": {"Network": {"const": ""}}}, "then": {"properties": {"Genesis": {"const": ""}}}}
+      ]
+    }
+  }
+}

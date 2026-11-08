@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Public finite own-node lab observation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "network", "genesis", "input_sha256", "compose_sha256", "node_cli_sha256", "started_at", "finished_at", "read_calls", "effect_authorized", "node_route_qualified", "result"],
+  "properties": {
+    "type": {"const": "own-node-lab-observation-1"},
+    "network": {"enum": ["main", "regtest"]},
+    "genesis": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "input_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "compose_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "node_cli_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "finished_at": {"type": "string", "format": "date-time"},
+    "read_calls": {"type": "integer", "minimum": 0, "maximum": 256},
+    "effect_authorized": {"const": false},
+    "node_route_qualified": {"const": false},
+    "result": {"type": "object"}
+  }
+}

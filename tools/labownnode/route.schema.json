@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Independently installed own-node laboratory route",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["Network", "Genesis", "NodeCLI", "NodeCLISHA256", "NodeConfig", "NodeDataDir", "Compose", "ComposeSHA256", "PrivateRoot", "RouteID"],
+  "properties": {
+    "Network": {"enum": ["main", "regtest"]},
+    "Genesis": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NodeCLI": {"type": "string", "pattern": "^/"},
+    "NodeCLISHA256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "NodeConfig": {"type": "string", "pattern": "^/"},
+    "NodeDataDir": {"type": "string", "pattern": "^/"},
+    "Compose": {"type": "string", "pattern": "^/"},
+    "ComposeSHA256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "PrivateRoot": {"type": "string", "pattern": "^/"},
+    "RouteID": {"type": "string", "minLength": 1, "maxLength": 128}
+  },
+  "allOf": [
+    {"if": {"properties": {"Network": {"const": "main"}}}, "then": {"properties": {"Genesis": {"const": "000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770"}}}},
+    {"if": {"properties": {"Network": {"const": "regtest"}}}, "then": {"properties": {"Genesis": {"const": "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"}}}}
+  ]
+}

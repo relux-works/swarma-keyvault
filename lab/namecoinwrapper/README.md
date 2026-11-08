@@ -1,15 +1,26 @@
 # Lab Namecoin wrapper for the existing local KeyVault profile
 
-This is an offline/regtest-only library experiment. `Verifier.Verify` reads
+This is a lab observation library with default regtest compatibility and an
+explicit independent mainnet policy. `Verifier.Verify` reads
 public facts through an independently installed own-node `Node` read broker,
 then invokes an unchanged `swarma-keyvault grants verify` executable using
 closed argv. It returns a repeatable in-memory `Observation` with verdict
 `verified-lab-observation`. This value carries no admission authority or
 single-use reservation. The component is a verification observation adapter.
-It cannot run on mainnet and never invokes `execute`, an issuer, a wallet, a
+It never invokes `execute`, an issuer, a wallet, a
 hardware provider, a network client or a watcher.
 
-The Linux `labcompose` read broker owns private, pollable copies of its inherited
+`Policy.Network` and `Policy.Genesis` are independent operator inputs. Omitting
+both retains `regtest` and `RegtestGenesis`. Explicit regtest requires that
+exact pair. Mainnet requires `main` and `MainnetGenesis` together; an omitted
+field, unknown network or wrong network/genesis pair refuses. RPC chain claims,
+names, certificates and requests never select the network policy. The current
+RPC chain and block-zero hash must separately match it. The existing one-block
+revocation rule remains laboratory policy on mainnet, not a finality guarantee.
+The finite [own-node bridge](../../tools/labownnode/README.md) supplies a separate
+read-only transport only after independent route installation and review.
+
+The legacy Linux `labcompose INPUT` read broker owns private, pollable copies of its inherited
 protocol pipes. Cancellation closes those copies and interrupts both request
 writes and reply reads; it also bounds the final output write. A canceled pipe
 is terminal: partial requests and late replies are never retried. Inherited
@@ -17,6 +28,14 @@ descriptors remain open with unchanged flags. Non-pollable protocol endpoints
 are refused. The wrapper checks cancellation again after its final seal read
 before returning an observation. The separate supervisor kill/reap bound remains
 required.
+
+The explicit `labcompose --owned-protocol INPUT` mode instead accepts exclusive
+ownership of dedicated anonymous stdin/stdout pipe endpoints created by its
+supervisor. It may change their flags and close them on cancellation. This
+portable Unix route avoids `/proc`; do not use it for shared descriptors. The
+new own-node supervisor creates and transfers those endpoints. `CLIHash` is
+always independently supplied and is never replaced by the bridge. Input,
+certificate and request files are bounded before reading into memory.
 
 The default CLI's `grants verify` accepts `--config`, `--certificate`,
 `--request` and the explicit test observation `--at`. It does **not** accept
@@ -87,7 +106,7 @@ using the configured encodings. Controls include the actual option argument,
 complete encoding fields, missing/mismatched fields and encoding errors. This
 source comparison does not qualify a running node or RPC transport.
 
-The wrapper checks regtest genesis and node readiness, both current name
+The wrapper checks the independently selected network/genesis and node readiness, both current name
 outputs and confirmed canonical blocks, the owner's exact name-committed
 certificate hash and seal, exactly one `OP_RETURN 6a20<certificate hash>`, and
 an issuer-address seal with `gettxout(txid,vout,true)`. Null/unknown seal reads
@@ -151,8 +170,17 @@ source graph supplied for review, then run:
 LAB_KEYVAULT_CLI=/absolute/private/build/configurable-keyvault \
 LAB_TEST_SIGNER=/absolute/private/build/labtestsigner \
 LAB_COMPOSE=/absolute/private/build/labcompose \
+LAB_OWN_NODE=/absolute/private/build/labownnode \
+LAB_NODE_FIXTURE_CLI=/absolute/private/build/fake-node-cli \
   go test ./lab/namecoinwrapper ./lab/sealwatch -count=1 -v
 ```
+
+Build the inert fake node CLI with
+`go test -c -o /absolute/private/build/fake-node-cli ./lab/namecoinwrapper`
+without `-race`; the parent suite can still run with `-race`. This avoids a
+race-runtime exit sleep on every synthetic read subprocess and leaves all
+production call/observation deadlines intact. The fake binary's TestMain only
+serves bounded public test transcripts for the fixed CLI invocation.
 
 Default controls call the actual existing `local-prepare` with separate DER
 files, use the test-only in-process low-S signer, and call actual `grants verify`

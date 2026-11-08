@@ -1,4 +1,4 @@
-// Package namecoinwrapper is an offline/regtest-only adapter experiment.
+// Package namecoinwrapper is an explicitly configured lab observation adapter.
 // It deliberately has no RPC transport, wallet, watcher, signer or effect runner.
 package namecoinwrapper
 
@@ -24,6 +24,20 @@ import (
 )
 
 const RegtestGenesis = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
+const MainnetGenesis = "000000000062b72c5e2ceb45fbc8587e807c155b0da735e6483dfba2f0a9c770"
+
+// NetworkPolicy validates independent operator policy, never RPC or payload
+// claims. Only omission of BOTH fields retains the historical regtest default.
+func NetworkPolicy(network, genesis string) (string, string, error) {
+	if network == "" && genesis == "" {
+		return "regtest", RegtestGenesis, nil
+	}
+	if (network == "regtest" && genesis == RegtestGenesis) ||
+		(network == "main" && genesis == MainnetGenesis) {
+		return network, genesis, nil
+	}
+	return "", "", ErrRefused
+}
 
 var ErrRefused = errors.New("lab verification refused")
 
@@ -39,6 +53,9 @@ type Node interface {
 // Policy is independently installed lab policy, never derived from certificate
 // or request fields. All keys in this experiment are simulated throwaway keys.
 type Policy struct {
+	// Network and Genesis are independently installed together. Mainnet never
+	// follows from an RPC chain claim, name, request or certificate.
+	Network, Genesis string
 	// ExpectedOwner is independent identity policy, never a name-record or
 	// payload value. Empty preserves the original Alexis test profile.
 	ExpectedOwner                                string
@@ -392,6 +409,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if !digest(p.AnchorTxID) || !digest(p.AnchorBlock) || !digest(p.SealTxID) || p.SealVout < 0 {
 		return nil, ErrRefused
 	}
+	network, expectedGenesis, err := NetworkPolicy(p.Network, p.Genesis)
+	if err != nil {
+		return nil, err
+	}
 	// The broker contract and CLI share this observation deadline.
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -400,10 +421,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if err := call(ctx, n, "getblockchaininfo", &before); err != nil {
 		return nil, err
 	}
-	if before.Chain != "regtest" || before.IBD || before.Height < 1 || !digest(before.Hash) {
+	if before.Chain != network || before.IBD || before.Height < 1 || !digest(before.Hash) {
 		return nil, ErrRefused
 	}
-	if err := call(ctx, n, "getblockhash", &genesis, 0); err != nil || genesis != RegtestGenesis {
+	if err := call(ctx, n, "getblockhash", &genesis, 0); err != nil || genesis != expectedGenesis {
 		return nil, ErrRefused
 	}
 	certHash := hash(certificate)

@@ -4,8 +4,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	wrapper "github.com/relux-works/swarma-keyvault/lab/namecoinwrapper"
 	watch "github.com/relux-works/swarma-keyvault/lab/sealwatch"
@@ -35,11 +33,29 @@ type input struct {
 	Mode                 string
 }
 
+func readInput(path string, max int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, max+1))
+	if int64(len(b)) > max {
+		return nil, io.ErrShortBuffer
+	}
+	return b, err
+}
+
 func main() {
-	if len(os.Args) != 2 {
+	owned := len(os.Args) == 3 && os.Args[1] == "--owned-protocol"
+	if len(os.Args) != 2 && !owned {
 		os.Exit(2)
 	}
-	b, e := os.ReadFile(os.Args[1])
+	inputPath := os.Args[1]
+	if owned {
+		inputPath = os.Args[2]
+	}
+	b, e := readInput(inputPath, 65536)
 	if e != nil {
 		os.Exit(2)
 	}
@@ -47,7 +63,11 @@ func main() {
 	if json.Unmarshal(b, &in) != nil {
 		os.Exit(2)
 	}
-	p, e := openProtocol()
+	open := openProtocol
+	if owned {
+		open = openOwnedProtocol
+	}
+	p, e := open()
 	if e != nil {
 		os.Exit(2)
 	}
@@ -55,26 +75,27 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if in.Mode == "watch" {
+		network, genesis, err := wrapper.NetworkPolicy(in.Policy.Network, in.Policy.Genesis)
+		if err != nil || in.Binding.Chain != network || in.Binding.Genesis != genesis {
+			os.Exit(2)
+		}
 		l := watch.DefaultLimits()
 		l.Polls = 1
 		v := watch.New(spipe{p}).Watch(ctx, in.Binding, l)
 		p.send(ctx, map[string]any{"done": true, "watch": v})
 		return
 	}
-	cert, e := os.ReadFile(in.Certificate)
+	if in.Mode != "verify" {
+		os.Exit(2)
+	}
+	cert, e := readInput(in.Certificate, 98304)
 	if e != nil {
 		os.Exit(2)
 	}
-	req, e := os.ReadFile(in.Request)
+	req, e := readInput(in.Request, 12288)
 	if e != nil {
 		os.Exit(2)
 	}
-	cli, e := os.ReadFile(in.Policy.CLI)
-	if e != nil {
-		os.Exit(2)
-	}
-	h := sha256.Sum256(cli)
-	in.Policy.CLIHash = hex.EncodeToString(h[:])
 	observation, err := new(wrapper.Verifier).Verify(ctx, wpipe{p}, in.Policy, cert, req, in.At)
 	result := map[string]any{"done": true, "verified": err == nil, "observation": observation, "read_calls": p.calls}
 	if err != nil {

@@ -78,7 +78,11 @@ jobs:
           go mod download
           go mod verify
           go build -o "$fixture_bin/labcompose" ./tools/labcompose
-          for binary in swarma-keyvault labtestsigner labcompose; do
+          go build -o "$fixture_bin/labownnode" ./tools/labownnode
+          # Fake CLI transport only: avoid per-call race-runtime exit sleeps.
+          # The actual wrapper and protocol tests remain in the full race suite.
+          go test -c -o "$fixture_bin/fake-node-cli" ./lab/namecoinwrapper
+          for binary in swarma-keyvault labtestsigner labcompose labownnode fake-node-cli; do
             test -f "$fixture_bin/$binary" && test -x "$fixture_bin/$binary" && test -O "$fixture_bin/$binary"
             test ! -L "$fixture_bin/$binary"
           done
@@ -86,6 +90,8 @@ jobs:
           echo "KEYVAULT_BIN=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
           echo "LAB_TEST_SIGNER=$fixture_bin/labtestsigner" >> "$GITHUB_ENV"
           echo "LAB_COMPOSE=$fixture_bin/labcompose" >> "$GITHUB_ENV"
+          echo "LAB_OWN_NODE=$fixture_bin/labownnode" >> "$GITHUB_ENV"
+          echo "LAB_NODE_FIXTURE_CLI=$fixture_bin/fake-node-cli" >> "$GITHUB_ENV"
       # Discover all Linux-buildable Go packages with ./...; none is excluded.
       # Go excludes the Darwin-only Security.framework/Keychain cgo backend,
       # KEK code-identity inspection, sandbox-exec and Enclave helper tests,
