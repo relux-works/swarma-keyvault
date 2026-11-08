@@ -586,3 +586,28 @@ reset operation. Unknown fields and duplicate keys refuse. Tests cover the actua
 subprocess argv and selected configuration root with Go-only child fixtures;
 those tests do not qualify or install a live a2a binary. Build and test commands
 above keep local candidates and test artifacts under `.temp/`.
+
+### Exact node reply projections in the Namecoin lab
+
+The seal gate projects `gettxout.bestblock`, `confirmations`, `scriptPubKey`
+and the script fields it reads with exact Core spelling. Both headers used to
+establish original-block displacement use the same rule. A case alias cannot
+supply an official field, and duplicate or Unicode case-fold-equal object
+members refuse throughout the bounded reply. Unknown non-conflicting Core
+extension fields remain allowed. A null seal remains spent/unknown; malformed
+seal evidence retains the existing durable refusal behavior.
+
+`lab/sealwatch` projects chain information, blocks, transactions and their
+inputs/outputs, and UTXOs. Missing context-dependent transaction fields retain
+the existing state-machine checks: a mempool transaction need not have a block
+binding, and an unrelated output need not prove the commitment. Present aliases
+are rejected even on optional fields. Scalar block hashes and mempool arrays
+retain their typed shape and existing semantic checks. Malformed replies yield
+`UNKNOWN/RPC_UNAVAILABLE_OR_MALFORMED`, never a positive seal or final spend proof.
+
+Go regression entry point: `go test ./lab/namecoinwrapper ./lab/sealwatch -run
+'^TestW7' -count=1`, with the separately pinned verifier/signer and existing
+`LAB_*` fixture environment from the hosted lab lane. Use
+`scripts/keyvault-test-confined.sh` on macOS and keep the Keychain skip gate.
+Test logs and disposable artifacts belong under `.temp/`. These checks establish
+JSON boundary behavior, not production transport or effect qualification.

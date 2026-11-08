@@ -275,6 +275,7 @@ func uniqueJSON(raw []byte, max int, out any) error {
 						return ErrRefused
 					}
 					s, ok := k.(string)
+					s = foldJSONKey(s)
 					if !ok || seen[s] {
 						return ErrRefused
 					}
@@ -554,15 +555,8 @@ func checkedTip(ctx context.Context, n Node, t tip, network string) bool {
 // transitions away and back between reads cannot be excluded by this API.
 func displacedBlock(ctx context.Context, n Node, block, network string) (closureEvidence, bool) {
 	var before, after tip
-	var header struct {
-		Hash   string `json:"hash"`
-		Height *int   `json:"height"`
-	}
-	var canonicalHeader struct {
-		Hash          string `json:"hash"`
-		Height        *int   `json:"height"`
-		Confirmations *int   `json:"confirmations"`
-	}
+	var header displacedHeader
+	var canonicalHeader blockHeader
 	var first, second string
 	var tipHash string
 	if !digest(block) || call(ctx, n, "getblockchaininfo", &before) != nil || !validTip(before, network) ||
@@ -574,8 +568,8 @@ func displacedBlock(ctx context.Context, n Node, block, network string) (closure
 	if call(ctx, n, "getblockhash", &first, h) != nil || !digest(first) || first == block ||
 		(h == before.Height && first != before.Hash) ||
 		(h < before.Height && first == before.Hash) ||
-		call(ctx, n, "getblockheader", &canonicalHeader, first) != nil || canonicalHeader.Hash != first || canonicalHeader.Height == nil ||
-		*canonicalHeader.Height != h || canonicalHeader.Confirmations == nil || *canonicalHeader.Confirmations != before.Height-h+1 ||
+		call(ctx, n, "getblockheader", &canonicalHeader, first) != nil || canonicalHeader.Hash != first ||
+		canonicalHeader.Height != h || canonicalHeader.Confirmations != before.Height-h+1 ||
 		call(ctx, n, "getblockhash", &tipHash, before.Height) != nil || tipHash != before.Hash ||
 		call(ctx, n, "getblockhash", &second, h) != nil || second != first ||
 		call(ctx, n, "getblockchaininfo", &after) != nil || after != before || ctx.Err() != nil {
@@ -824,11 +818,7 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 }
 
 func checkSeal(ctx context.Context, n Node, p point, address, best string) error {
-	var seal *struct {
-		Bestblock     string `json:"bestblock"`
-		Confirmations int    `json:"confirmations"`
-		Script        script `json:"scriptPubKey"`
-	}
+	var seal *sealOutput
 	if err := call(ctx, n, "gettxout", &seal, p.TxID, p.Vout, true); err != nil {
 		return err
 	}
