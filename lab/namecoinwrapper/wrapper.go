@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -101,17 +102,8 @@ type tip struct {
 // A missing boolean is not evidence that IBD is false. Require the complete
 // official projection before a changed tip can carry persistent meaning.
 func (t *tip) UnmarshalJSON(raw []byte) error {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil {
-		return ErrRefused
-	}
-	for key, dst := range map[string]any{"chain": &t.Chain, "bestblockhash": &t.Hash, "blocks": &t.Height, "initialblockdownload": &t.IBD} {
-		field, present := fields[key]
-		if !present || bytes.Equal(field, []byte("null")) || json.Unmarshal(field, dst) != nil {
-			return ErrRefused
-		}
-	}
-	return nil
+	return exactProjection(raw, map[string]any{"chain": &t.Chain, "bestblockhash": &t.Hash,
+		"blocks": &t.Height, "initialblockdownload": &t.IBD})
 }
 
 type point struct {
@@ -152,29 +144,23 @@ type nameOperation struct {
 // Project the official RPC spellings exactly. encoding/json's normal struct
 // matching would otherwise accept aliases such as NAME_ENCODING.
 func (op *nameOperation) UnmarshalJSON(raw []byte) error {
+	*op = nameOperation{}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return ErrRefused
 	}
-	for key, dst := range map[string]any{
+	if projectFields(fields, map[string]any{
 		"op": &op.Op, "name": &op.Name,
 		"name_encoding": &op.NameEncoding,
-	} {
-		if field, ok := fields[key]; ok {
-			if json.Unmarshal(field, dst) != nil {
-				return ErrRefused
-			}
-		}
+		"name_error":    &op.NameError,
+	}, false) != nil {
+		return ErrRefused
 	}
-	op.NameError = fields["name_error"]
-	op.ValueError = fields["value_error"]
-	value, present := fields["value"]
-	op.valueValid = present && !bytes.Equal(value, []byte("null")) && json.Unmarshal(value, &op.Value) == nil
-	// A malformed value encoding is refused by checkedNameValue only after
-	// the independent name/outpoint confirmation has been established.
-	if json.Unmarshal(fields["value_encoding"], &op.ValueEncoding) != nil {
-		op.ValueEncoding = ""
-	}
+	// Value errors, omissions, aliases and malformed values affect acceptance,
+	// not the independent name/outpoint proof used to close a replacement.
+	op.valueValid = projectFields(fields, map[string]any{
+		"value": &op.Value, "value_encoding": &op.ValueEncoding,
+	}, true) == nil && projectFields(fields, map[string]any{"value_error": &op.ValueError}, false) == nil
 	return nil
 }
 
@@ -183,6 +169,19 @@ type script struct {
 	Address string        `json:"address"`
 	NameOp  nameOperation `json:"nameOp"`
 }
+
+// Ordinary outputs need not carry a name operation or address. When present,
+// these fields must have their official spelling and type; missing identity
+// fields cannot match the nonempty name/address checked by checkedGeneration.
+func (s *script) UnmarshalJSON(raw []byte) error {
+	*s = script{}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return ErrRefused
+	}
+	return projectFields(fields, map[string]any{"hex": &s.Hex, "address": &s.Address, "nameOp": &s.NameOp}, false)
+}
+
 type transaction struct {
 	TxID          string              `json:"txid"`
 	Blockhash     string              `json:"blockhash"`
@@ -202,9 +201,26 @@ func exactProjection(raw []byte, projection map[string]any) error {
 	if json.Unmarshal(raw, &fields) != nil {
 		return ErrRefused
 	}
+	return projectFields(fields, projection, true)
+}
+
+// Reject case aliases even alongside an official member: the extra member is
+// ambiguous evidence, not an alternative source for an identity field. The
+// outer uniqueJSON check rejects duplicate members throughout the reply.
+func projectFields(fields map[string]json.RawMessage, projection map[string]any, required bool) error {
+	for supplied := range fields {
+		for official := range projection {
+			if supplied != official && strings.EqualFold(supplied, official) {
+				return ErrRefused
+			}
+		}
+	}
 	for key, dst := range projection {
 		field, present := fields[key]
-		if !present || bytes.Equal(field, []byte("null")) || json.Unmarshal(field, dst) != nil {
+		if !present && !required {
+			continue
+		}
+		if !present || bytes.Equal(bytes.TrimSpace(field), []byte("null")) || json.Unmarshal(field, dst) != nil {
 			return ErrRefused
 		}
 	}
@@ -226,14 +242,10 @@ type transactionOutput struct {
 }
 
 func (o *transactionOutput) UnmarshalJSON(raw []byte) error {
-	var decoded struct {
-		N      *int   `json:"n"`
-		Script script `json:"scriptPubKey"`
-	}
-	if json.Unmarshal(raw, &decoded) != nil || decoded.N == nil || *decoded.N < 0 {
+	*o = transactionOutput{}
+	if exactProjection(raw, map[string]any{"n": &o.N, "scriptPubKey": &o.Script}) != nil || o.N < 0 {
 		return ErrRefused
 	}
-	o.N, o.Script = *decoded.N, decoded.Script
 	return nil
 }
 
@@ -369,19 +381,17 @@ func resolveNameIdentity(ctx context.Context, n Node, name string) (nameShow, ma
 	if err := call(ctx, n, "name_show", &fields, name, nameOptions()); err != nil {
 		return v, nil, err
 	}
-	if _, ok := fields["name_error"]; ok {
+	var nameError json.RawMessage
+	if _, ok := fields["name_error"]; ok || projectFields(fields, map[string]any{"name_error": &nameError}, false) != nil {
 		return v, nil, ErrRefused
 	}
-	for key, dst := range map[string]any{
+	if projectFields(fields, map[string]any{
 		"name": &v.Name, "txid": &v.TxID,
 		"vout": &v.Vout, "address": &v.Address, "expired": &v.Expired,
 		"expires_in": &v.ExpiresIn, "name_encoding": &v.NameEncoding,
 		"height": &v.Height,
-	} {
-		raw, ok := fields[key]
-		if !ok || bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, dst) != nil {
-			return v, nil, ErrRefused
-		}
+	}, true) != nil {
+		return v, nil, ErrRefused
 	}
 	if v.Name != name || v.Expired || v.ExpiresIn <= 0 || v.Height < 0 || v.Vout < 0 || !digest(v.TxID) || v.Address == "" ||
 		v.NameEncoding != "ascii" || !ascii(v.Name) {
@@ -391,14 +401,12 @@ func resolveNameIdentity(ctx context.Context, n Node, name string) (nameShow, ma
 }
 
 func decodeNameValue(v *nameShow, fields map[string]json.RawMessage) error {
-	if _, ok := fields["value_error"]; ok {
+	var valueError json.RawMessage
+	if _, ok := fields["value_error"]; ok || projectFields(fields, map[string]any{"value_error": &valueError}, false) != nil {
 		return ErrRefused
 	}
-	for key, dst := range map[string]*string{"value": &v.Value, "value_encoding": &v.ValueEncoding} {
-		raw, ok := fields[key]
-		if !ok || bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, dst) != nil {
-			return ErrRefused
-		}
+	if projectFields(fields, map[string]any{"value": &v.Value, "value_encoding": &v.ValueEncoding}, true) != nil {
+		return ErrRefused
 	}
 	if v.ValueEncoding != "ascii" || !ascii(v.Value) {
 		return ErrRefused
@@ -729,11 +737,10 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	}
 	requesterTX, err := checkedGeneration(ctx, n, requester)
 	if err != nil {
-		if err == errNoncanonicalGeneration {
-			if evidence, displaced := displacedBlock(ctx, n, requesterTX.Blockhash, network); displaced {
-				closeObservation(evidence)
-			}
-		}
+		// This failed response has established no requester block anchor.
+		// Requester-specific permanent displacement is unsupported without an
+		// independently pinned original requester generation. refuse still
+		// checks the independently pinned original issuance block.
 		return refuse(ErrRefused)
 	}
 	if requester.Height > before.Height || requesterTX.Confirmations != before.Height-requester.Height+1 ||
