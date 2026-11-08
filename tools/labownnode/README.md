@@ -21,6 +21,20 @@ close those transferred endpoints on cancellation. This route requires no
 mode retains its Linux `/proc` reopening and inherited-descriptor contract.
 Cross-compilation does not qualify native macOS behavior or a running node.
 
+Before creating children or protocol endpoints, trusted startup marks every
+descriptor above stderr close-on-exec. Linux requires atomic `close_range`
+with `CLOSE_RANGE_CLOEXEC` and refuses if unavailable. Darwin enumerates its
+own `/dev/fd` view and checks/sets `FD_CLOEXEC`; enumeration or fcntl errors
+refuse, except descriptors that have already closed. Enumeration does not use
+the current descriptor limit, so inherited handles above a lowered limit are
+included. Nothing closes Go runtime handles. Only deliberate standard streams
+and the subsequently created owned protocol endpoints cross child boundaries.
+Runtime concurrent opens already use close-on-exec; concurrent non-CLOEXEC
+openers or untrusted native code are outside this trusted startup contract.
+This is descriptor custody for trusted non-detaching children, not an
+arbitrary-child sandbox. Executable and parent-path immutability is still
+required; hashing then executing a path does not close replacement races.
+
 Install a private route JSON matching [route.schema.json](route.schema.json).
 All fields are mandatory, exactly spelled, unique string members. `Network`
 and `Genesis` must be an admitted pair: `main` with

@@ -1,5 +1,13 @@
 # Lab Namecoin wrapper for the existing local KeyVault profile
 
+A changed owner generation is persisted as refusal only after exact ASCII
+name/outpoint and canonical confirmed transaction/header checks. This precedes
+value decoding: Core's `value_error` or omitted value cannot hide a confirmed
+replacement. Value and record errors still refuse strictly. An unrelated,
+malformed, unconfirmed or unavailable generation claim is not canonical
+replacement evidence. Retain the same private root across restart; a restored
+original branch and newly signed request cannot reopen a persisted closure.
+
 This is a lab observation library with default regtest compatibility and an
 explicit independent mainnet policy. `Verifier.Verify` reads
 public facts through an independently installed own-node `Node` read broker,

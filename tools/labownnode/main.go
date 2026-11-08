@@ -337,6 +337,13 @@ func main() {
 	// receipt sink. Normal contexts kill/reap children before this last cutoff.
 	lifetime := time.AfterFunc(18*time.Second, func() { os.Exit(124) })
 	defer lifetime.Stop()
+	// Before configuration, protocol endpoints or children exist, remove the
+	// ability of unrelated inherited descriptors to cross an exec boundary.
+	// No descriptor is closed: the Go runtime retains its own poller handles.
+	if sanitizeInheritedFDs() != nil {
+		fmt.Fprintln(os.Stderr, "own-node inherited descriptor custody refused")
+		os.Exit(2)
+	}
 	if len(os.Args) != 3 {
 		fmt.Fprintln(os.Stderr, "usage: labownnode ABSOLUTE_ROUTE_JSON ABSOLUTE_LABCOMPOSE_INPUT_JSON")
 		os.Exit(2)

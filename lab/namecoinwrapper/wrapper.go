@@ -41,6 +41,10 @@ func NetworkPolicy(network, genesis string) (string, string, error) {
 
 var ErrRefused = errors.New("lab verification refused")
 
+// Internal distinction: a valid canonical hash contradicts a transaction's
+// block. Transport, malformed and unconfirmed replies never produce this.
+var errNoncanonicalGeneration = errors.New("noncanonical name generation")
+
 // Node must be the verifier's independently configured own-node read broker.
 // Never implement this from request-supplied snapshots in a live composition.
 // Calls must honor context cancellation and return fresh replies, never cached
@@ -125,6 +129,7 @@ type nameOperation struct {
 	ValueEncoding string          `json:"value_encoding"`
 	NameError     json.RawMessage `json:"name_error"`
 	ValueError    json.RawMessage `json:"value_error"`
+	valueValid    bool
 }
 
 // Project the official RPC spellings exactly. encoding/json's normal struct
@@ -135,8 +140,8 @@ func (op *nameOperation) UnmarshalJSON(raw []byte) error {
 		return ErrRefused
 	}
 	for key, dst := range map[string]any{
-		"op": &op.Op, "name": &op.Name, "value": &op.Value,
-		"name_encoding": &op.NameEncoding, "value_encoding": &op.ValueEncoding,
+		"op": &op.Op, "name": &op.Name,
+		"name_encoding": &op.NameEncoding,
 	} {
 		if field, ok := fields[key]; ok {
 			if json.Unmarshal(field, dst) != nil {
@@ -146,6 +151,13 @@ func (op *nameOperation) UnmarshalJSON(raw []byte) error {
 	}
 	op.NameError = fields["name_error"]
 	op.ValueError = fields["value_error"]
+	value, present := fields["value"]
+	op.valueValid = present && !bytes.Equal(value, []byte("null")) && json.Unmarshal(value, &op.Value) == nil
+	// A malformed value encoding is refused by checkedNameValue only after
+	// the independent name/outpoint confirmation has been established.
+	if json.Unmarshal(fields["value_encoding"], &op.ValueEncoding) != nil {
+		op.ValueEncoding = ""
+	}
 	return nil
 }
 
@@ -155,13 +167,27 @@ type script struct {
 	NameOp  nameOperation `json:"nameOp"`
 }
 type transaction struct {
-	TxID          string `json:"txid"`
-	Blockhash     string `json:"blockhash"`
-	Confirmations int    `json:"confirmations"`
-	Vout          []struct {
-		N      int    `json:"n"`
+	TxID          string              `json:"txid"`
+	Blockhash     string              `json:"blockhash"`
+	Confirmations int                 `json:"confirmations"`
+	Vout          []transactionOutput `json:"vout"`
+}
+
+type transactionOutput struct {
+	N      int    `json:"n"`
+	Script script `json:"scriptPubKey"`
+}
+
+func (o *transactionOutput) UnmarshalJSON(raw []byte) error {
+	var decoded struct {
+		N      *int   `json:"n"`
 		Script script `json:"scriptPubKey"`
-	} `json:"vout"`
+	}
+	if json.Unmarshal(raw, &decoded) != nil || decoded.N == nil || *decoded.N < 0 {
+		return ErrRefused
+	}
+	o.N, o.Script = *decoded.N, decoded.Script
+	return nil
 }
 
 // uniqueJSON rejects ambiguous duplicate members at every nesting level before
@@ -287,34 +313,58 @@ func nameOptions() map[string]any {
 	return map[string]any{"nameEncoding": "ascii", "valueEncoding": "ascii", "allowExpired": false}
 }
 
-func resolveName(ctx context.Context, n Node, name string) (nameShow, error) {
+// Resolve identity independently of the value projection. Core retains this
+// exact name/outpoint even when valueEncoding=ascii produces value_error.
+// This is only a claim until checkedGeneration proves canonical confirmation.
+func resolveNameIdentity(ctx context.Context, n Node, name string) (nameShow, map[string]json.RawMessage, error) {
 	var v nameShow
 	var fields map[string]json.RawMessage
 	if err := call(ctx, n, "name_show", &fields, name, nameOptions()); err != nil {
-		return v, err
+		return v, nil, err
 	}
 	if _, ok := fields["name_error"]; ok {
-		return v, ErrRefused
-	}
-	if _, ok := fields["value_error"]; ok {
-		return v, ErrRefused
+		return v, nil, ErrRefused
 	}
 	for key, dst := range map[string]any{
-		"name": &v.Name, "value": &v.Value, "txid": &v.TxID,
+		"name": &v.Name, "txid": &v.TxID,
 		"vout": &v.Vout, "address": &v.Address, "expired": &v.Expired,
 		"expires_in": &v.ExpiresIn, "name_encoding": &v.NameEncoding,
-		"value_encoding": &v.ValueEncoding, "height": &v.Height,
+		"height": &v.Height,
 	} {
 		raw, ok := fields[key]
 		if !ok || bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, dst) != nil {
-			return v, ErrRefused
+			return v, nil, ErrRefused
 		}
 	}
 	if v.Name != name || v.Expired || v.ExpiresIn <= 0 || v.Height < 0 || v.Vout < 0 || !digest(v.TxID) || v.Address == "" ||
-		v.NameEncoding != "ascii" || v.ValueEncoding != "ascii" || !ascii(v.Name) || !ascii(v.Value) {
-		return v, ErrRefused
+		v.NameEncoding != "ascii" || !ascii(v.Name) {
+		return v, nil, ErrRefused
 	}
-	return v, nil
+	return v, fields, nil
+}
+
+func decodeNameValue(v *nameShow, fields map[string]json.RawMessage) error {
+	if _, ok := fields["value_error"]; ok {
+		return ErrRefused
+	}
+	for key, dst := range map[string]*string{"value": &v.Value, "value_encoding": &v.ValueEncoding} {
+		raw, ok := fields[key]
+		if !ok || bytes.Equal(raw, []byte("null")) || json.Unmarshal(raw, dst) != nil {
+			return ErrRefused
+		}
+	}
+	if v.ValueEncoding != "ascii" || !ascii(v.Value) {
+		return ErrRefused
+	}
+	return nil
+}
+
+func resolveName(ctx context.Context, n Node, name string) (nameShow, error) {
+	v, fields, err := resolveNameIdentity(ctx, n, name)
+	if err == nil {
+		err = decodeNameValue(&v, fields)
+	}
+	return v, err
 }
 
 func parseRecord(v nameShow) (record, error) {
@@ -353,7 +403,7 @@ func parseRecord(v nameShow) (record, error) {
 	return r, nil
 }
 
-func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
+func checkedGeneration(ctx context.Context, n Node, v nameShow) (transaction, error) {
 	var tx transaction
 	if err := call(ctx, n, "getrawtransaction", &tx, v.TxID, true); err != nil {
 		return tx, err
@@ -365,10 +415,9 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 	for _, o := range tx.Vout {
 		if o.Script.NameOp.Name == v.Name {
 			count++
-			if o.N != v.Vout || o.Script.Address != v.Address || o.Script.NameOp.Value != v.Value ||
+			if o.N != v.Vout || o.Script.Address != v.Address ||
 				(o.Script.NameOp.Op != "name_update" && o.Script.NameOp.Op != "name_firstupdate") ||
-				o.Script.NameOp.NameEncoding != "ascii" || o.Script.NameOp.ValueEncoding != "ascii" ||
-				len(o.Script.NameOp.NameError) != 0 || len(o.Script.NameOp.ValueError) != 0 {
+				o.Script.NameOp.NameEncoding != "ascii" || len(o.Script.NameOp.NameError) != 0 {
 				return tx, ErrRefused
 			}
 		}
@@ -387,10 +436,34 @@ func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
 		return tx, ErrRefused
 	}
 	var canonical string
-	if err := call(ctx, n, "getblockhash", &canonical, header.Height); err != nil || canonical != tx.Blockhash {
+	if err := call(ctx, n, "getblockhash", &canonical, header.Height); err != nil || !digest(canonical) {
 		return tx, ErrRefused
 	}
+	if canonical != tx.Blockhash {
+		return tx, errNoncanonicalGeneration
+	}
 	return tx, nil
+}
+
+func checkedNameValue(tx transaction, v nameShow) error {
+	for _, o := range tx.Vout {
+		if o.Script.NameOp.Name == v.Name && (!o.Script.NameOp.valueValid || o.Script.NameOp.Value != v.Value ||
+			o.Script.NameOp.ValueEncoding != "ascii" || len(o.Script.NameOp.ValueError) != 0) {
+			return ErrRefused
+		}
+	}
+	return nil
+}
+
+func checkedName(ctx context.Context, n Node, v nameShow) (transaction, error) {
+	tx, err := checkedGeneration(ctx, n, v)
+	if err == errNoncanonicalGeneration {
+		err = ErrRefused
+	}
+	if err == nil {
+		err = checkedNameValue(tx, v)
+	}
+	return tx, err
 }
 
 // Verify returns only a repeatable verification observation, never admission.
@@ -450,13 +523,20 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 			}
 		}
 	}
-	owner, err := resolveName(ctx, n, p.OwnerName)
+	owner, fields, err := resolveNameIdentity(ctx, n, p.OwnerName)
 	if err != nil {
 		return nil, err
 	}
-	anchor, err := checkedName(ctx, n, owner)
+	anchor, err := checkedGeneration(ctx, n, owner)
 	if err != nil {
-		closeObservation()
+		// Preserve the original issuance's reorg latch. This is a positive
+		// canonical contradiction of independently pinned original issuance,
+		// not a claimed replacement or an upstream availability failure.
+		if err == errNoncanonicalGeneration && owner.TxID == p.AnchorTxID && anchor.Blockhash == p.AnchorBlock {
+			closeObservation()
+		}
+		// Unconfirmed, malformed or unavailable evidence is a refusal, not
+		// proof of a canonical replacement. Do not persist such a claim.
 		return nil, ErrRefused
 	}
 	// Establish canonical confirmation before treating an issuance replacement
@@ -465,6 +545,13 @@ func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, re
 	if owner.TxID != p.AnchorTxID || anchor.Blockhash != p.AnchorBlock {
 		closeObservation()
 		return nil, ErrRefused
+	}
+	if err := decodeNameValue(&owner, fields); err != nil {
+		return nil, err
+	}
+	if err := checkedNameValue(anchor, owner); err != nil {
+		closeObservation()
+		return nil, err
 	}
 	o, err := parseRecord(owner)
 	if err != nil {
