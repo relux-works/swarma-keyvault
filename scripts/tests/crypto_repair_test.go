@@ -16,9 +16,15 @@ import (
 func TestCryptoRepairUpstream(t *testing.T) {
 	var specs []upstreamSpec
 	for _, module := range []string{"btcec", "secp256k1"} {
+		args := []string{"-C", "../../third_party/" + module, "test", "-race", "-count=1", "-timeout=10m", "./..."}
+		if module == "btcec" {
+			// Include the repaired helper's own upstream/lifecycle tests under
+			// the same Go command; its stdlib-only module adds no provisioning.
+			args = append(args, "github.com/btcsuite/btcd/chainhash/v2")
+		}
 		specs = append(specs, upstreamSpec{
 			name: module, path: filepath.Join(runtime.GOROOT(), "bin", "go"),
-			args:   []string{"-C", "../../third_party/" + module, "test", "-race", "-count=1", "-timeout=10m", "./..."},
+			args:   args,
 			env:    append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off"),
 			budget: 12 * time.Minute,
 		})

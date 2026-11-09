@@ -5,6 +5,8 @@ go 1.26.10
 // Explicit source-pinned cleanup repairs; see third_party/README.md.
 replace github.com/btcsuite/btcd/btcec/v2 => ./third_party/btcec
 
+replace github.com/btcsuite/btcd/chainhash/v2 => ./third_party/chainhash
+
 replace github.com/decred/dcrd/dcrec/secp256k1/v4 => ./third_party/secp256k1
 
 require (

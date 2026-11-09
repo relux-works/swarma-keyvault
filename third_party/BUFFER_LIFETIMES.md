@@ -8,10 +8,11 @@ explicit mutable storage, not a universal memory-erasure guarantee.
 | --- | --- | --- |
 | Vault scalar slice and private-key object | `signNostrSecretWithRandom` / `signNostrWithAux` defer slice clear and `PrivateKey.Zero`; generation transfers only the backend-owned stored copy | Root positive, wrong-key, malformed digest and entropy-refusal tests |
 | Vault auxiliary arrays | Both vault functions defer clearing their separate arrays, including early refusals | Root refusal/auxiliary fixtures plus source lifetime inspection |
-| Captured `CustomNonce` array | The option transfers one use to `signingBuffers.aux`; deferred cleanup clears the actual captured array; overwritten fresh options clear immediately | Actual captured-buffer checks, overwrite test, reuse/concurrent-refusal tests |
+| Captured `CustomNonce` array | The option transfers one use to `signingBuffers.aux`; deferred cleanup clears the actual captured array on completed/ordinary-refused calls; overwritten fresh options clear immediately | Actual captured-buffer checks, overwrite test, reuse/concurrent-refusal tests; option-parsing panic limit below |
 | Effective private scalar | `signingBuffers.private`, cleared by the unconditional deferred owner cleanup | Both signing paths, successful and early-refusal lifecycle tests; omitted-wipe control |
 | Effective private encoding and RFC6979 private encoding | `signingBuffers.privateBytes` / `rfcPrivateBytes`, direct `PutBytes` into owned arrays, same deferred cleanup | Both signing-path lifecycle tests |
-| Aux XOR hash `t` and nonce hash `rand` | Actual `chainhash.TaggedHash` output allocations retained by the owner and cleared on return | Aux-path lifecycle test checks both actual allocations after return |
+| Aux XOR hash `t` and nonce hash `rand` | Returned `chainhash.TaggedHash` output copies retained by the signer owner and cleared on return | Aux-path lifecycle test checks both actual returned allocations after return |
+| Tagged-hash completed digest slice | `taggedHashBuffers.digest` retains the actual helper `h.Sum(nil)` allocation; `copyHash` clears it after copying, on success and size refusal | Actual-helper allocation checks, independent public tagged-hash outputs and omitted-helper-clear control; SHA-256's real output is always 32 bytes |
 | Nonce scalar, parity-adjusted nonce and response intermediate | `signingBuffers.nonce`, `effectiveNonce`, `response`; same unconditional cleanup; returned signature contains independent public values | Signing lifecycle tests; official BIP-340 signatures verify after cleanup |
 | RFC6979 returned nonce | Ownership transfers from nonce generator to `signingBuffers.rfcNonce`; explicit zero after each attempt and deferred cleanup on final return | RFC6979 signing lifecycle and retained upstream tests |
 | RFC6979 key encoding and current V/K outputs | `nonceBuffers.key`, `v`, `k`, deferred cleanup; replaced output storage cleared before losing ownership | Retries 0, 1 and 5; replacement tests; omitted-K-wipe control |
@@ -26,6 +27,12 @@ owner. Later algorithm refusals with cryptographically negligible preconditions
 are established by this control-flow audit, not falsely claimed as naturally
 reached by the supplied fixtures. The actual observed refusal fixtures cover
 malformed digest, zero private scalar and consumed auxiliary options.
+
+The vault supplies one fresh nonnil option. In the retained low-level API, a nil
+option after a fresh `CustomNonce` can panic before capture ownership transfers;
+that unreachable vault path is outside the current completed-call cleanup claim.
+The helper conversion's short/long size refusals exercise its real cleanup path,
+but are not claimed as naturally reachable SHA-256 outputs.
 
 Named output storage transfers to its caller deliberately: the signature is
 public, the nonce is cleared by the signer, and serialized vault scalars are

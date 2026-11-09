@@ -4,6 +4,8 @@ go 1.26.10
 
 replace github.com/decred/dcrd/dcrec/secp256k1/v4 => ../secp256k1
 
+replace github.com/btcsuite/btcd/chainhash/v2 => ../chainhash
+
 require (
 	github.com/btcsuite/btcd/chainhash/v2 v2.0.0
 	github.com/davecgh/go-spew v1.1.1
