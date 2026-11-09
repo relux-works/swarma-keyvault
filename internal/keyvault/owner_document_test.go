@@ -43,25 +43,22 @@ func documentPeer(t *testing.T, mode string) string {
 			documentPeerBuild.err = fmt.Errorf("build document peer: %w: %s", err, out)
 			return
 		}
+		// Prepare the one executable path before entering any protocol deadline.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, err := exec.CommandContext(ctx, binary, "--self-check").CombinedOutput(); err != nil {
+			documentPeerBuild.err = fmt.Errorf("probe document peer: %w: %s", err, out)
+			return
+		}
 		documentPeerBuild.path = binary
 	})
 	if documentPeerBuild.err != nil {
 		t.Fatal(documentPeerBuild.err)
 	}
-	path := filepath.Join(t.TempDir(), "document-peer-"+mode)
-	if err := os.Link(documentPeerBuild.path, path); err != nil {
-		t.Fatal(err)
-	}
-	// Assess the exact executable path before the timed exchange. Darwin may
-	// assess a new hardlink path even when its inode has already executed.
-	// This probe performs no protocol I/O; all actual frames still pass
-	// through CallDocument under its unchanged deadline.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if out, err := exec.CommandContext(ctx, path, "--self-check").CombinedOutput(); err != nil {
-		t.Fatalf("probe document peer: %v: %s", err, out)
-	}
-	return path
+	// Tests are serial; Setenv restores the selector after each case and
+	// disallows parallel use. Every mode executes the same prepared file.
+	t.Setenv("KEYVAULT_TEST_DOCUMENT_PEER_MODE", mode)
+	return documentPeerBuild.path
 }
 
 func TestDocumentHelperPipeBindingAndRefusals(t *testing.T) {

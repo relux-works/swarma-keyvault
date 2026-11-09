@@ -93,8 +93,8 @@ func main() {
 	if len(os.Args) == 2 && os.Args[1] == "--self-check" {
 		return
 	}
-	// The filename selects the behavior without an interpreter or wrapper.
-	mode := strings.TrimPrefix(os.Args[0][strings.LastIndexAny(os.Args[0], "/\\")+1:], "document-peer-")
+	// Only the test harness sets this private synthetic selector.
+	mode := os.Getenv("KEYVAULT_TEST_DOCUMENT_PEER_MODE")
 	if err := run(mode); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -38,6 +38,9 @@ keeps the immutable verifier and signer outside the candidate module.
 ```sh
 set -eu
 export MAC_KEYVAULT_SKIP_KEYCHAIN=1
+# Match hosted CI's bounded build/test concurrency.
+export GOMAXPROCS=2
+export GOFLAGS='-mod=readonly -p=2'
 candidate_source=$(pwd -P)
 lab_root=$(mktemp -d "${TMPDIR:-/tmp}/keyvault-lab.XXXXXXXX")
 chmod 700 "$lab_root"
