@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +26,7 @@ import (
 // and t.TempDir cleanup remove them; no existing owner custody is available.
 func signerRun(t *testing.T, root string, args ...string) []byte {
 	t.Helper()
-	signer := os.Getenv("LAB_TEST_SIGNER")
-	if signer == "" {
-		t.Fatal("LAB_TEST_SIGNER must name the separately built explicit-owner lab signer")
-	}
+	signer := labFixture(t, "LAB_TEST_SIGNER")
 	cmd := exec.Command(signer, args...)
 	cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
 	var errout bytes.Buffer
@@ -136,7 +134,7 @@ func signerCertificate(t *testing.T, f *fixture, root string, payload []byte, ow
 	key := writeSyntheticKey(t, root, "owner.pk8", f.owner)
 	args := []string{"certificate", "--payload", path, "--digest", hex.EncodeToString(digest[:]), "--key", key, "--owner-spki", filepath.Join(root, "owner.der"), "--requester-spki", filepath.Join(root, "requester.der")}
 	// Same reverse bytes refuse under the original default before key access.
-	cmd := exec.Command(os.Getenv("LAB_TEST_SIGNER"), args...)
+	cmd := exec.Command(labFixture(t, "LAB_TEST_SIGNER"), args...)
 	cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
 	if out, err := cmd.Output(); err == nil || len(out) != 0 {
 		t.Fatal("reverse signer inferred the payload owner")
@@ -260,13 +258,16 @@ func TestMirrorPublicPipe(t *testing.T) {
 			if err := os.WriteFile(path, raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			binary := os.Getenv("LAB_COMPOSE")
-			if binary == "" {
-				t.Fatal("LAB_COMPOSE must name the separately built candidate bridge")
-			}
+			binary := labFixture(t, "LAB_COMPOSE")
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, binary, path)
+			args := []string{path}
+			if runtime.GOOS != "linux" {
+				// StdinPipe/StdoutPipe transfer dedicated child endpoints. Legacy
+				// reopening of shared descriptors is a Linux-only contract.
+				args = []string{"--owned-protocol", path}
+			}
+			cmd := exec.CommandContext(ctx, binary, args...)
 			cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
 			in, err := cmd.StdinPipe()
 			if err != nil {

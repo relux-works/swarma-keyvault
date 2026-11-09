@@ -152,7 +152,25 @@ func TestPipeCleanupNeighbors(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	p.raw(ctx, "getblock")
 	cancel()
-	before, _ := os.ReadDir("/proc/self/fd")
+	fdDir := "/proc/self/fd"
+	if runtime.GOOS == "darwin" {
+		fdDir = "/dev/fd"
+	}
+	countFDs := func() int {
+		f, err := os.Open(fdDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		// fdescfs entries may disappear while the runtime closes descriptors;
+		// Readdirnames avoids stat calls on those transient entries.
+		names, err := f.Readdirnames(-1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(names)
+	}
+	before := countFDs()
 	goroutines := runtime.NumGoroutine()
 	for i := 0; i < 30; i++ {
 		p, reply, request := pipes(t)
@@ -163,9 +181,9 @@ func TestPipeCleanupNeighbors(t *testing.T) {
 		reply.Close()
 		request.Close()
 	}
-	after, _ := os.ReadDir("/proc/self/fd")
-	if len(after) != len(before) {
-		t.Fatalf("fd leak: before %d after %d", len(before), len(after))
+	after := countFDs()
+	if after != before {
+		t.Fatalf("fd leak: before %d after %d", before, after)
 	}
 	end := time.Now().Add(time.Second)
 	for runtime.NumGoroutine() > goroutines && time.Now().Before(end) {
@@ -230,8 +248,13 @@ func TestInheritedProtocolHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func TestInheritedProtocolCancellation(t *testing.T) {
-	for _, mode := range []string{"write", "read", "responsive", "owned-write", "owned-read", "owned-responsive"} {
+func TestOwnedProtocolCancellation(t *testing.T) {
+	testProtocolCancellation(t, []string{"owned-write", "owned-read", "owned-responsive"})
+}
+
+func testProtocolCancellation(t *testing.T, modes []string) {
+	t.Helper()
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()

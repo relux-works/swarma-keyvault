@@ -1,5 +1,7 @@
 # Lab Namecoin wrapper for the existing local KeyVault profile
 
+See [offline lab testing](../../docs/lab-testing.md) for exact pinned fixture builds and full-suite commands. Missing fixtures fail the suite.
+
 A changed owner generation is persisted as refusal only after exact ASCII
 name/outpoint and canonical confirmed transaction/header checks. This precedes
 value decoding: Core's `value_error` or omitted value cannot hide a confirmed

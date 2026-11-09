@@ -117,7 +117,7 @@ func TestCLINullProjection(t *testing.T) {
 func TestBlockedReceiptLifetime(t *testing.T) {
 	binary := os.Getenv("LAB_OWN_NODE")
 	if binary == "" {
-		t.Fatal("LAB_OWN_NODE must name candidate supervisor")
+		t.Fatal("NOT RUN (missing fixture): LAB_OWN_NODE must name candidate supervisor; see docs/lab-testing.md")
 	}
 	self, err := os.Executable()
 	if err != nil {

@@ -118,14 +118,11 @@ func TestOwnNodeActualWrapperGraph(t *testing.T) {
 			case "wrong-verifier-pin":
 				f.p.CLIHash = strings.Repeat("0", 64)
 			}
-			bridge, compose := os.Getenv("LAB_OWN_NODE"), os.Getenv("LAB_COMPOSE")
-			if bridge == "" || compose == "" {
-				t.Fatal("LAB_OWN_NODE and LAB_COMPOSE must name candidate executables")
-			}
+			bridge, compose := labFixture(t, "LAB_OWN_NODE"), labFixture(t, "LAB_COMPOSE")
 			// A separately built non-race copy avoids the race runtime's default
 			// per-process exit sleep accumulating across a finite RPC observation.
 			// The parent wrapper tests remain race-instrumented; bounds stay fixed.
-			self := os.Getenv("LAB_NODE_FIXTURE_CLI")
+			self := labFixture(t, "LAB_NODE_FIXTURE_CLI")
 			if self == "" {
 				var err error
 				self, err = os.Executable()

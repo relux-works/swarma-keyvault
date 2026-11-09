@@ -22,10 +22,7 @@ func TestObservationLifecycleActualGraph(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				f := freshDirection(t, reverse)
 				root := f.p.PrivateRoot
-				bridge, compose, node := os.Getenv("LAB_OWN_NODE"), os.Getenv("LAB_COMPOSE"), os.Getenv("LAB_NODE_FIXTURE_CLI")
-				if bridge == "" || compose == "" || node == "" {
-					t.Fatal("LAB_OWN_NODE, LAB_COMPOSE and LAB_NODE_FIXTURE_CLI must name separately built offline executables")
-				}
+				bridge, compose, node := labFixture(t, "LAB_OWN_NODE"), labFixture(t, "LAB_COMPOSE"), labFixture(t, "LAB_NODE_FIXTURE_CLI")
 				cb, err := os.ReadFile(compose)
 				if err != nil {
 					t.Fatal(err)

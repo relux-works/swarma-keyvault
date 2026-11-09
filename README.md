@@ -38,10 +38,15 @@ qualified code identity and provisioning contract. Rebuilding a binary trusted b
 existing Keychain ACLs needs its own planned adoption; do not repoint existing
 installed paths at these artifacts.
 
+Build and export the separately pinned offline lab fixtures using the exact
+commands in [offline lab testing](docs/lab-testing.md) before running the full
+suite. Missing fixtures mean the affected lab lanes did not run and the suite
+fails; they are not optional skips.
+
 Run the fake-backed suite through its inherited confinement wrapper:
 
 ```sh
-MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh ./... -count=1
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh -race -count=1 -v ./...
 ```
 
 The wrapper applies confinement before native startup. Real Keychain, owner

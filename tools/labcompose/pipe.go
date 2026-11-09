@@ -20,22 +20,6 @@ type pipe struct {
 	closeOnce sync.Once
 }
 
-// Reopen the CLI's inherited pipes as private, nonblocking file descriptions.
-// NewFile on a blocking inherited fd would not use Go's interruptible poller.
-// Never close the caller's inherited descriptors or change their status flags.
-func openProtocol() (*pipe, error) {
-	in, err := os.OpenFile("/proc/self/fd/0", os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, err
-	}
-	out, err := os.OpenFile("/proc/self/fd/1", os.O_WRONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		in.Close()
-		return nil, err
-	}
-	return newPipe(in, out)
-}
-
 // openOwnedProtocol is the portable supervisor route. The supervisor creates
 // dedicated anonymous pipes and transfers the child endpoints exclusively;
 // no other process may retain aliases to these file descriptions. Unlike the

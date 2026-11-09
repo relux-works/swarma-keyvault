@@ -112,6 +112,16 @@ type fixture struct {
 	best, block                  string
 }
 
+// Missing prerequisites are failed, unexecuted lanes, never successful skips.
+func labFixture(t *testing.T, name string) string {
+	t.Helper()
+	path := os.Getenv(name)
+	if path == "" {
+		t.Fatalf("NOT RUN (missing fixture): %s must name its separately built executable; see docs/lab-testing.md", name)
+	}
+	return path
+}
+
 func fresh(t *testing.T) *fixture {
 	t.Helper()
 	return freshDirection(t, false)
@@ -119,10 +129,7 @@ func fresh(t *testing.T) *fixture {
 
 func freshDirection(t *testing.T, reverse bool) *fixture {
 	t.Helper()
-	cli := os.Getenv("LAB_KEYVAULT_CLI")
-	if cli == "" {
-		t.Fatal("LAB_KEYVAULT_CLI must name the separately built pinned verifier CLI")
-	}
+	cli := labFixture(t, "LAB_KEYVAULT_CLI")
 	b, err := os.ReadFile(cli)
 	if err != nil {
 		t.Fatal(err)

@@ -1,5 +1,7 @@
 # Finite own-node observation bridge
 
+See [offline lab testing](../../docs/lab-testing.md) for exact pinned fixture builds and full-suite commands. Missing fixtures fail the suite.
+
 `labownnode` supervises the existing `labcompose` JSON read pipe and invokes an
 independently installed Namecoin Core CLI for each closed read method. It uses
 no shell, URL, remote command, wallet method, signing method or write method.
@@ -23,8 +25,9 @@ Cross-compilation does not qualify native macOS behavior or a running node.
 
 Before creating children or protocol endpoints, trusted startup marks every
 descriptor above stderr close-on-exec. Linux requires atomic `close_range`
-with `CLOSE_RANGE_CLOEXEC` and refuses if unavailable. Darwin enumerates its
-own `/dev/fd` view and checks/sets `FD_CLOEXEC`; enumeration or fcntl errors
+with `CLOSE_RANGE_CLOEXEC` and refuses if unavailable. Darwin enumerates names from its
+own `/dev/fd` view without stat'ing entries (fdescfs may include non-stat-able
+kqueue handles), then checks/sets `FD_CLOEXEC`; enumeration or fcntl errors
 refuse, except descriptors that have already closed. Enumeration does not use
 the current descriptor limit, so inherited handles above a lowered limit are
 included. Nothing closes Go runtime handles. Only deliberate standard streams

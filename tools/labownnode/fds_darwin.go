@@ -18,13 +18,25 @@ import (
 func sanitizeInheritedFDs() error {
 	syscall.ForkLock.Lock()
 	defer syscall.ForkLock.Unlock()
-	entries, err := os.ReadDir("/dev/fd")
+	directory, err := os.Open("/dev/fd")
 	if err != nil {
 		return err
 	}
+	// fdescfs includes descriptors (such as kqueue handles) that cannot be
+	// stat'ed. ReadDir may fall back to fstatat for their unknown entry type
+	// and fail with EBADF. We need only names; fcntl below validates each FD
+	// and already handles entries that disappeared after enumeration.
+	names, readErr := directory.Readdirnames(-1)
+	closeErr := directory.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
 	var descriptors []uintptr
-	for _, entry := range entries {
-		fd, err := strconv.Atoi(entry.Name())
+	for _, name := range names {
+		fd, err := strconv.Atoi(name)
 		if err != nil || fd < 0 {
 			return refused
 		}

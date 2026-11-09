@@ -23,7 +23,7 @@ func TestGenerationEvidenceActualGraph(t *testing.T) {
 				t.Run(direction+"/"+caller+"/"+mode, func(t *testing.T) {
 					f := freshDirection(t, reverse)
 					root := f.p.PrivateRoot
-					bridge, compose, node := os.Getenv("LAB_OWN_NODE"), os.Getenv("LAB_COMPOSE"), os.Getenv("LAB_NODE_FIXTURE_CLI")
+					bridge, compose, node := labFixture(t, "LAB_OWN_NODE"), labFixture(t, "LAB_COMPOSE"), labFixture(t, "LAB_NODE_FIXTURE_CLI")
 					cb, err := os.ReadFile(compose)
 					if err != nil {
 						t.Fatal(err)
