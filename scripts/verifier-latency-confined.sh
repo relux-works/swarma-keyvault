@@ -87,12 +87,29 @@ if "${sandbox[@]}" /bin/bash -euc '
   test ! -e /home/runner
   test "$(go env GOROOT)" = /opt/go
   test "$(go env GOMODCACHE)" = /private/dependencies
+  # Resolve the exact runtime pin from canonical go.mod forms.
+  minimum=
   expected=
   while read -r directive version rest; do
-    if [ "$directive" = toolchain ]; then expected=$version; break; fi
+    case "$directive" in
+      go) minimum="go$version" ;;
+      toolchain) expected=${version:-invalid} ;;
+    esac
   done < go.mod
-  test -n "$expected"
-  test "$(go env GOVERSION)" = "$expected"
+  if ! [[ "$minimum" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "verifier toolchain precondition failed: exact patch go directive required" >&2
+    exit 2
+  fi
+  if [ -z "$expected" ]; then expected=$minimum; fi
+  if ! [[ "$expected" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "verifier toolchain precondition failed: exact released toolchain pin required" >&2
+    exit 2
+  fi
+  actual=$(go env GOVERSION)
+  if [ "$actual" != "$expected" ]; then
+    echo "verifier toolchain precondition failed: runtime $actual differs from pin $expected" >&2
+    exit 2
+  fi
   go version
   for namespace in user mnt net pid ipc uts cgroup; do
     printf "sandbox namespace %s: " "$namespace"
@@ -102,7 +119,7 @@ if "${sandbox[@]}" /bin/bash -euc '
   echo 'verifier sandbox preflight passed; no timing samples collected yet'
 else
   status=$?
-  echo "verifier sandbox preflight failed (exit $status): job FAIL; required namespaces unavailable on the permitted hosted route. No timing samples collected; no isolation fallback." >&2
+  echo "verifier sandbox preflight failed (exit $status): job FAIL; sandbox qualification refused; see preceding diagnostic. No timing samples collected; no isolation fallback." >&2
   exit "$status"
 fi
 # Download/verify is provisioning only, after namespace qualification and before

@@ -84,8 +84,14 @@ The launcher requires bwrap before provisioning dependencies. It uses the same
 `--unshare-all --clearenv` sandbox for a non-product preflight and measurement.
 The preflight checks read-only source, toolchain, tools and dependency mounts,
 0700 private scratch directories, a cleared credential environment and the
-exact go.mod toolchain. Starting it also tests whether the runner permits the
-required namespaces. A successful package install alone does not qualify them.
+exact go.mod toolchain. An explicit `toolchain goX.Y.Z` selects the pin; when
+omitted, the exact patch `go X.Y.Z` directive supplies it, following
+[Go's implicit toolchain rule](https://go.dev/doc/toolchain#module-and-workspace-configuration).
+The gate requires a released patch version and exact runtime equality for
+reproducible measurements. Missing or malformed pins and version mismatches
+refuse with a toolchain diagnostic before product execution. Starting the
+sandbox also tests whether the runner permits the required namespaces. A
+successful package install alone does not qualify them.
 Dependency provisioning uses a new private cache, a cleared environment and
 canonical public Go checksums. Product tests run offline in the sandbox.
 
@@ -119,6 +125,10 @@ The offline shell fixtures in `tests/verifier-latency-confined-test.sh` check
 missing-tool diagnostics, original namespace refusal status/stderr, cleanup and
 no product startup. Their Go shim and any namespace refusal are explicitly
 labelled; they are neither real toolchain nor performance qualification.
+`go test -race -count=1 ./scripts/tests` executes the actual toolchain-check and
+outer refusal fragments with a bounded version-query mock. It covers both pin
+forms, the repository's current go.mod, malformed/missing pins, runtime mismatch
+and diagnostic/status preservation. It does not qualify a sandbox or latency.
 
 The product's 100ms fence and one measurement with exactly 40 samples per path,
 nearest-rank p95 <=80ms and maximum <100ms, with zero retries, are unchanged.
