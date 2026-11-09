@@ -71,6 +71,7 @@ case "$*" in
   'env GOROOT') printf '%s\n' /opt/go ;;
   'env GOMODCACHE') printf '%s\n' /private/dependencies ;;
   'env GOVERSION') printf '%s\n' go1.26.10 ;;
+  'run /source/tools/verifiertoolchain/main.go') echo 'fixture pin utility only; not real Go qualification' ;;
   version) echo 'fixture toolchain, not real Go qualification' ;;
   'mod download') echo 'fixture: provisioning refused before product execution' >&2; exit 73 ;;
   *) echo 'unexpected product/timing invocation' >&2; exit 99 ;;

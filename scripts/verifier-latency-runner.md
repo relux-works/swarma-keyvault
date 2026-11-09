@@ -87,9 +87,16 @@ The preflight checks read-only source, toolchain, tools and dependency mounts,
 exact go.mod toolchain. An explicit `toolchain goX.Y.Z` selects the pin; when
 omitted, the exact patch `go X.Y.Z` directive supplies it, following
 [Go's implicit toolchain rule](https://go.dev/doc/toolchain#module-and-workspace-configuration).
-The gate requires a released patch version and exact runtime equality for
-reproducible measurements. Missing or malformed pins and version mismatches
-refuse with a toolchain diagnostic before product execution. Starting the
+The stdlib-only `tools/verifiertoolchain` utility invokes `go mod edit -json`
+inside the sandbox, using the authoritative module grammar. Comments and EOF
+without a newline remain valid; duplicate directives and extra arguments
+refuse. A language-only `go` minimum is valid with an explicit exact toolchain.
+Without that explicit pin, this gate requires a patch-level `go` directive.
+The selected toolchain must also meet the module's minimum Go version.
+It requires exact runtime equality for reproducible measurements. Grammar,
+missing/malformed pin and version failures stop before dependency provisioning
+or product startup. Building/running this preflight utility is qualification
+work, not a product test or a timing sample. Starting the
 sandbox also tests whether the runner permits the required namespaces. A
 successful package install alone does not qualify them.
 Dependency provisioning uses a new private cache, a cleared environment and
@@ -125,10 +132,11 @@ The offline shell fixtures in `tests/verifier-latency-confined-test.sh` check
 missing-tool diagnostics, original namespace refusal status/stderr, cleanup and
 no product startup. Their Go shim and any namespace refusal are explicitly
 labelled; they are neither real toolchain nor performance qualification.
-`go test -race -count=1 ./scripts/tests` executes the actual toolchain-check and
-outer refusal fragments with a bounded version-query mock. It covers both pin
-forms, the repository's current go.mod, malformed/missing pins, runtime mismatch
-and diagnostic/status preservation. It does not qualify a sandbox or latency.
+`go test -race -count=1 ./tools/verifiertoolchain ./scripts/tests` runs the actual
+Go module parser for the accepted/forbidden pin forms and checks the actual
+outer refusal fragment's diagnostic/status preservation. It does not qualify
+a sandbox or latency. The namespace-closure shell fixture uses a clearly
+labelled utility shim and does not claim real toolchain qualification.
 
 The product's 100ms fence and one measurement with exactly 40 samples per path,
 nearest-rank p95 <=80ms and maximum <100ms, with zero retries, are unchanged.

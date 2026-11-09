@@ -2,10 +2,12 @@ package keyvault
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -157,6 +159,65 @@ func TestNostrSigningAndWipe(t *testing.T) {
 	nostrCode(t, VerifyNostr(nostrTestHex(t, r.PublicKey), changed, sig), "invalid_signature")
 	other, _ := nostrTestMaterial(t, 4)
 	nostrCode(t, VerifyNostr(nostrTestHex(t, other.PublicKey), digest, sig), "invalid_signature")
+}
+
+// Independently pinned official-reference outputs prove that the actual random
+// reader's bytes affect signing, rather than merely being read and discarded.
+// Both cases use deliberately public test scalar 3 and the zero digest.
+func TestNostrAuxiliaryRandomness(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		last      byte
+		signature string
+	}{
+		{"aux-zero", 0, "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca821525f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0"},
+		{"aux-one", 1, "1c5b6fa27b2144bdce8141ee187015f7286a8ddf9119820143fe72390939488f2e516825f121228ce867ccdf8597a6d484b8681b5e9f5be0ae11410b096690fd"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, secret := nostrTestMaterial(t, 3)
+			aux := make([]byte, 32)
+			aux[31] = tc.last
+			got, err := signNostrSecretWithRandom(rec, secret, make([]byte, 32), bytes.NewReader(aux))
+			if err != nil || !bytes.Equal(got, nostrTestHex(t, tc.signature)) {
+				t.Fatal("auxiliary randomness reference signature mismatch")
+			}
+			if !bytes.Equal(secret, make([]byte, 32)) {
+				t.Fatal("scalar buffer not cleared")
+			}
+		})
+	}
+}
+
+// Independent official-reference points cover 32 deterministically hashed test
+// scalars, plus the known generator and its negation at scalar boundaries.
+// This is sample coverage, not a proof for every private scalar.
+func TestNostrPublicDerivationFixtures(t *testing.T) {
+	data, err := os.ReadFile("testdata/nostr/public-points.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var points []string
+	if json.Unmarshal(data, &points) != nil || len(points) != 32 {
+		t.Fatal("invalid public point fixture")
+	}
+	for i, want := range points {
+		seed := sha256.Sum256([]byte(fmt.Sprintf("public-nostr-fixture-%d", i)))
+		r, secret, err := newNostrMaterialWithRandom(nostrTestRequest(), bytes.NewReader(seed[:]))
+		if err != nil || r.PublicKey != want {
+			t.Fatal("independent public point fixture mismatch")
+		}
+		clear(secret)
+	}
+	for _, scalar := range []string{
+		"0000000000000000000000000000000000000000000000000000000000000001",
+		"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+	} {
+		r, secret, err := newNostrMaterialWithRandom(nostrTestRequest(), bytes.NewReader(nostrTestHex(t, scalar)))
+		if err != nil || r.PublicKey != "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" {
+			t.Fatal("public scalar boundary fixture mismatch")
+		}
+		clear(secret)
+	}
 }
 
 // Sampling rejects zero and out-of-range scalars instead of reducing them;

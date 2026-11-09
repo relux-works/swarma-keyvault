@@ -87,29 +87,9 @@ if "${sandbox[@]}" /bin/bash -euc '
   test ! -e /home/runner
   test "$(go env GOROOT)" = /opt/go
   test "$(go env GOMODCACHE)" = /private/dependencies
-  # Resolve the exact runtime pin from canonical go.mod forms.
-  minimum=
-  expected=
-  while read -r directive version rest; do
-    case "$directive" in
-      go) minimum="go$version" ;;
-      toolchain) expected=${version:-invalid} ;;
-    esac
-  done < go.mod
-  if ! [[ "$minimum" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "verifier toolchain precondition failed: exact patch go directive required" >&2
-    exit 2
-  fi
-  if [ -z "$expected" ]; then expected=$minimum; fi
-  if ! [[ "$expected" =~ ^go[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "verifier toolchain precondition failed: exact released toolchain pin required" >&2
-    exit 2
-  fi
-  actual=$(go env GOVERSION)
-  if [ "$actual" != "$expected" ]; then
-    echo "verifier toolchain precondition failed: runtime $actual differs from pin $expected" >&2
-    exit 2
-  fi
+  # A stdlib-only preflight utility uses the authoritative Go module parser.
+  # It performs no product operation or dependency provisioning.
+  go run /source/tools/verifiertoolchain/main.go
   go version
   for namespace in user mnt net pid ipc uts cgroup; do
     printf "sandbox namespace %s: " "$namespace"

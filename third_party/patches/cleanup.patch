@@ -1,0 +1,659 @@
+--- a/btcec/go.mod
++++ b/btcec/go.mod
+@@ -1,6 +1,8 @@
+ module github.com/btcsuite/btcd/btcec/v2
+ 
+ go 1.26.10
++
++replace github.com/decred/dcrd/dcrec/secp256k1/v4 => ../secp256k1
+ 
+ require (
+ 	github.com/btcsuite/btcd/chainhash/v2 v2.0.0
+--- /dev/null
++++ b/btcec/schnorr/cleanup.go
+@@ -0,0 +1,40 @@
++// Use of this source code is governed by the ISC license in ../LICENSE.
++
++package schnorr
++
++import (
++	"github.com/btcsuite/btcd/btcec/v2"
++	"github.com/btcsuite/btcd/chainhash/v2"
++)
++
++// signingBuffers owns the named mutable secrets used by Sign. Keeping their
++// storage explicit permits lifecycle tests without a production observer hook.
++// This does not erase compiler copies or arithmetic/hash implementation state.
++type signingBuffers struct {
++	private, nonce, effectiveNonce, response btcec.ModNScalar
++	privateBytes, rfcPrivateBytes            [32]byte
++	t, rand                                  *chainhash.Hash
++	aux                                      *[32]byte
++	rfcNonce                                 *btcec.ModNScalar
++}
++
++func (b *signingBuffers) clear() {
++	b.private.Zero()
++	b.nonce.Zero()
++	b.effectiveNonce.Zero()
++	b.response.Zero()
++	clear(b.privateBytes[:])
++	clear(b.rfcPrivateBytes[:])
++	if b.t != nil {
++		clear(b.t[:])
++	}
++	if b.rand != nil {
++		clear(b.rand[:])
++	}
++	if b.aux != nil {
++		clear(b.aux[:])
++	}
++	if b.rfcNonce != nil {
++		b.rfcNonce.Zero()
++	}
++}
+--- /dev/null
++++ b/btcec/schnorr/cleanup_test.go
+@@ -0,0 +1,139 @@
++package schnorr
++
++import (
++	"bytes"
++	"encoding/hex"
++	"errors"
++	"sync"
++	"testing"
++
++	"github.com/btcsuite/btcd/btcec/v2"
++	secpSchnorr "github.com/decred/dcrd/dcrec/secp256k1/v4/schnorr"
++)
++
++func assertSigningBuffersCleared(t *testing.T, b *signingBuffers) {
++	t.Helper()
++	for _, s := range []*btcec.ModNScalar{&b.private, &b.nonce, &b.effectiveNonce, &b.response} {
++		if !s.IsZero() {
++			t.Fatal("owned signer scalar remains after return")
++		}
++	}
++	for _, raw := range [][]byte{b.privateBytes[:], b.rfcPrivateBytes[:]} {
++		if !bytes.Equal(raw, make([]byte, len(raw))) {
++			t.Fatal("owned signer bytes remain after return")
++		}
++	}
++	for _, raw := range []*[32]byte{(*[32]byte)(b.t), (*[32]byte)(b.rand), b.aux} {
++		if raw != nil && *raw != ([32]byte{}) {
++			t.Fatal("owned nonce or auxiliary bytes remain after return")
++		}
++	}
++	if b.rfcNonce != nil && !b.rfcNonce.IsZero() {
++		t.Fatal("owned RFC6979 scalar remains after return")
++	}
++}
++
++// These inspect the actual storage consumed by both production signing paths,
++// including successful signing and early refusals. They do not inspect stacks,
++// registers or internal hash arithmetic. Scalar 3 is a public test input.
++func TestSigningBufferLifecycle(t *testing.T) {
++	for _, nonce := range []bool{false, true} {
++		for _, bad := range []string{"", "digest", "private"} {
++			t.Run(map[bool]string{false: "rfc6979", true: "aux"}[nonce]+"/"+bad, func(t *testing.T) {
++				key, _ := btcec.PrivKeyFromBytes([]byte{3})
++				defer key.Zero()
++				if bad == "private" {
++					key.Zero()
++				}
++				msg := make([]byte, 32)
++				if bad == "digest" {
++					msg = msg[:31]
++				}
++				var options []SignOption
++				if nonce {
++					options = append(options, CustomNonce([32]byte{1}))
++				}
++				var b signingBuffers
++				sig, err := signWithBuffers(key, msg, &b, options...)
++				if bad == "" {
++					if err != nil || !sig.Verify(msg, key.PubKey()) {
++						t.Fatal("valid signing control failed")
++					}
++					if nonce && (b.t == nil || b.rand == nil || b.aux == nil) {
++						t.Fatal("aux path did not exercise owned buffers")
++					}
++					if !nonce && b.rfcNonce == nil {
++						t.Fatal("RFC6979 path did not exercise owned nonce")
++					}
++				} else if err == nil || sig != nil {
++					t.Fatal("invalid signing input accepted")
++				} else if bad == "digest" && !errors.Is(err, secpSchnorr.ErrInvalidHashLen) {
++					t.Fatal("malformed digest returned the wrong refusal")
++				} else if bad == "private" && !errors.Is(err, secpSchnorr.ErrPrivateKeyIsZero) {
++					t.Fatal("zero private scalar returned the wrong refusal")
++				}
++				assertSigningBuffersCleared(t, &b)
++			})
++		}
++	}
++}
++
++// Fresh options work; reuse explicitly refuses instead of silently using erased
++// auxiliary input. Concurrent reuse grants one invocation and has no data race.
++func TestCustomNonceConsumption(t *testing.T) {
++	key, _ := btcec.PrivKeyFromBytes([]byte{3})
++	defer key.Zero()
++	option := CustomNonce([32]byte{1})
++	var wg sync.WaitGroup
++	type result struct {
++		sig *Signature
++		err error
++	}
++	verdicts := make(chan result, 2)
++	for i := 0; i < 2; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			sig, err := Sign(key, make([]byte, 32), option)
++			verdicts <- result{sig, err}
++		}()
++	}
++	wg.Wait()
++	close(verdicts)
++	accepted := 0
++	for r := range verdicts {
++		if r.err == nil && r.sig != nil && r.sig.Verify(make([]byte, 32), key.PubKey()) {
++			accepted++
++		} else if r.err == nil || r.err.Error() != "auxiliary nonce option already consumed" || r.sig != nil {
++			t.Fatal("concurrent reuse returned the wrong refusal or signature")
++		}
++	}
++	if accepted != 1 {
++		t.Fatal("auxiliary option did not admit exactly one call")
++	}
++	if sig, err := Sign(key, make([]byte, 32), option); err == nil || err.Error() != "auxiliary nonce option already consumed" || sig != nil {
++		t.Fatal("consumed auxiliary option accepted")
++	}
++	if sig, err := Sign(key, make([]byte, 32), CustomNonce([32]byte{1})); err != nil || sig == nil {
++		t.Fatal("fresh auxiliary option refused")
++	}
++}
++
++// Selecting the last fresh option erases the overwritten option's actual
++// captured storage. The signature remains the official zero-aux vector.
++func TestCustomNonceOverwriteCleanup(t *testing.T) {
++	key, _ := btcec.PrivKeyFromBytes([]byte{3})
++	defer key.Zero()
++	var overwritten *[32]byte
++	capture := func(o *signOptions) { overwritten = o.authNonce }
++	sig, err := Sign(key, make([]byte, 32), CustomNonce([32]byte{1}), capture, CustomNonce([32]byte{}))
++	if err != nil || sig == nil || !sig.Verify(make([]byte, 32), key.PubKey()) {
++		t.Fatal("last fresh auxiliary option control failed")
++	}
++	if hex.EncodeToString(sig.Serialize()) != "e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca821525f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0" {
++		t.Fatal("last auxiliary option did not select official zero-aux vector")
++	}
++	if overwritten == nil || *overwritten != ([32]byte{}) {
++		t.Fatal("overwritten auxiliary option not cleared")
++	}
++}
+--- a/btcec/schnorr/signature.go
++++ b/btcec/schnorr/signature.go
+@@ -4,6 +4,7 @@
+ 
+ import (
+ 	"fmt"
++	"sync/atomic"
+ 
+ 	"github.com/btcsuite/btcd/btcec/v2"
+ 	"github.com/btcsuite/btcd/chainhash/v2"
+@@ -249,7 +250,7 @@
+ // NOT be 0.  Since this is an internal use function, these preconditions MUST
+ // be satisfied by the caller.
+ func schnorrSign(privKey, nonce *btcec.ModNScalar, pubKey *btcec.PublicKey, hash []byte,
+-	opts *signOptions) (*Signature, error) {
++	opts *signOptions, buffers *signingBuffers) (*Signature, error) {
+ 
+ 	// The algorithm for producing a BIP-340 signature is described in
+ 	// README.md and is reproduced here for reference:
+@@ -291,8 +292,9 @@
+ 	//
+ 	// R = kG
+ 	var R btcec.JacobianPoint
+-	k := *nonce
+-	btcec.ScalarBaseMultNonConst(&k, &R)
++	k := &buffers.effectiveNonce
++	k.Set(nonce)
++	btcec.ScalarBaseMultNonConst(k, &R)
+ 
+ 	// Step 11.
+ 	//
+@@ -322,7 +324,7 @@
+ 	// Step 13.
+ 	//
+ 	// s = k + e*d mod n
+-	s := new(btcec.ModNScalar).Mul2(&e, privKey).Add(&k)
++	s := buffers.response.Mul2(&e, privKey).Add(k)
+ 	k.Zero()
+ 
+ 	sig := NewSignature(&R.X, s)
+@@ -356,6 +358,10 @@
+ 	// authNonce allows the user to pass in their own nonce information, which
+ 	// is useful for schemes like mu-sig.
+ 	authNonce *[32]byte
++
++	// A supplied auxiliary option is consumed once so it can be erased after
++	// signing. Reuse refuses rather than silently signing with cleared bytes.
++	invalidNonce bool
+ }
+ 
+ // defaultSignOptions returns the default set of signing operations.
+@@ -377,8 +383,18 @@
+ // to specify this custom value when using multi-signatures schemes such as
+ // Mu-Sig2. If this option isn't set, then rfc6979 will be used to generate the
+ // nonce material.
++// This cleanup repair makes the returned option single-use. Create a fresh
++// option for each call; reuse is refused, including concurrent reuse.
+ func CustomNonce(auxData [32]byte) SignOption {
++	var consumed atomic.Bool
+ 	return func(o *signOptions) {
++		if consumed.Swap(true) {
++			o.invalidNonce = true
++			return
++		}
++		if o.authNonce != nil {
++			clear(o.authNonce[:])
++		}
+ 		o.authNonce = &auxData
+ 	}
+ }
+@@ -395,11 +411,22 @@
+ // someone having EM field/cache/etc access.
+ func Sign(privKey *btcec.PrivateKey, hash []byte,
+ 	signOpts ...SignOption) (*Signature, error) {
++	var buffers signingBuffers
++	return signWithBuffers(privKey, hash, &buffers, signOpts...)
++}
++
++func signWithBuffers(privKey *btcec.PrivateKey, hash []byte, buffers *signingBuffers,
++	signOpts ...SignOption) (*Signature, error) {
++	defer buffers.clear()
+ 
+ 	// First, parse the set of optional signing options.
+ 	opts := defaultSignOptions()
+ 	for _, option := range signOpts {
+ 		option(opts)
++	}
++	buffers.aux = opts.authNonce
++	if opts.invalidNonce {
++		return nil, signatureError(ecdsa_schnorr.ErrSchnorrHashValue, "auxiliary nonce option already consumed")
+ 	}
+ 
+ 	// The algorithm for producing a BIP-340 signature is described in
+@@ -438,7 +465,7 @@
+ 	// Step 1.
+ 	//
+ 	// d' = int(d)
+-	var privKeyScalar btcec.ModNScalar
++	privKeyScalar := &buffers.private
+ 	privKeyScalar.Set(&privKey.Key)
+ 
+ 	// Step 2.
+@@ -478,10 +505,12 @@
+ 		// Step 6.
+ 		//
+ 		// t = bytes(d) xor tagged_hash("BIP0340/aux", a)
+-		privBytes := privKeyScalar.Bytes()
++		privKeyScalar.PutBytes(&buffers.privateBytes)
++		privBytes := buffers.privateBytes[:]
+ 		t := chainhash.TaggedHash(
+ 			chainhash.TagBIP0340Aux, (*opts.authNonce)[:],
+ 		)
++		buffers.t = t
+ 		for i := 0; i < len(t); i++ {
+ 			t[i] ^= privBytes[i]
+ 		}
+@@ -495,11 +524,12 @@
+ 		rand := chainhash.TaggedHash(
+ 			chainhash.TagBIP0340Nonce, t[:], pubKeyBytes[1:], hash,
+ 		)
++		buffers.rand = rand
+ 
+ 		// Step 8.
+ 		//
+ 		// k'= int(rand) mod n
+-		var kPrime btcec.ModNScalar
++		kPrime := &buffers.nonce
+ 		kPrime.SetBytes((*[32]byte)(rand))
+ 
+ 		// Step 9.
+@@ -510,7 +540,7 @@
+ 			return nil, signatureError(ecdsa_schnorr.ErrSchnorrHashValue, str)
+ 		}
+ 
+-		sig, err := schnorrSign(&privKeyScalar, &kPrime, pub, hash, opts)
++		sig, err := schnorrSign(privKeyScalar, kPrime, pub, hash, opts, buffers)
+ 		kPrime.Zero()
+ 		if err != nil {
+ 			return nil, err
+@@ -519,9 +549,8 @@
+ 		return sig, nil
+ 	}
+ 
+-	var privKeyBytes [scalarSize]byte
+-	privKeyScalar.PutBytes(&privKeyBytes)
+-	defer zeroArray(&privKeyBytes)
++	privKeyBytes := buffers.rfcPrivateBytes[:]
++	privKeyScalar.PutBytes(&buffers.rfcPrivateBytes)
+ 	for iteration := uint32(0); ; iteration++ {
+ 		// Step 6-9.
+ 		//
+@@ -531,9 +560,10 @@
+ 		k := btcec.NonceRFC6979(
+ 			privKeyBytes[:], hash, rfc6979ExtraDataV0[:], nil, iteration,
+ 		)
++		buffers.rfcNonce = k
+ 
+ 		// Steps 10-15.
+-		sig, err := schnorrSign(&privKeyScalar, k, pub, hash, opts)
++		sig, err := schnorrSign(privKeyScalar, k, pub, hash, opts, buffers)
+ 		k.Zero()
+ 		if err != nil {
+ 			// Try again with a new nonce.
+--- /dev/null
++++ b/secp256k1/cleanup.go
+@@ -0,0 +1,33 @@
++// Use of this source code is governed by the ISC license in LICENSE.
++
++package secp256k1
++
++// nonceBuffers owns the RFC6979 byte encodings and reconstructible HMAC state.
++// Hash implementation internals and compiler temporaries remain outside this
++// explicit-buffer guarantee. A returned scalar transfers to its caller.
++type nonceBuffers struct {
++	key    [112]byte
++	v, k   []byte
++	hasher *hmacsha256
++}
++
++func (b *nonceBuffers) replaceV(next []byte) { zeroBytes(b.v); b.v = next }
++func (b *nonceBuffers) replaceK(next []byte) { zeroBytes(b.k); b.k = next }
++
++func (b *nonceBuffers) clear() {
++	zeroBytes(b.key[:])
++	zeroBytes(b.v)
++	zeroBytes(b.k)
++	if b.hasher != nil {
++		zeroBytes(b.hasher.ipad[:])
++		zeroBytes(b.hasher.opad[:])
++		b.hasher.inner.Reset()
++		b.hasher.outer.Reset()
++	}
++}
++
++func zeroBytes(b []byte) {
++	for i := range b {
++		b[i] = 0
++	}
++}
+--- /dev/null
++++ b/secp256k1/cleanup_test.go
+@@ -0,0 +1,82 @@
++package secp256k1
++
++import (
++	"bytes"
++	"encoding/hex"
++	"testing"
++)
++
++// The actual fast table traversal consumes and clears the named encoding while
++// retaining the known public generator result. No new multiplication algorithm.
++func TestBaseMultiplyEncodingCleanup(t *testing.T) {
++	var raw [32]byte
++	raw[31] = 1
++	var got, want JacobianPoint
++	scalarBaseMultFastWithBytes(&raw, &got)
++	if raw != ([32]byte{}) {
++		t.Fatal("base multiply scalar encoding remains after return")
++	}
++	encoded, _ := hex.DecodeString("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
++	public, err := ParsePubKey(encoded)
++	if err != nil {
++		t.Fatal("invalid public generator fixture")
++	}
++	public.AsJacobian(&want)
++	if !got.EquivalentNonConst(&want) {
++		t.Fatal("base multiply positive control changed")
++	}
++}
++
++// Both retained RFC6979 retry paths clear their named key, V/K and HMAC pad
++// buffers; the returned nonce remains usable and transfers to the caller.
++func TestNonceBufferLifecycle(t *testing.T) {
++	for _, retry := range []uint32{0, 1, 5} {
++		var b nonceBuffers
++		key := make([]byte, 32)
++		key[31] = 3
++		nonce := nonceRFC6979WithBuffers(key, make([]byte, 32), nil, nil, retry, &b)
++		if nonce.IsZero() {
++			t.Fatal("valid nonce control failed")
++		}
++		nonce.Zero()
++		if b.hasher == nil || len(b.v) != 32 || len(b.k) != 32 {
++			t.Fatal("nonce buffers were not exercised")
++		}
++		if b.key != ([112]byte{}) {
++			t.Fatal("RFC6979 key encoding remains after return")
++		}
++		for _, raw := range [][]byte{b.v, b.k, b.hasher.ipad[:], b.hasher.opad[:]} {
++			if !bytes.Equal(raw, make([]byte, len(raw))) {
++				t.Fatal("RFC6979 reconstructible buffer remains after return")
++			}
++		}
++	}
++}
++
++// Replaced HMAC outputs are erased before losing ownership of their storage.
++func TestNonceBufferReplacement(t *testing.T) {
++	oldV, oldK := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
++	b := nonceBuffers{v: oldV, k: oldK}
++	b.replaceV(make([]byte, 32))
++	b.replaceK(make([]byte, 32))
++	if !bytes.Equal(oldV, make([]byte, 32)) || !bytes.Equal(oldK, make([]byte, 32)) {
++		t.Fatal("replaced nonce buffer was not cleared")
++	}
++	b.clear()
++}
++
++// Serialization transfers its byte buffer while erasing the value-receiver's
++// full private-key copy. The borrowed original key retains its caller ownership.
++func TestPrivateSerializationCopyCleanup(t *testing.T) {
++	key := PrivKeyFromBytes([]byte{3})
++	defer key.Zero()
++	working := *key
++	encoded := serializePrivateCopy(&working)
++	if !working.Key.IsZero() {
++		t.Fatal("serialization receiver copy remains after return")
++	}
++	if len(encoded) != 32 || encoded[31] != 3 || key.Key.IsZero() {
++		t.Fatal("serialization positive control or caller ownership changed")
++	}
++	zeroBytes(encoded)
++}
+--- a/secp256k1/curve.go
++++ b/secp256k1/curve.go
+@@ -1254,6 +1254,15 @@
+ // scalarBaseMultNonConstFast computes k*G through the precomputed lookup
+ // tables.
+ func scalarBaseMultNonConstFast(k *ModNScalar, result *JacobianPoint) {
++	var kb [32]byte
++	k.PutBytes(&kb)
++	scalarBaseMultFastWithBytes(&kb, result)
++}
++
++// The same vetted table traversal consumes an explicitly owned encoding.
++// The helper clears that encoding on every return; no scalar algorithm changes.
++func scalarBaseMultFastWithBytes(kb *[32]byte, result *JacobianPoint) {
++	defer zeroArray32(kb)
+ 	bytePoints := s256BytePoints()
+ 
+ 	// Start with the point at infinity.
+@@ -1265,7 +1274,6 @@
+ 	// is to add up the byte points.  This is best understood by expressing k in
+ 	// base-256 which it already sort of is.  Each "digit" in the 8-bit window
+ 	// can be looked up using bytePoints and added together.
+-	kb := k.Bytes()
+ 	for i := 0; i < len(kb); i++ {
+ 		pt := &bytePoints[i][kb[i]]
+ 		AddNonConst(result, pt, result)
+--- a/secp256k1/nonce.go
++++ b/secp256k1/nonce.go
+@@ -56,6 +56,7 @@
+ 	if len(key) > sha256.BlockSize {
+ 		h.outer.Write(key)
+ 		key = h.outer.Sum(nil)
++		defer zeroBytes(key)
+ 	}
+ 	copy(h.ipad[:], key)
+ 	copy(h.opad[:], key)
+@@ -89,7 +90,9 @@
+ func (h *hmacsha256) Sum() []byte {
+ 	h.outer.Reset()
+ 	h.outer.Write(h.opad[:])
+-	h.outer.Write(h.inner.Sum(nil))
++	inner := h.inner.Sum(nil)
++	h.outer.Write(inner)
++	zeroBytes(inner)
+ 	return h.outer.Sum(nil)
+ }
+ 
+@@ -115,6 +118,12 @@
+ // original nonce produced results in an invalid signature (e.g. R == 0).
+ // Signing code should start with 0 and increment it if necessary.
+ func NonceRFC6979(privKey []byte, hash []byte, extra []byte, version []byte, extraIterations uint32) *ModNScalar {
++	var buffers nonceBuffers
++	return nonceRFC6979WithBuffers(privKey, hash, extra, version, extraIterations, &buffers)
++}
++
++func nonceRFC6979WithBuffers(privKey, hash, extra, version []byte, extraIterations uint32, buffers *nonceBuffers) *ModNScalar {
++	defer buffers.clear()
+ 	// Input to HMAC is the 32-byte private key and the 32-byte hash.  In
+ 	// addition, it may include the optional 32-byte extra data and 16-byte
+ 	// version.  Create a fixed-size array to avoid extra allocs and slice it
+@@ -125,7 +134,7 @@
+ 		extraLen   = 32
+ 		versionLen = 16
+ 	)
+-	var keyBuf [privKeyLen + hashLen + extraLen + versionLen]byte
++	keyBuf := buffers.key[:]
+ 
+ 	// Truncate rightmost bytes of private key and hash if they are too long and
+ 	// leave left padding of zeros when they're too short.
+@@ -161,7 +170,8 @@
+ 	// function in this optimized implementation, the result is just the hash
+ 	// length, so avoid the extra calculations.  Also, since it isn't modified,
+ 	// start with a global value.
+-	v := oneInitializer
++	buffers.v = append([]byte(nil), oneInitializer...)
++	v := buffers.v
+ 
+ 	// Step C (Go zeroes all allocated memory).
+ 	//
+@@ -171,7 +181,8 @@
+ 	// As above, since the hash length is a multiple of 8 for the chosen hash
+ 	// function in this optimized implementation, the result is just the hash
+ 	// length, so avoid the extra calculations.
+-	k := zeroInitializer[:hashLen]
++	buffers.k = make([]byte, hashLen)
++	k := buffers.k
+ 
+ 	// Step D.
+ 	//
+@@ -180,17 +191,20 @@
+ 	// Note that key is the "int2octets(x) || bits2octets(h1)" portion along
+ 	// with potential additional data as described by section 3.6 of the RFC.
+ 	hasher := newHMACSHA256(k)
++	buffers.hasher = hasher
+ 	hasher.Write(oneInitializer)
+ 	hasher.Write(singleZero)
+ 	hasher.Write(key)
+-	k = hasher.Sum()
++	buffers.replaceK(hasher.Sum())
++	k = buffers.k
+ 
+ 	// Step E.
+ 	//
+ 	// V = HMAC_K(V)
+ 	hasher.ResetKey(k)
+ 	hasher.Write(v)
+-	v = hasher.Sum()
++	buffers.replaceV(hasher.Sum())
++	v = buffers.v
+ 
+ 	// Step F.
+ 	//
+@@ -202,14 +216,16 @@
+ 	hasher.Write(v)
+ 	hasher.Write(singleOne)
+ 	hasher.Write(key)
+-	k = hasher.Sum()
++	buffers.replaceK(hasher.Sum())
++	k = buffers.k
+ 
+ 	// Step G.
+ 	//
+ 	// V = HMAC_K(V)
+ 	hasher.ResetKey(k)
+ 	hasher.Write(v)
+-	v = hasher.Sum()
++	buffers.replaceV(hasher.Sum())
++	v = buffers.v
+ 
+ 	// Step H.
+ 	//
+@@ -230,7 +246,8 @@
+ 		// loop or create an intermediate T.
+ 		hasher.Reset()
+ 		hasher.Write(v)
+-		v = hasher.Sum()
++		buffers.replaceV(hasher.Sum())
++		v = buffers.v
+ 
+ 		// Step H3.
+ 		//
+@@ -248,16 +265,19 @@
+ 				return &secret
+ 			}
+ 		}
++		secret.Zero()
+ 
+ 		// K = HMAC_K(V || 0x00)
+ 		hasher.Reset()
+ 		hasher.Write(v)
+ 		hasher.Write(singleZero)
+-		k = hasher.Sum()
++		buffers.replaceK(hasher.Sum())
++		k = buffers.k
+ 
+ 		// V = HMAC_K(V)
+ 		hasher.ResetKey(k)
+ 		hasher.Write(v)
+-		v = hasher.Sum()
+-	}
+-}
++		buffers.replaceV(hasher.Sum())
++		v = buffers.v
++	}
++}
+--- a/secp256k1/privkey.go
++++ b/secp256k1/privkey.go
+@@ -105,6 +105,11 @@
+ // Serialize returns the private key as a 256-bit big-endian binary-encoded
+ // number, padded to a length of 32 bytes.
+ func (p PrivateKey) Serialize() []byte {
++	return serializePrivateCopy(&p)
++}
++
++func serializePrivateCopy(p *PrivateKey) []byte {
++	defer p.Zero()
+ 	var privKeyBytes [PrivKeyBytesLen]byte
+ 	p.Key.PutBytes(&privKeyBytes)
+ 	return privKeyBytes[:]

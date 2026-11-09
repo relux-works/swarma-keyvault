@@ -120,6 +120,7 @@ func nostrPrivate(secret []byte) (*btcec.PrivateKey, error) {
 }
 
 func signNostrWithAux(secret, digest []byte, aux [32]byte) ([]byte, error) {
+	defer clear(aux[:])
 	if len(digest) != 32 {
 		return nil, nostrRefuse("invalid_digest")
 	}
@@ -128,7 +129,6 @@ func signNostrWithAux(secret, digest []byte, aux [32]byte) ([]byte, error) {
 		return nil, err
 	}
 	defer private.Zero()
-	defer clear(aux[:])
 	sig, err := schnorr.Sign(private, digest, schnorr.CustomNonce(aux))
 	if err != nil {
 		return nil, nostrRefuse("sign_failed")

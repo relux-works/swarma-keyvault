@@ -2,6 +2,11 @@ module github.com/relux-works/swarma-keyvault
 
 go 1.26.10
 
+// Explicit source-pinned cleanup repairs; see third_party/README.md.
+replace github.com/btcsuite/btcd/btcec/v2 => ./third_party/btcec
+
+replace github.com/decred/dcrd/dcrec/secp256k1/v4 => ./third_party/secp256k1
+
 require (
 	github.com/btcsuite/btcd/btcec/v2 v2.5.1
 	github.com/btcsuite/btcd/btcutil v1.1.6

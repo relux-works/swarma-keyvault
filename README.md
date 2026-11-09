@@ -17,6 +17,16 @@ migration or installed binary replacement.
 
 ## Tools and local build
 
+`tools/verifiertoolchain` is the stdlib-only hosted preflight utility. Run
+`go run ./tools/verifiertoolchain -modfile go.mod` to validate the module grammar
+with Go's own parser and require the running compiler's exact pinned version;
+it does not modify the file or provision dependencies. Run
+`go test -race -count=1 ./tools/verifiertoolchain ./scripts/tests` for its
+regressions and the repaired crypto modules' retained upstream/lifecycle tests.
+Keep build artifacts and logs in `.temp/`. The explicit crypto source pins,
+licenses, delta and per-module test commands are in
+[`third_party/README.md`](third_party/README.md).
+
 Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned by `go.mod` on `ubuntu-latest`, lists every Linux-buildable Go package, and runs `go vet ./...` and `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v ./...`; it requires at least 72 committed interop vectors and cancels superseded PR runs only; native custody still requires the confined macOS gate.
 
 The initial custody target is macOS with Go 1.26.10 or later (go.mod selects

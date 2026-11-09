@@ -28,7 +28,10 @@ process during generation/signing. Explicit owned byte buffers and private-key
 objects are cleared on success and refusal. Go, the cryptography library and
 Security.framework can retain internal copies outside those explicit buffers;
 this is not a guarantee against memory inspection, crash dumps or an owner/
-administrator changing Keychain access. Protect the Mac and its login account.
+administrator changing Keychain access. The explicit source repairs and their
+precise limits are documented in [third_party/README.md](../third_party/README.md).
+The retained algorithms have variable-time aspects; no constant-time or local
+side-channel resistance is claimed. Protect the Mac and its login account.
 
 No command imports or exports private scalars, seeds or `nsec`. There is no
 private-key getter in the backend interface. Public queries request attributes
