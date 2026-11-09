@@ -13,6 +13,7 @@ profile publishing is outside this skill.
 | Task | Read only the relevant reference |
 | --- | --- |
 | Key records, public verification, one-shot key operations | [CLI and record policy](references/cli.md) |
+| Nostr secp256k1 keys, public npub and BIP-340 event-id signing | [Nostr custody](references/nostr.md) |
 | Generation-bound JSON-lines signing session | [Signer contract 1](references/signer-1.md) |
 | SSH authentication or Git SSH signing with new dedicated keys | [SSH interface](references/keyvault-ssh-new-keys.md) |
 | Service KEK client integration | [KEK integration](references/kek-integration.md), then [broker boundaries](references/kek.md) |
@@ -54,6 +55,9 @@ UNKNOWN outcomes and their journals; failed output can follow an actual effect.
 ## Actual interfaces
 
 `cmd/mac-keyvault` manages P-256 key records, `signer serve` and `ssh-agent`.
+Its separate `nostr` family manages software secp256k1 custody under a
+signed-binary-only login-Keychain ACL, without a presence or hardware
+non-extractability claim; read the Nostr reference before selecting it.
 There is no `keys` or `kek` subcommand. KEK custody uses the separate
 `cmd/mac-keyvault-kek` broker and public Go package
 `github.com/relux-works/swarma-keyvault/pkg/kekclient`.

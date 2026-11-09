@@ -55,3 +55,20 @@ func TestSandboxNilMethodValue(t *testing.T) {
 	items, err := list()
 	assertSandboxListRefused(t, items, err, keychaingate.Applied() || keychaingate.Confined())
 }
+
+// The new metadata-only namespace cannot bypass the already established
+// process sandbox; refusal returns no records. This is no native custody pass.
+func TestNostrNativeReadOnlyConfinement(t *testing.T) {
+	requireSandboxRegression(t)
+	if !keychaingate.Applied() && !keychaingate.Confined() {
+		t.Fatal("confinement unavailable")
+	}
+	records, err := NewNostrSecurityStore().List()
+	var status *StatusError
+	if len(records) != 0 || !errors.As(err, &status) {
+		t.Fatal("native metadata query escaped confinement")
+	}
+	if status.Status != -50 && status.Status != -25308 && status.Status != -25291 {
+		t.Fatalf("unexpected native refusal: %v", err)
+	}
+}

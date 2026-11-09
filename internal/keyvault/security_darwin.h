@@ -23,4 +23,9 @@ int MacKeyVaultDecrypt(const char *label, const unsigned char *in, size_t inLen,
                        unsigned char **out, size_t *outLen);
 int MacKeyVaultDisableUI(void);
 
+// Dedicated Nostr generic-password records; metadata calls never request data.
+int MacKeyVaultNostrCreate(const char *account, const char *metadata, const unsigned char *secret);
+int MacKeyVaultNostrList(char **out, size_t *outLen);
+int MacKeyVaultNostrRead(const char *account, const char *metadata, unsigned char *secret);
+
 #endif

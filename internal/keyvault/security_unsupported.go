@@ -25,3 +25,13 @@ func (s *SecurityStore) Decrypt(string, []byte) ([]byte, error) { return nil, er
 
 // DisableKeychainUI refuses off macOS: there is no Keychain to protect.
 func DisableKeychainUI() error { return errUnsupported }
+
+// NostrSecurityStore refuses custody without the native macOS backend.
+type NostrSecurityStore struct{}
+
+func NewNostrSecurityStore() *NostrSecurityStore { return &NostrSecurityStore{} }
+func (*NostrSecurityStore) Create(NostrRecord) (NostrRecord, error) {
+	return NostrRecord{}, errUnsupported
+}
+func (*NostrSecurityStore) List() ([]NostrRecord, error)             { return nil, errUnsupported }
+func (*NostrSecurityStore) Sign(NostrRecord, []byte) ([]byte, error) { return nil, errUnsupported }

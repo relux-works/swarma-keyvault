@@ -19,8 +19,8 @@ migration or installed binary replacement.
 
 Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned by `go.mod` on `ubuntu-latest`, lists every Linux-buildable Go package, and runs `go vet ./...` and `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -v ./...`; it requires at least 72 committed interop vectors and cancels superseded PR runs only; native custody still requires the confined macOS gate.
 
-The initial custody target is macOS with Go 1.26.0 or later (go.mod pins
-toolchain go1.26.10; older installs download it or need it preinstalled), cgo and
+The initial custody target is macOS with Go 1.26.10 or later (go.mod selects
+go1.26.10; older installs download it or need it preinstalled), cgo and
 the Apple Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired
 CryptoKit helper, and macOS `sandbox-exec` confines fake-backed test processes.
 From this directory, build only new local artifacts:
@@ -55,6 +55,18 @@ public-certificate tests can prove a trust refusal, not a native positive match.
 Required native certificate qualification and its limits are described in
 [the KEK contract](docs/kek.md). Test/build logs and scratch belong under `.temp/`.
 The native-input allowlist is a review tripwire; it does not replace confinement.
+
+## Nostr keys
+
+`mac-keyvault nostr` adds dedicated secp256k1 generation, list/describe, public
+x-only hex or NIP-19 npub export, 32-byte event-id BIP-340 signing and offline
+verification. Private keys stay in a signed-binary-only login-Keychain item at
+rest and transiently in the vault process for signing; no private export/import,
+Secure Enclave custody or Touch ID is claimed. Records explicitly report
+`storage=keychain-acl`, `presence=false`. Read [the Nostr interface and custody
+contract](docs/nostr.md) for exact commands, test lanes, limits and the planned
+attended installation/key-creation boundary. Existing P-256 interfaces retain
+their contracts.
 
 The multi-use grant interop vectors live in
 [`interop/multi-use-grants/`](interop/multi-use-grants/README.md). The confined

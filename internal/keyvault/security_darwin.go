@@ -12,6 +12,7 @@ import "C"
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -266,4 +267,72 @@ func parseACLRecords(raw []byte) []ACLEntry {
 		entries = append(entries, entry)
 	}
 	return entries
+}
+
+// NostrSecurityStore is the dedicated signed-binary-only generic-password store.
+// No method returns a private scalar, and there is no fallback backend.
+type NostrSecurityStore struct{}
+
+func NewNostrSecurityStore() *NostrSecurityStore { return &NostrSecurityStore{} }
+
+func (*NostrSecurityStore) Create(request NostrRecord) (NostrRecord, error) {
+	record, secret, err := newNostrMaterial(request)
+	if err != nil {
+		return NostrRecord{}, err
+	}
+	defer clear(secret)
+	metadata, _ := json.Marshal(record)
+	account := C.CString(record.Account())
+	tag := C.CString(string(metadata))
+	defer C.free(unsafe.Pointer(account))
+	defer C.free(unsafe.Pointer(tag))
+	status := int(C.MacKeyVaultNostrCreate(account, tag, (*C.uchar)(unsafe.Pointer(&secret[0]))))
+	if status == -25299 {
+		return NostrRecord{}, nostrRefuse("duplicate")
+	}
+	if status != 0 {
+		return NostrRecord{}, &StatusError{Op: "nostr create", Status: status}
+	}
+	return record, nil
+}
+
+func (*NostrSecurityStore) List() ([]NostrRecord, error) {
+	var raw *C.char
+	var length C.size_t
+	status := int(C.MacKeyVaultNostrList(&raw, &length))
+	if status != 0 {
+		return nil, &StatusError{Op: "nostr list", Status: status}
+	}
+	if raw == nil {
+		return []NostrRecord{}, nil
+	}
+	defer C.free(unsafe.Pointer(raw))
+	if length > 4*1024*1024 {
+		return nil, nostrRefuse("invalid_record")
+	}
+	return parseNostrList(C.GoBytes(unsafe.Pointer(raw), C.int(length)))
+}
+
+func (*NostrSecurityStore) Sign(record NostrRecord, digest []byte) ([]byte, error) {
+	if len(digest) != 32 {
+		return nil, nostrRefuse("invalid_digest")
+	}
+	if err := validateNostrRecord(record); err != nil {
+		return nil, err
+	}
+	metadata, _ := json.Marshal(record)
+	account := C.CString(record.Account())
+	tag := C.CString(string(metadata))
+	defer C.free(unsafe.Pointer(account))
+	defer C.free(unsafe.Pointer(tag))
+	secret := make([]byte, 32)
+	defer clear(secret)
+	status := int(C.MacKeyVaultNostrRead(account, tag, (*C.uchar)(unsafe.Pointer(&secret[0]))))
+	if status == errSecItemNotFound {
+		return nil, ErrNotFound
+	}
+	if status != 0 {
+		return nil, &StatusError{Op: "nostr sign", Status: status}
+	}
+	return signNostrSecret(record, secret, digest)
 }
