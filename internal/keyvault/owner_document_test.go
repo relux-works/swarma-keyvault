@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -104,11 +105,11 @@ func TestDocumentHelperPipeBindingAndRefusals(t *testing.T) {
 			// cannot substitute for a planted invalid handoff.
 			switch mode {
 			case "tamper", "digest-only", "wrong-phase":
-				if err == nil || !strings.Contains(err.Error(), "invalid native confirmation") {
+				if err == nil || err.Error() != "owner document: invalid native confirmation" {
 					t.Fatalf("wrong confirmation refusal: %v", err)
 				}
 			case "unknown-field":
-				if err == nil || !strings.Contains(err.Error(), `unknown field "consent"`) {
+				if err == nil || err.Error() != `json: unknown field "consent"` {
 					t.Fatalf("wrong strict JSON refusal: %v", err)
 				}
 			case "oversize":
@@ -124,7 +125,7 @@ func TestDocumentHelperPipeBindingAndRefusals(t *testing.T) {
 					t.Fatalf("lost final gate refusal: %v", err)
 				}
 			case "trailing":
-				if err == nil || !strings.Contains(err.Error(), "trailing helper output") {
+				if err == nil || err.Error() != "owner document: trailing helper output" {
 					t.Fatalf("wrong trailing-frame refusal: %v", err)
 				}
 			}
@@ -132,7 +133,7 @@ func TestDocumentHelperPipeBindingAndRefusals(t *testing.T) {
 				if err != nil || string(response.DER) != "synthetic-der" || !bytes.Equal(response.Point, binding.Point) || checks != 1 {
 					t.Fatal(response, err, checks)
 				}
-			} else if err == nil || len(response.DER) != 0 {
+			} else if err == nil || !reflect.DeepEqual(response, EnclaveResponse{}) {
 				t.Fatal("unsafe result", response, checks)
 			}
 			switch mode {
@@ -163,11 +164,27 @@ func TestDocumentHelperPipeBindingAndRefusals(t *testing.T) {
 }
 
 func TestDocumentHelperRejectsMissingProtocolAndRelativePath(t *testing.T) {
-	for _, path := range []string{"relative", filepath.Join(t.TempDir(), "absent")} {
-		_, err := (ExecEnclaveHelper{Path: path}).CallDocument(context.Background(), EnclaveRequest{Op: "review-document", Document: &DocumentBinding{}}, func(DocumentBinding) error { t.Fatal("missing helper dispatched"); return nil })
-		if err == nil {
-			t.Fatal("invalid helper allowed")
-		}
+	for _, tc := range []struct {
+		name string
+		path string
+	}{
+		{"relative-path", "relative"},
+		{"missing-file", filepath.Join(t.TempDir(), "absent")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response, err := (ExecEnclaveHelper{Path: tc.path}).CallDocument(context.Background(), EnclaveRequest{Op: "review-document", Document: &DocumentBinding{}}, func(DocumentBinding) error { t.Fatal("missing helper dispatched"); return nil })
+			if tc.name == "relative-path" {
+				// This validation error has no exported type or sentinel.
+				if err == nil || err.Error() != "owner document: helper path must be absolute" {
+					t.Fatalf("wrong absolute-path refusal: %v", err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("wrong missing-file refusal: %v", err)
+			}
+			if !reflect.DeepEqual(response, EnclaveResponse{}) {
+				t.Fatalf("path refusal returned a result: %+v", response)
+			}
+		})
 	}
 }
 

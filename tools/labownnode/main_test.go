@@ -81,7 +81,7 @@ func TestCLIStringProjection(t *testing.T) {
 			if err != nil || string(got) != `"`+text+`"` {
 				t.Fatalf("bare CLI string: %s %v", got, err)
 			}
-		} else if err == nil || got != nil {
+		} else if !errors.Is(err, refused) || got != nil {
 			t.Fatal("malformed CLI hash accepted")
 		}
 	}
@@ -108,7 +108,7 @@ func TestCLINullProjection(t *testing.T) {
 			if err != nil || string(got) != "null" {
 				t.Fatalf("null CLI result: %s %v", got, err)
 			}
-		} else if err == nil || got != nil {
+		} else if !errors.Is(err, refused) || got != nil {
 			t.Fatal("empty non-null result accepted")
 		}
 	}
@@ -169,14 +169,14 @@ func TestClosedInvocation(t *testing.T) {
 		t.Fatalf("unexpected invocation: %v %v", args, err)
 	}
 	for _, method := range []string{"sendrawtransaction", "signrawtransactionwithwallet", "generate", "name_update", "getwalletinfo", "help", "-rpcpassword=denied", ""} {
-		if _, err := nodeArgs(c, method, nil); err == nil {
+		if _, err := nodeArgs(c, method, nil); !errors.Is(err, refused) {
 			t.Fatalf("method accepted: %s", method)
 		}
 	}
-	if _, err := nodeArgs(c, "name_show", []json.RawMessage{json.RawMessage(`"-rpcconnect=denied"`)}); err == nil {
+	if _, err := nodeArgs(c, "name_show", []json.RawMessage{json.RawMessage(`"-rpcconnect=denied"`)}); !errors.Is(err, refused) {
 		t.Fatal("option-shaped string accepted")
 	}
-	if _, err := nodeArgs(c, "getblockhash", []json.RawMessage{json.RawMessage(`invalid`)}); err == nil {
+	if _, err := nodeArgs(c, "getblockhash", []json.RawMessage{json.RawMessage(`invalid`)}); !errors.Is(err, refused) {
 		t.Fatal("invalid JSON accepted")
 	}
 }
@@ -194,7 +194,7 @@ func TestExactRouteSchema(t *testing.T) {
 		strings.Replace(valid, `"RouteID":"r"`, `"RouteID":null`, 1),
 		valid + ` {}`, `null`,
 	} {
-		if _, err := decodeConfig([]byte(raw)); err == nil {
+		if _, err := decodeConfig([]byte(raw)); !errors.Is(err, refused) {
 			t.Fatal("ambiguous/unknown route accepted")
 		}
 	}
@@ -229,7 +229,7 @@ func TestBoundedReadSubprocess(t *testing.T) {
 			if mode == "valid" && (err != nil || string(got) != `{"chain":"main"}`) {
 				t.Fatalf("positive read: %s %v", got, err)
 			}
-			if mode != "valid" && (err == nil || got != nil) {
+			if mode != "valid" && (!errors.Is(err, refused) || got != nil) {
 				t.Fatal("failed read returned data")
 			}
 			if time.Since(start) > 3*time.Second {

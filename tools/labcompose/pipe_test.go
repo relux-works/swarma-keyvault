@@ -46,11 +46,11 @@ func TestPipeResponsiveFramingAndBounds(t *testing.T) {
 			t.Fatalf("framing %q: %v", line, err)
 		}
 	}
-	if _, err := p.raw(context.Background(), "name_show"); err == nil || p.calls != 256 {
+	if _, err := p.raw(context.Background(), "name_show"); err == nil || err.Error() != "read bound" || p.calls != 256 {
 		t.Fatal("call cap")
 	}
 	q, _, _ := pipes(t)
-	if _, err := q.raw(context.Background(), "sendrawtransaction"); err == nil || q.calls != 0 {
+	if _, err := q.raw(context.Background(), "sendrawtransaction"); err == nil || err.Error() != "read method denied" || q.calls != 0 {
 		t.Fatal("method allowlist")
 	}
 }
@@ -76,7 +76,7 @@ func TestPipeStalledReadAndBlockedWrite(t *testing.T) {
 			if _, err := p.out.Write([]byte("x")); !errors.Is(err, os.ErrClosed) {
 				t.Fatalf("output not closed: %v", err)
 			}
-			if _, err := p.raw(context.Background(), "getblock"); err == nil {
+			if _, err := p.raw(context.Background(), "getblock"); !errors.Is(err, os.ErrClosed) {
 				t.Fatal("terminal pipe retried")
 			}
 		})
@@ -139,7 +139,7 @@ func TestPipeReplyByteCap(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if raw, err := p.raw(ctx, "getblock"); err == nil || raw != nil {
+	if raw, err := p.raw(ctx, "getblock"); err == nil || err.Error() != "read pipe closed" || raw != nil {
 		t.Fatal("oversized reply admitted")
 	}
 	p.Close()

@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -136,8 +137,12 @@ func signerCertificate(t *testing.T, f *fixture, root string, payload []byte, ow
 	// Same reverse bytes refuse under the original default before key access.
 	cmd := exec.Command(labFixture(t, "LAB_TEST_SIGNER"), args...)
 	cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
-	if out, err := cmd.Output(); err == nil || len(out) != 0 {
-		t.Fatal("reverse signer inferred the payload owner")
+	var diag bytes.Buffer
+	cmd.Stderr = &diag
+	out, err := cmd.Output()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 || len(out) != 0 || diag.String() != "lab test signer refused: issuer-untrusted\n" {
+		t.Fatalf("wrong reverse-owner refusal: error=%v output=%q diagnostics=%q", err, out, diag.String())
 	}
 	return signerRun(t, root, append(args, "--owner-mxid", owner)...)
 }

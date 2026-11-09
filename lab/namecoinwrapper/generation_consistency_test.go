@@ -3,6 +3,7 @@ package namecoinwrapper
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,7 +129,7 @@ func TestGenerationAndTipConsistency(t *testing.T) {
 				observe("disturbed", false)
 				raw, err := os.ReadFile(filepath.Join(root, "closed-"+hash(f.certificate)))
 				t.Logf("persisted=%v expected=%v evidence=%s", err == nil, permanent, raw)
-				if (err == nil) != permanent {
+				if (permanent && err != nil) || (!permanent && !errors.Is(err, os.ErrNotExist)) {
 					t.Errorf("inconsistent projection produced persistent lifecycle closure")
 				}
 				f.n.data = saved

@@ -3,6 +3,7 @@ package namecoinwrapper
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,7 +146,7 @@ func TestGenerationEvidenceActualGraph(t *testing.T) {
 					latch := filepath.Join(root, "closed-"+hash(f.certificate))
 					first, err := os.ReadFile(latch)
 					permanent := mode == "consistent"
-					if (err == nil) != permanent {
+					if (permanent && err != nil) || (!permanent && !errors.Is(err, os.ErrNotExist)) {
 						t.Fatalf("persisted=%v want=%v", err == nil, permanent)
 					}
 					f.n.data = saved

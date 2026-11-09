@@ -3,6 +3,7 @@ package namecoinwrapper
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -198,7 +199,7 @@ func TestObservationLifecycleActualGraph(t *testing.T) {
 				}
 				observe("refusal", false)
 				latch, err := os.ReadFile(filepath.Join(root, "closed-"+hash(f.certificate)))
-				if (err == nil) != permanent {
+				if (permanent && err != nil) || (!permanent && !errors.Is(err, os.ErrNotExist)) {
 					t.Fatalf("persisted=%v want=%v", err == nil, permanent)
 				}
 				if permanent {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,7 +156,7 @@ func TestNestedIdentityProjectionBoundaries(t *testing.T) {
 					raw = bytes.Replace(raw, key, append(member, key...), 1)
 				}
 				f.n.data[callKey("getrawtransaction", f.ownerName.TxID, true)] = raw
-				if _, err := checkedGeneration(context.Background(), f.n, f.ownerName); err == nil {
+				if _, err := checkedGeneration(context.Background(), f.n, f.ownerName); !errors.Is(err, ErrRefused) {
 					t.Fatal("ambiguous identity proved a generation")
 				}
 			})
@@ -220,7 +221,7 @@ func (g *projectionGraph) restore(saved map[string]json.RawMessage, reverse bool
 	p := filepath.Join(f.p.PrivateRoot, "closed-"+hash(f.certificate))
 	first, err := os.ReadFile(p)
 	t.Logf("persisted=%v want=%v evidence=%s", err == nil, permanent, first)
-	if (err == nil) != permanent {
+	if (permanent && err != nil) || (!permanent && !errors.Is(err, os.ErrNotExist)) {
 		t.Errorf("persisted=%v want=%v", err == nil, permanent)
 	}
 	f.n.data = saved

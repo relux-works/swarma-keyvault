@@ -214,7 +214,7 @@ func (f *fixture) verify(t *testing.T, v *Verifier, want bool) *Observation {
 		if err != nil || result == nil || result.Verdict != "verified-lab-observation" || result.CertificateSHA256 != hash(f.certificate) {
 			t.Fatalf("positive: %v %+v", err, result)
 		}
-	} else if err == nil || result != nil {
+	} else if !errors.Is(err, ErrRefused) || result != nil {
 		t.Fatalf("negative admitted: %v %+v", err, result)
 	}
 	return result
@@ -250,7 +250,7 @@ func TestThinSlice(t *testing.T) {
 	f.n.data[callKey("gettxout", f.seal.TxID, 0, true)] = original // reorg/restoration cannot reopen this session
 	f.n.set(t, "getblockchaininfo", tip{"regtest", f.best, 100, false})
 	f.verify(t, v, false)
-	if _, err := os.Stat(filepath.Join(f.p.PrivateRoot, "ABSENT-STATE")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(f.p.PrivateRoot, "ABSENT-STATE")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("execution state appeared")
 	}
 	entries, err := os.ReadDir(f.p.PrivateRoot)
@@ -390,21 +390,21 @@ func TestRecordBoundsAndEncoding(t *testing.T) {
 		}
 		var r record
 		err := uniqueJSON([]byte(padded), 520, &r)
-		if (err == nil) != (size == 520) {
+		if (size == 520 && err != nil) || (size == 521 && !errors.Is(err, ErrRefused)) {
 			t.Fatalf("record bound %d: %v", size, err)
 		}
 	}
 	good := base64.RawURLEncoding.EncodeToString(f.ownerDER)
 	for name, value := range map[string]string{"padding": good + "=", "standard-base64": base64.StdEncoding.EncodeToString(f.ownerDER), "trailing-bits": good[:121] + "B", "not-DER": strings.Repeat("A", 122)} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := public(value); err == nil {
+			if _, err := public(value); !errors.Is(err, ErrRefused) {
 				t.Fatal("bad key accepted")
 			}
 		})
 	}
 	for _, raw := range []string{`{"swarma":{},"swarma":{}}`, `{"swarma":{},"swarm\u0061":{}}`, `{"swarma":{"keyvault_owner_spki":"x","keyvault_owner_spki":"y"}}`, `{} {}`, strings.Repeat("[", 25) + strings.Repeat("]", 25)} {
 		var r record
-		if uniqueJSON([]byte(raw), 520, &r) == nil {
+		if err := uniqueJSON([]byte(raw), 520, &r); !errors.Is(err, ErrRefused) {
 			t.Fatal("ambiguous/overdeep record accepted")
 		}
 	}
@@ -422,8 +422,8 @@ func TestVerifyDoesNotTakeSPKIFlags(t *testing.T) {
 	cmd.Stdout = &out
 	cmd.Stderr = &diag
 	err := cmd.Run()
-	exit, ok := err.(*exec.ExitError)
-	if !ok || exit.ExitCode() != 2 || out.Len() != 0 || !strings.Contains(diag.String(), "--config FILE") {
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 || out.Len() != 0 || !strings.Contains(diag.String(), "--config FILE") {
 		t.Fatalf("actual verify interface: %v %q %q", err, out.String(), diag.String())
 	}
 }
