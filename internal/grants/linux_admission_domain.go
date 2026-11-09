@@ -402,16 +402,17 @@ func (l *linuxFinalAdmission) liveError(refusal error) error {
 	if l == nil || l.deadline.IsZero() {
 		return refusal
 	}
-	if l.ctx.Err() == context.DeadlineExceeded {
-		return linuxDeadlineRefusal(refusal)
+	if err := l.ctx.Err(); err != nil {
+		if err == context.DeadlineExceeded {
+			return linuxDeadlineRefusal(refusal)
+		}
+		// Preserve cancellation as the operative refusal even when inspected
+		// later, after the independent absolute fence has also expired.
+		return refusal
 	}
-	// The injected test clock may cancel a context at the absolute fence. The
-	// clock comparison itself proves expiry, independently of overall elapsed.
+	// An otherwise-live context can also encounter the absolute clock fence.
 	if !linuxClock(l.view.clock).now().Before(l.deadline) || !l.view.usable() {
 		return linuxDeadlineRefusal(refusal)
-	}
-	if l.ctx.Err() != nil {
-		return refusal
 	}
 	return nil
 }

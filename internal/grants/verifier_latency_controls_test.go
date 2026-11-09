@@ -130,7 +130,7 @@ func TestLinuxAdmissionDeadlineCompatibility(t *testing.T) {
 // Real fence branches, real journal writes and a deterministic clock distinguish
 // cause from wall elapsed. A state defect is never relabelled just for being slow.
 func TestLinuxAdmissionDeadlineCauseControls(t *testing.T) {
-	for _, mode := range []string{"live-deadline", "live-cancel", "state", "missing-deadline", "missing-lease-deadline", "reserve-deadline", "late-sync"} {
+	for _, mode := range []string{"live-deadline", "context-deadline", "live-cancel", "cancel-then-expire", "state", "missing-deadline", "missing-lease-deadline", "reserve-deadline", "late-sync"} {
 		t.Run(mode, func(t *testing.T) {
 			g := newLinuxCombinedRig(t)
 			linuxContractScope(g.dock, "once")
@@ -144,10 +144,22 @@ func TestLinuxAdmissionDeadlineCauseControls(t *testing.T) {
 			defer s.close()
 			switch mode {
 			case "live-deadline":
+				// Isolate the absolute-clock fence from the test clock's synthetic
+				// context cancellation; native deadline cause has its own control.
+				lease.ctx = context.Background()
 				clock.advance(c.deadline.Sub(clock.now()))
+				_, err = lease.VerifyAdmission(v.input.Event, v.input.State.Now)
+			case "context-deadline":
+				var expire context.CancelFunc
+				lease.ctx, expire = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+				defer expire()
 				_, err = lease.VerifyAdmission(v.input.Event, v.input.State.Now)
 			case "live-cancel":
 				cancel()
+				_, err = lease.VerifyAdmission(v.input.Event, v.input.State.Now)
+			case "cancel-then-expire":
+				cancel()
+				clock.advance(c.deadline.Sub(clock.now()))
 				_, err = lease.VerifyAdmission(v.input.Event, v.input.State.Now)
 			case "state":
 				c.complete = false
@@ -170,7 +182,7 @@ func TestLinuxAdmissionDeadlineCauseControls(t *testing.T) {
 				}
 				_, err = s.reserveVerifiedUntil(u, c, c.deadline)
 			}
-			wantDeadline := mode == "live-deadline" || mode == "reserve-deadline" || mode == "late-sync"
+			wantDeadline := mode == "live-deadline" || mode == "context-deadline" || mode == "reserve-deadline" || mode == "late-sync"
 			if err == nil || !errors.Is(err, ErrMUState) || errors.Is(err, errLinuxAdmissionDeadline) != wantDeadline || g.calls != 0 {
 				t.Fatalf("mode=%s err=%v deadline=%v effects=%d", mode, err, errors.Is(err, errLinuxAdmissionDeadline), g.calls)
 			}
