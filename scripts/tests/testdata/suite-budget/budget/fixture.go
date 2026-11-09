@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -56,7 +58,7 @@ func Fixture(t *testing.T, name string) {
 	t.Helper()
 	root := fixtureRoot(t)
 	phase := os.Getenv("KEYVAULT_SUITE_PHASE")
-	if phase != "positive" && phase != "negative" {
+	if phase != "positive" && phase != "deadline" && phase != "native" && phase != "outsider" {
 		t.Fatal("fixture phase refused")
 	}
 	if name != "a" && name != "b" && name != "c" {
@@ -65,17 +67,17 @@ func Fixture(t *testing.T, name string) {
 	path := filepath.Join(root, phase, name+".json")
 	if os.Getenv("KEYVAULT_SUITE_LEAF") == name {
 		signal.Ignore(syscall.SIGINT, syscall.SIGTERM)
-		if err := os.WriteFile(path+".ready", []byte("ready"), 0600); err != nil {
-			t.Fatal("leaf readiness failed")
-		}
 		for {
-			time.Sleep(time.Hour)
+			if err := os.WriteFile(path+".ready", []byte(strconv.FormatInt(time.Now().UnixNano(), 10)), 0600); err != nil {
+				t.Fatal("leaf heartbeat failed")
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	started := time.Now()
 	child := exec.Command(os.Args[0], "-test.run=^TestBudgetFixture$", "-test.timeout=45s")
 	child.Env = append(os.Environ(), "KEYVAULT_SUITE_LEAF="+name)
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := child.Start(); err != nil {
 		t.Fatal("fixture descendant start failed")
 	}
@@ -145,7 +147,23 @@ func ownedGone(pid int) error {
 		return errors.New("invalid fixture PID")
 	}
 	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("owned fixture PID %d survives: %v", pid, err)
+		return fmt.Errorf("owned fixture PID %d survives: %v; %s", pid, err, processState(pid))
 	}
 	return nil
+}
+
+func processState(pid int) string {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return "state unavailable"
+	}
+	end := strings.LastIndexByte(string(raw), ')')
+	if end < 0 {
+		return "state unavailable"
+	}
+	f := strings.Fields(string(raw[end+1:]))
+	if len(f) < 20 {
+		return "state unavailable"
+	}
+	return fmt.Sprintf("state=%s ppid=%s pgid=%s sid=%s start=%s", f[0], f[1], f[2], f[3], f[19])
 }

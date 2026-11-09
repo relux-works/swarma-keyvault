@@ -7,13 +7,13 @@ import (
 	"testing"
 )
 
-var nativeDeadline = regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T[^\r\n ]+ ##\[error\]The action 'Healthy binaries must not pass beyond the short aggregate deadline' has timed out after 1 minutes\.\r?$`)
+var nativeDeadline = regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2}T[^\r\n ]+ ##\[error\]The action 'Native fallback must stop the supervised suite' has timed out after 1 minutes\.\r?$`)
 
 // Only the expected native annotation form qualifies; the workflow separately
 // supplies origin through its same-attempt completed-job Actions API read.
 // A test-binary alarm, generic failure or a different step/budget cannot pass.
 func TestAnnotationContract(t *testing.T) {
-	valid := []byte("2026-01-01T00:00:00.000Z ##[error]The action 'Healthy binaries must not pass beyond the short aggregate deadline' has timed out after 1 minutes.\n")
+	valid := []byte("2026-01-01T00:00:00.000Z ##[error]The action 'Native fallback must stop the supervised suite' has timed out after 1 minutes.\n")
 	if !nativeDeadline.Match(valid) {
 		t.Fatal("native deadline annotation positive control refused")
 	}
@@ -21,7 +21,7 @@ func TestAnnotationContract(t *testing.T) {
 		[]byte("panic: test timed out after 45s\n"),
 		[]byte("Error: Process completed with exit code 1.\n"),
 		bytes.ReplaceAll(valid, []byte("1 minutes"), []byte("2 minutes")),
-		bytes.ReplaceAll(valid, []byte("Healthy binaries must not pass beyond the short aggregate deadline"), []byte("different step")),
+		bytes.ReplaceAll(valid, []byte("Native fallback must stop the supervised suite"), []byte("different step")),
 		bytes.ReplaceAll(valid, []byte("##[error]"), nil),
 	} {
 		if nativeDeadline.Match(raw) {

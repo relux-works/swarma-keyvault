@@ -3,7 +3,10 @@
 package budget
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -46,14 +49,15 @@ func TestRecordContract(t *testing.T) {
 	}
 }
 
-// The actual hosted negative step must fail around its native one-minute
-// deadline, after two healthy binaries complete, and leave no recorded parent
-// or separate-group descendant. The positive step must complete all three.
-// The hosted timeout annotation remains required evidence of the failure cause;
-// this check alone does not label arbitrary failures as platform deadlines.
+// Separate real own-deadline and native-cancellation steps stop during the third
+// healthy binary, report their actual distinct cause and leave no recorded
+// parent/descendant. Positive completes all three; an outsider must survive.
+// The same-attempt native annotation is separately required for native cause.
 func TestHostedDeadlineResult(t *testing.T) {
 	root := fixtureRoot(t)
 	var all []record
+	labels := make(map[int]string)
+	var outsider int
 	// Install emergency cleanup before checking outcomes/missing witnesses, so
 	// even a broken fixture is drained. Successful acceptance still depends on
 	// the no-survivor assertions below, before this cleanup executes.
@@ -65,8 +69,11 @@ func TestHostedDeadlineResult(t *testing.T) {
 				}
 			}
 		}
+		if outsider > 1 {
+			_ = syscall.Kill(outsider, syscall.SIGKILL)
+		}
 	})
-	for _, phase := range []string{"positive", "negative"} {
+	for _, phase := range []string{"positive", "deadline", "native"} {
 		var records []record
 		for _, name := range []string{"a", "b", "c"} {
 			raw, err := os.ReadFile(filepath.Join(root, phase, name+".json"))
@@ -80,26 +87,119 @@ func TestHostedDeadlineResult(t *testing.T) {
 				continue
 			}
 			records = append(records, r)
+			labels[r.Parent] = phase + "/" + name + "/parent"
+			labels[r.Child] = phase + "/" + name + "/descendant"
 		}
 		all = append(all, records...)
 		if err := validateRecords(records, phase == "positive"); err != nil {
 			t.Error(err)
 		}
+		raw, err := os.ReadFile(filepath.Join(root, phase+"-result.json"))
+		var result runnerResult
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		if err != nil || decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF {
+			t.Error("missing strict actual supervisor result")
+		} else if err := validateResult(result, phase); err != nil {
+			t.Error(err)
+		}
 	}
-	if os.Getenv("KEYVAULT_SUITE_POSITIVE") != "success" || os.Getenv("KEYVAULT_SUITE_NEGATIVE") != "failure" {
-		t.Error("expected roomy success and short-suite failure outcomes")
+	if os.Getenv("KEYVAULT_SUITE_POSITIVE") != "success" || os.Getenv("KEYVAULT_SUITE_DEADLINE") != "failure" || os.Getenv("KEYVAULT_SUITE_NEGATIVE") != "failure" {
+		t.Error("expected roomy success and distinct own/native failure outcomes")
 	}
-	start, err := os.ReadFile(filepath.Join(root, "negative-start"))
+	start, err := os.ReadFile(filepath.Join(root, "native-start"))
 	seconds, parseErr := strconv.ParseInt(strings.TrimSpace(string(start)), 10, 64)
 	elapsed := time.Since(time.Unix(seconds, 0))
 	if err != nil || parseErr != nil || elapsed < 59*time.Second || elapsed >= 90*time.Second {
-		t.Error("negative result is not in the scaled suite deadline/cleanup window")
+		t.Error("native result is not in the scaled suite deadline/cleanup window")
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "outsider.pid"))
+	outsider, parseErr = strconv.Atoi(strings.TrimSpace(string(raw)))
+	_, readyErr := os.Stat(filepath.Join(root, "outsider", "a.json.ready"))
+	if err != nil || parseErr != nil || outsider <= 1 || readyErr != nil || syscall.Kill(outsider, 0) != nil {
+		t.Error("independent outsider did not remain alive")
+	}
+	heartbeat := filepath.Join(root, "outsider", "a.json.ready")
+	before, _ := os.ReadFile(heartbeat)
+	advanced := false
+	until := time.Now().Add(3 * time.Second)
+	for time.Now().Before(until) {
+		time.Sleep(20 * time.Millisecond)
+		after, err := os.ReadFile(heartbeat)
+		if err == nil && len(after) > 0 && string(after) != string(before) {
+			advanced = true
+			break
+		}
+	}
+	if !advanced {
+		t.Error("outsider heartbeat did not advance after both interruptions")
 	}
 	for _, r := range all {
 		for _, pid := range []int{r.Parent, r.Child} {
 			if err := ownedGone(pid); err != nil {
-				t.Fatal(err)
+				t.Fatalf("%s: %v", labels[pid], err)
 			}
 		}
+	}
+}
+
+type runnerResult struct {
+	Reason    string `json:"reason"`
+	Cause     string `json:"cause"`
+	ExitCode  int    `json:"exit_code"`
+	RootExit  int    `json:"root_exit"`
+	Reaped    bool   `json:"reaped"`
+	ElapsedNS int64  `json:"elapsed_ns"`
+}
+
+func validateResult(r runnerResult, phase string) error {
+	if !r.Reaped || r.Cause != r.Reason {
+		return errors.New("supervisor did not establish ECHILD")
+	}
+	switch phase {
+	case "positive":
+		if r.Reason != "success" || r.ExitCode != 0 || r.RootExit != 0 || r.ElapsedNS < int64(3*work) || r.ElapsedNS >= int64(2*time.Minute) {
+			return errors.New("healthy supervisor control did not complete")
+		}
+	case "deadline":
+		if r.Reason != "deadline" || r.ExitCode != 124 || r.ElapsedNS < int64(time.Minute) || r.ElapsedNS >= int64(time.Minute+5*time.Second) {
+			return errors.New("supervisor own deadline did not fire and clean within its bound")
+		}
+	case "native":
+		if r.Reason != "canceled" || r.ExitCode != 130 || r.ElapsedNS < int64(59*time.Second) || r.ElapsedNS >= int64(90*time.Second) {
+			return errors.New("native cancellation did not reach the supervisor")
+		}
+	default:
+		return errors.New("unknown supervisor phase")
+	}
+	return nil
+}
+
+// Correct own-deadline and native-signal results have separate causes. Generic
+// exit, setup/cleanup refusal, late cleanup and false success cannot substitute.
+func TestRunnerResultContract(t *testing.T) {
+	valid := map[string]runnerResult{
+		"positive": {"success", "success", 0, 0, true, int64(3 * work)},
+		"deadline": {"deadline", "deadline", 124, -1, true, int64(time.Minute)},
+		"native":   {"canceled", "canceled", 130, -1, true, int64(time.Minute)},
+	}
+	for phase, r := range valid {
+		if err := validateResult(r, phase); err != nil {
+			t.Fatal(err)
+		}
+		for _, bad := range []runnerResult{
+			{r.Reason, r.Cause, r.ExitCode, r.RootExit, false, r.ElapsedNS},
+			{"exit", "exit", 1, 1, true, r.ElapsedNS},
+			{"cleanup-refused", r.Cause, 125, -1, false, r.ElapsedNS},
+			{r.Reason, r.Cause, r.ExitCode, r.RootExit, true, 0},
+			{r.Reason, r.Cause, r.ExitCode, r.RootExit, true, int64(3 * time.Minute)},
+		} {
+			if validateResult(bad, phase) == nil {
+				t.Fatal("unrelated result accepted")
+			}
+		}
+	}
+	if validateResult(valid["native"], "deadline") == nil || validateResult(valid["deadline"], "native") == nil {
+		t.Fatal("own deadline and native cancellation were conflated")
 	}
 }

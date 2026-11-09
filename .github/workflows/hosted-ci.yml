@@ -102,22 +102,22 @@ jobs:
       # environment also disables attended real-Keychain/Enclave tests.
       # cmd/mac-keyvault-enclave is Swift/CryptoKit, not a Go package.
       # Native custody qualification remains a separate confined macOS gate.
+      - name: Build the complete-suite supervisor
+        run: go build -o "$RUNNER_TEMP/suite-runner" ./tools/suiterunner
       - name: Race-test every Linux-buildable Go package
         # This deadline covers the entire command, including compilation and
         # aggregate package execution. Go's -timeout bounds each binary only.
-        timeout-minutes: 30
+        timeout-minutes: 32
         run: |
-          # Keep the step entry alive while Go owns children, so the hosting
-          # runner can escalate cancellation to its complete PID tree.
-          trap ':' INT TERM
           # Permission-refusal fixtures create deliberately world-readable files.
           umask 022
-          MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -timeout=30m -v ./...
+          export MAC_KEYVAULT_SKIP_KEYCHAIN=1
+          exec "$RUNNER_TEMP/suite-runner" --timeout=30m -- go test -race -count=1 -timeout=30m -v ./...
 
   suite-budget-control:
     name: Whole-suite deadline and descendant cleanup control
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 8
     env:
       GOMAXPROCS: '2'
       GOFLAGS: '-mod=readonly -p=1'
@@ -137,36 +137,48 @@ jobs:
       - name: Prepare private fixture directories
         run: |
           mkdir -m 700 "$RUNNER_TEMP/suite-budget-control"
-          mkdir -m 700 "$RUNNER_TEMP/suite-budget-control/positive" "$RUNNER_TEMP/suite-budget-control/negative"
+          mkdir -m 700 "$RUNNER_TEMP/suite-budget-control/positive" "$RUNNER_TEMP/suite-budget-control/deadline" "$RUNNER_TEMP/suite-budget-control/native" "$RUNNER_TEMP/suite-budget-control/outsider"
           echo "KEYVAULT_SUITE_CONTROL=$RUNNER_TEMP/suite-budget-control" >> "$GITHUB_ENV"
           # Compile control fixtures before their short scaled clocks. This
           # does not move any product-suite build outside its 30-minute step.
           go -C scripts/tests/testdata/suite-budget test -run '^$' ./...
+          go build -o "$RUNNER_TEMP/suite-runner" ./tools/suiterunner
+          go -C scripts/tests/testdata/suite-budget test -c -o "$RUNNER_TEMP/suite-budget-control/outsider.test" ./a
+          KEYVAULT_SUITE_CONTROL="$RUNNER_TEMP/suite-budget-control" KEYVAULT_SUITE_PHASE=outsider KEYVAULT_SUITE_LEAF=a "$RUNNER_TEMP/suite-budget-control/outsider.test" -test.run='^TestBudgetFixture$' -test.timeout=6m >/dev/null 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/suite-budget-control/outsider.pid"
       - name: Individually healthy binaries complete under a roomy suite deadline
         id: suite-positive
-        timeout-minutes: 2
+        timeout-minutes: 3
         env:
           KEYVAULT_SUITE_PHASE: positive
         run: |
-          trap ':' INT TERM
           date +%s > "$KEYVAULT_SUITE_CONTROL/positive-start"
-          go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
-      - name: Healthy binaries must not pass beyond the short aggregate deadline
+          exec "$RUNNER_TEMP/suite-runner" --timeout=2m --report="$KEYVAULT_SUITE_CONTROL/positive-result.json" -- go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
+      - name: Supervisor deadline bounds the complete healthy aggregate
+        id: suite-deadline
+        timeout-minutes: 2
+        continue-on-error: true
+        env:
+          KEYVAULT_SUITE_PHASE: deadline
+        run: |
+          date +%s > "$KEYVAULT_SUITE_CONTROL/deadline-start"
+          exec "$RUNNER_TEMP/suite-runner" --timeout=1m --report="$KEYVAULT_SUITE_CONTROL/deadline-result.json" -- go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
+      - name: Native fallback must stop the supervised suite
         id: suite-negative
         timeout-minutes: 1
         continue-on-error: true
         env:
-          KEYVAULT_SUITE_PHASE: negative
+          KEYVAULT_SUITE_PHASE: native
         run: |
-          trap ':' INT TERM
-          date +%s > "$KEYVAULT_SUITE_CONTROL/negative-start"
-          go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
+          date +%s > "$KEYVAULT_SUITE_CONTROL/native-start"
+          exec "$RUNNER_TEMP/suite-runner" --timeout=2m --report="$KEYVAULT_SUITE_CONTROL/native-result.json" -- go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
       - name: Require aggregate refusal and no surviving owned processes
         if: always()
         env:
           KEYVAULT_SUITE_POSITIVE: ${{ steps.suite-positive.outcome }}
+          KEYVAULT_SUITE_DEADLINE: ${{ steps.suite-deadline.outcome }}
           KEYVAULT_SUITE_NEGATIVE: ${{ steps.suite-negative.outcome }}
-        run: go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=30s -v ./budget -run 'TestHostedDeadlineResult|TestRecordContract'
+        run: go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=30s -v ./budget -run 'TestHostedDeadlineResult|TestRecordContract|TestRunnerResultContract'
 
   suite-budget-evidence:
     name: Require native suite-deadline cause

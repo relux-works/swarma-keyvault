@@ -61,29 +61,11 @@ official BIP-340 row, independently pinned auxiliary signatures, public-key
 boundaries, independent public-point samples and refusal behavior. Test secrets
 are synthetic/public fixtures and never represent a vault identity.
 
-The hosted suite step has an independent thirty-minute wall-clock deadline over
-the complete Go command, including compilation and all package execution. Go's
-`-timeout=30m` additionally limits each root test binary; it is not an aggregate
-deadline. Local invocations need their own outer deadline when that bound is
-required. Each module command is bounded
-at twelve minutes including build/setup, and each child test binary retains Go's
-ten-minute timeout with native diagnostics. Both module commands finish before
-verdicts are reported, including after a failure. The direct child is waited;
-remaining members of its dedicated process group are killed and must disappear
-within the bounded cleanup interval. Descendants that escape that group are
-outside this test harness's contract. A cleanup refusal keeps the result nonzero.
-The step's shell retains its entry process during INT/TERM cancellation while
-Go still owns children, allowing the hosting runner's bounded escalation to kill
-the entire PID tree, including nested process groups. Runner cancellation grace
-and cleanup are separate from the thirty-minute deadline. Hosted Linux reserves
-forty minutes for setup, the bounded suite and cleanup. A separate hosted control
-uses three individually healthy 25-second binaries with 45-second binary limits:
-their aggregate must complete under a two-minute step, refuse under a one-minute
-step, and leave no witnessed parent or separate-group descendant. Its intentional
-negative step alone permits failure; its verdict step requires the failure and
-checks completion, elapsed time and cleanup. Actual hosted timeout annotations
-remain necessary cause evidence; local record tests do not qualify that runner.
-See [`suite-budget`](../scripts/tests/testdata/suite-budget/README.md).
+The Linux Go [suite supervisor](../tools/suiterunner/README.md) enforces an independent thirty-minute deadline over the complete child Go command, including compilation and aggregate package execution. The supervisor itself is compiled in a separate setup step. Go's `-timeout=30m` additionally limits each root test binary. The native step fallback is 32 minutes; the job limit is40minutes.
+
+Each upstream module command remains bounded at twelve minutes including build/setup, and each child binary retains its ten-minute alarm. Both module commands finish before aggregate reporting, including after failure. The module harness waits its direct child and drains its dedicated process group; deliberately escaped groups remain outside that inner harness's contract. The outer Linux supervisor is a child subreaper: after waiting its exact root, it kills/reaps only its own direct and adopted descendants until ECHILD, including detached sessions, within one five-second cleanup budget. Catchable entry signals use that same cleanup route. Cleanup refusal stays nonzero and preserves the original cause/root status. Supervisor SIGKILL and host loss have no cleanup guarantee.
+
+A separate hosted [control](../scripts/tests/testdata/suite-budget/README.md) uses three individually healthy 25-second binaries under 45-second binary limits. A roomy own deadline completes all three. The supervisor's own one-minute deadline, under a generous native timeout, must interrupt the third and report its own deadline cause. A separate native one-minute timeout, with a longer supervisor deadline and actual exec entry, must report cancellation and a genuine same-attempt native annotation. Both require strict witnessed PID absence and a live outsider heartbeat; intentional negative steps alone allow failure. Local record tests and cross-builds do not establish Linux/hosted execution.
 These execution budgets do not change the product's separate 100ms
 verifier fence or measurement criteria. Per-module output, elapsed time and
 startup/test/deadline/cleanup causes remain visible in the test log.

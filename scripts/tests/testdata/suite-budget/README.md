@@ -1,47 +1,21 @@
-# Hosted aggregate-deadline control
+# Aggregate deadline and descendant controls
 
-This isolated stdlib-only Go module is excluded from the ordinary repository
-package walk. Its three real test binaries each perform 25 seconds of work,
-create a descendant in a separate process group, and complete below a 45-second
-binary timeout. The hosted workflow runs the same aggregate serially twice:
-a two-minute step must succeed; a one-minute step must fail during the third
-healthy binary. A final Go check requires both outcomes, actual binary witnesses,
-the scaled deadline/cleanup time window, and no surviving recorded PID. Known
-fixture PIDs are emergency-cleaned only after the observable survivor assertion.
-The control packages are compiled during fixture preparation before these short
-steps; each measured Go command still has its entire invocation inside the step
-deadline. The product suite performs its own compilation inside its 30-minute
-step. Serial package scheduling is explicit through `GOFLAGS=-p=1`.
+This isolated stdlib-only Go module is outside the root module's package walk. It supplies three real serial test binaries with 25 seconds of work each under independent 45 second Go alarms. Each owns a detached-session descendant. All witnesses/reports are synthetic process data in an explicit existing 0700 private fixture directory; no vault or key is used.
 
-The step shell has the same INT/TERM trap as the product suite. It retains the
-entry process while the Go command is active so cancellation can escalate to the
-whole tree, including descendants outside the original process group. This uses
-the hosting runner's native [step deadline](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idsteps_timeout-minutes)
-and [cancellation sequence](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-cancellation).
-The deadline starts before the complete Go invocation; cancellation grace follows
-it. This control does not change any product timing, isolation or sampling rule.
+The hosted workflow builds the actual production Linux suite supervisor separately and uses `exec` to make it the step entry. It runs these distinct controls with `GOFLAGS=-mod=readonly -p=1`:
 
-`KEYVAULT_SUITE_CONTROL` names an existing private absolute directory containing
-private `positive` and `negative` directories. The workflow creates it under
-`RUNNER_TEMP`, writes phase start times there, and sets `KEYVAULT_SUITE_PHASE` to
-the selected phase. PID/completion witnesses stay there. This fixture uses no
-network, credentials or vault keys. Do not point it at a live data directory.
+| Phase | Supervisor budget | Native step | Required result |
+| --- | --- | --- | --- |
+| positive |2min|3min| All three healthy binaries complete, success report and no witnessed PID remains. |
+| deadline |1min|2min| Two complete; the third starts; supervisor-specific deadline/exit124, cleanup within 5 s, no witnessed PID remains. |
+| native |2min|1min| Two complete; the third starts; catchable entry cancellation/exit130, strict PID absence and genuine same-attempt native timeout annotation. |
 
-Run deterministic record-contract tests locally:
+Both intentional negative steps permit failure only so the subsequent verdict can inspect the real result. A generic failure, setup refusal, missing witness, wrong cause, all-success aggregate, cleanup refusal/late cleanup or surviving PID fails the verdict. A separately started outsider's heartbeat must advance after both interruptions; merely observing a PID, which could be a zombie, is insufficient. The verifier terminates that known fixture outsider only after recording its surviving heartbeat.
 
-```
-go -C scripts/tests/testdata/suite-budget test -race -count=1 ./budget
+The native annotation follow-on job reads the completed same-attempt control job through the normal read-only Actions API; raw logs remain in private runner scratch. A Go parser requires the exact native step/budget annotation and rejects generic exits, test-binary panics and unrelated annotations. The supervisor's own deadline is established independently by its actual exclusive result, completed-binary witnesses and strict cleanup checks. Native annotation alone cannot substitute for the supervisor's own timer.
+
+```sh
+go -C scripts/tests/testdata/suite-budget test -race ./budget
 ```
 
-The hosted result test skips without its explicit fixture environment. Record
-tests reject missing starts, incomplete positive runs, binary-duration violations
-and an incorrectly successful short aggregate, with neighboring valid cases.
-They do not prove a hosted timeout. A follow-on job reads this completed job's
-same-attempt log through the read-only Actions API and requires the exact native
-step-timeout annotation. The token is the hosting platform's normal ephemeral
-workflow token; the raw log stays in runner scratch. The Go annotation tests
-reject generic failures, binary alarms and other step names or limits. An
-unrelated failure, crash, skipped setup or per-binary alarm is not the intended
-negative result. The positive fixture
-uses the exact same code and command as the negative fixture. The dedicated job
-is a test of the suite deadline, not another performance measurement lane.
+The local command checks record/result/annotation contracts. Hosted-only tests skip without their explicit evidence environment; these skips do not qualify runtime cancellation. Linux real lifecycle tests are in `tools/suiterunner`. Native vault custody is outside this fixture. Supervisor SIGKILL and host loss have no cleanup guarantee.
