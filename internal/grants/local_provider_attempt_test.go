@@ -128,16 +128,28 @@ func TestLocalProviderHTTPPrivacy(t *testing.T) {
 			}
 		})
 	}
-	// A second header block is not unwrapped: the first block's status stands,
-	// the rest is body, and that body is no valid receipt, so the outcome stays
-	// UNKNOWN; nothing private reaches the attempt.
-	twice := append(bytes.Clone(good), localEvidenceResponse("201 Created", "\r\n", localEvidenceID, localGoodReceipt())...)
-	if body, a := parseLocalHTTPResponse(twice); a == nil || a.HTTPStatus != 403 {
-		t.Fatal("second header block replaced the first status")
-	} else if _, err := parseLocalProviderReceipt(body); !errors.Is(err, errLocalProvider) {
-		t.Fatal("second header block produced a receipt")
-	} else if safe, _ := json.Marshal(a); bytes.Contains(safe, []byte(localEvidenceSecret)) {
-		t.Fatal("second header block leaked private content")
+	// A second header block is not unwrapped even when it is adjacent to the
+	// first block terminator: the first status stands, the rest is body, and
+	// that body is no valid receipt, so the outcome stays UNKNOWN; nothing
+	// private reaches the attempt.
+	for _, tc := range []struct {
+		name     string
+		first    string
+		wantCode int
+	}{
+		{"201->201", "201 Created", 201},
+		{"403->201", "403 Forbidden", 403},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			twice := append(localEvidenceResponse(tc.first, "\r\n", localEvidenceID, nil), localEvidenceResponse("201 Created", "\r\n", localEvidenceID, localGoodReceipt())...)
+			if body, a := parseLocalHTTPResponse(twice); a == nil || a.HTTPStatus != tc.wantCode {
+				t.Fatal("second header block replaced the first status")
+			} else if _, err := parseLocalProviderReceipt(body); !errors.Is(err, errLocalProvider) {
+				t.Fatal("second header block produced a receipt")
+			} else if safe, _ := json.Marshal(a); bytes.Contains(safe, []byte(localEvidenceSecret)) {
+				t.Fatal("second header block leaked private content")
+			}
+		})
 	}
 	for _, id := range []string{localEvidenceSecret, "Bearer " + localEvidenceSecret, "ghp_" + localEvidenceSecret, "abcd:1:2", "abcd::1:2", "ABCD:1:2:3:4:5", strings.Repeat("A", 129), "ABCD:1:2:3 extra", "ABCD:1:2:３", "ABCD:1:2:3\tsecret"} {
 		_, a := parseLocalHTTPResponse(localEvidenceResponse("403 Forbidden", "\n", id, nil))
