@@ -27,7 +27,11 @@ Keep build artifacts and logs in `.temp/`. The explicit crypto source pins,
 licenses, delta and per-module test commands are in
 [`third_party/README.md`](third_party/README.md).
 
-Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned by `go.mod` on `ubuntu-latest`, lists every Linux-buildable Go package, and runs `go vet ./...` and `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -timeout=30m -v ./...`; it requires at least 72 committed interop vectors and cancels superseded PR runs only; native custody still requires the confined macOS gate.
+For workflow syntax and expression diagnostics, run
+`go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -oneline .github/workflows/hosted-ci.yml`.
+Redirect diagnostics to `.temp/` when preserving a local validation record.
+
+Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned by `go.mod` on `ubuntu-latest`, lists every Linux-buildable Go package, and runs `go vet ./...` and `MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -timeout=30m -v ./...`. Its suite step separately enforces a thirty-minute wall-clock deadline over compilation and aggregate execution; Go's flag limits each test binary. The job limit remains forty minutes. The isolated Go [suite-budget fixture](scripts/tests/testdata/suite-budget/README.md) checks a real scaled hosted deadline and descendant cleanup; run its local record tests with `go -C scripts/tests/testdata/suite-budget test -race ./budget`. Its process witnesses live only in private runner scratch. CI requires at least 72 committed interop vectors and cancels superseded PR runs only; native custody still requires the confined macOS gate.
 
 The initial custody target is macOS with Go 1.26.10 or later (go.mod selects
 go1.26.10; older installs download it or need it preinstalled), cgo and

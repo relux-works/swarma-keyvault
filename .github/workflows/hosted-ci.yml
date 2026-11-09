@@ -103,10 +103,100 @@ jobs:
       # cmd/mac-keyvault-enclave is Swift/CryptoKit, not a Go package.
       # Native custody qualification remains a separate confined macOS gate.
       - name: Race-test every Linux-buildable Go package
+        # This deadline covers the entire command, including compilation and
+        # aggregate package execution. Go's -timeout bounds each binary only.
+        timeout-minutes: 30
         run: |
+          # Keep the step entry alive while Go owns children, so the hosting
+          # runner can escalate cancellation to its complete PID tree.
+          trap ':' INT TERM
           # Permission-refusal fixtures create deliberately world-readable files.
           umask 022
           MAC_KEYVAULT_SKIP_KEYCHAIN=1 go test -race -count=1 -timeout=30m -v ./...
+
+  suite-budget-control:
+    name: Whole-suite deadline and descendant cleanup control
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly -p=1'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up the fixture's exact Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: scripts/tests/testdata/suite-budget/go.mod
+          cache: false
+      - name: Prepare private fixture directories
+        run: |
+          mkdir -m 700 "$RUNNER_TEMP/suite-budget-control"
+          mkdir -m 700 "$RUNNER_TEMP/suite-budget-control/positive" "$RUNNER_TEMP/suite-budget-control/negative"
+          echo "KEYVAULT_SUITE_CONTROL=$RUNNER_TEMP/suite-budget-control" >> "$GITHUB_ENV"
+          # Compile control fixtures before their short scaled clocks. This
+          # does not move any product-suite build outside its 30-minute step.
+          go -C scripts/tests/testdata/suite-budget test -run '^$' ./...
+      - name: Individually healthy binaries complete under a roomy suite deadline
+        id: suite-positive
+        timeout-minutes: 2
+        env:
+          KEYVAULT_SUITE_PHASE: positive
+        run: |
+          trap ':' INT TERM
+          date +%s > "$KEYVAULT_SUITE_CONTROL/positive-start"
+          go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
+      - name: Healthy binaries must not pass beyond the short aggregate deadline
+        id: suite-negative
+        timeout-minutes: 1
+        continue-on-error: true
+        env:
+          KEYVAULT_SUITE_PHASE: negative
+        run: |
+          trap ':' INT TERM
+          date +%s > "$KEYVAULT_SUITE_CONTROL/negative-start"
+          go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=45s -v ./a ./b ./c
+      - name: Require aggregate refusal and no surviving owned processes
+        if: always()
+        env:
+          KEYVAULT_SUITE_POSITIVE: ${{ steps.suite-positive.outcome }}
+          KEYVAULT_SUITE_NEGATIVE: ${{ steps.suite-negative.outcome }}
+        run: go -C scripts/tests/testdata/suite-budget test -count=1 -timeout=30s -v ./budget -run 'TestHostedDeadlineResult|TestRecordContract'
+
+  suite-budget-evidence:
+    name: Require native suite-deadline cause
+    needs: suite-budget-control
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up the fixture's exact Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: scripts/tests/testdata/suite-budget/go.mod
+          cache: false
+      - name: Check the completed control job's actual timeout annotation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          control_job=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs" --jq '.jobs[] | select(.name == "Whole-suite deadline and descendant cleanup control") | .id')
+          case "$control_job" in ''|*[!0-9]*) echo 'unique control job id required' >&2; exit 1;; esac
+          # Raw control log stays in runner scratch; it is never echoed.
+          gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$control_job/logs" > "$RUNNER_TEMP/suite-budget-control.log"
+          KEYVAULT_SUITE_JOB_LOG="$RUNNER_TEMP/suite-budget-control.log" GOTOOLCHAIN=local GOWORK=off GOPROXY=off go -C scripts/tests/testdata/suite-budget test -count=1 -v ./budget -run 'TestHostedDeadlineAnnotation|TestAnnotationContract'
 
   verifier-latency:
     name: Real verifier non-race (40/path, p95 <=80ms, max <100ms)

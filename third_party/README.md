@@ -61,14 +61,29 @@ official BIP-340 row, independently pinned auxiliary signatures, public-key
 boundaries, independent public-point samples and refusal behavior. Test secrets
 are synthetic/public fixtures and never represent a vault identity.
 
-Use `-timeout=30m` for the parent repository suite. Each module command is bounded
+The hosted suite step has an independent thirty-minute wall-clock deadline over
+the complete Go command, including compilation and all package execution. Go's
+`-timeout=30m` additionally limits each root test binary; it is not an aggregate
+deadline. Local invocations need their own outer deadline when that bound is
+required. Each module command is bounded
 at twelve minutes including build/setup, and each child test binary retains Go's
 ten-minute timeout with native diagnostics. Both module commands finish before
 verdicts are reported, including after a failure. The direct child is waited;
 remaining members of its dedicated process group are killed and must disappear
 within the bounded cleanup interval. Descendants that escape that group are
 outside this test harness's contract. A cleanup refusal keeps the result nonzero.
-Hosted Linux reserves forty minutes for setup, both bounded module commands and
-cleanup. These execution budgets do not change the product's separate 100ms
+The step's shell retains its entry process during INT/TERM cancellation while
+Go still owns children, allowing the hosting runner's bounded escalation to kill
+the entire PID tree, including nested process groups. Runner cancellation grace
+and cleanup are separate from the thirty-minute deadline. Hosted Linux reserves
+forty minutes for setup, the bounded suite and cleanup. A separate hosted control
+uses three individually healthy 25-second binaries with 45-second binary limits:
+their aggregate must complete under a two-minute step, refuse under a one-minute
+step, and leave no witnessed parent or separate-group descendant. Its intentional
+negative step alone permits failure; its verdict step requires the failure and
+checks completion, elapsed time and cleanup. Actual hosted timeout annotations
+remain necessary cause evidence; local record tests do not qualify that runner.
+See [`suite-budget`](../scripts/tests/testdata/suite-budget/README.md).
+These execution budgets do not change the product's separate 100ms
 verifier fence or measurement criteria. Per-module output, elapsed time and
 startup/test/deadline/cleanup causes remain visible in the test log.
