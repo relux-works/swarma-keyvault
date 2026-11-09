@@ -40,8 +40,8 @@ target; its alternative scalar traversal is not qualified by this repair.
 Run the retained upstream tests and direct-buffer lifecycle tests with:
 
 ```
-go -C third_party/btcec test -race -count=1 ./...
-go -C third_party/secp256k1 test -race -count=1 ./...
+go -C third_party/btcec test -race -count=1 -timeout=10m ./...
+go -C third_party/secp256k1 test -race -count=1 -timeout=10m ./...
 ```
 
 The ordinary repository suite includes these commands through
@@ -49,3 +49,15 @@ The ordinary repository suite includes these commands through
 official BIP-340 row, independently pinned auxiliary signatures, public-key
 boundaries, independent public-point samples and refusal behavior. Test secrets
 are synthetic/public fixtures and never represent a vault identity.
+
+Use `-timeout=30m` for the parent repository suite. Each module command is bounded
+at twelve minutes including build/setup, and each child test binary retains Go's
+ten-minute timeout with native diagnostics. Both module commands finish before
+verdicts are reported, including after a failure. The direct child is waited;
+remaining members of its dedicated process group are killed and must disappear
+within the bounded cleanup interval. Descendants that escape that group are
+outside this test harness's contract. A cleanup refusal keeps the result nonzero.
+Hosted Linux reserves forty minutes for setup, both bounded module commands and
+cleanup. These execution budgets do not change the product's separate 100ms
+verifier fence or measurement criteria. Per-module output, elapsed time and
+startup/test/deadline/cleanup causes remain visible in the test log.

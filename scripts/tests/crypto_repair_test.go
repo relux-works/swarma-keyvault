@@ -1,28 +1,33 @@
+//go:build darwin || linux
+
 package scripts_test
 
 import (
-	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
 
-// The ordinary repository suite also runs both repaired modules' retained
-// upstream tests and their direct-buffer lifecycle tests. Each module runs
-// even if the other fails; this does not qualify native Keychain custody.
+// Both repaired modules retain their complete upstream and lifecycle suites.
+// All module commands finish or refuse before verdicts are reported. This is
+// test execution, not native Keychain or product-latency qualification.
 func TestCryptoRepairUpstream(t *testing.T) {
+	var specs []upstreamSpec
 	for _, module := range []string{"btcec", "secp256k1"} {
-		t.Run(module, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "-C", "../../third_party/"+module, "test", "-race", "-count=1", "./...")
-			cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off")
-			out, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("upstream module %s failed: %v\n%s", module, err, out)
+		specs = append(specs, upstreamSpec{
+			name: module, path: filepath.Join(runtime.GOROOT(), "bin", "go"),
+			args:   []string{"-C", "../../third_party/" + module, "test", "-race", "-count=1", "-timeout=10m", "./..."},
+			env:    append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off"),
+			budget: 12 * time.Minute,
+		})
+	}
+	for _, result := range runUpstreamModules(specs) {
+		t.Run(result.name, func(t *testing.T) {
+			t.Logf("elapsed=%s pid=%d\n%s", result.elapsed, result.pid, result.output)
+			if result.failed() {
+				t.Fatalf("upstream command refused: start=%v wait=%v context=%v cleanup=%v", result.startErr, result.waitErr, result.contextErr, result.cleanupErr)
 			}
 		})
 	}

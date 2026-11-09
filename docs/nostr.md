@@ -84,7 +84,7 @@ From the repository root:
 
 ```sh
 MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh ./internal/keyvault ./cmd/mac-keyvault -run '^TestNostr' -count=1
-MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh ./... -race -count=1
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh ./... -race -count=1 -timeout=30m
 ```
 
 The public [official BIP-340 fixtures](../internal/keyvault/testdata/nostr/README.md)
