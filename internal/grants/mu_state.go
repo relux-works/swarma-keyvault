@@ -140,6 +140,8 @@ func InitializeMUState(config MUStateConfig, binding MUBinding) error {
 }
 
 func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (*muState, error) {
+	endOpen := linuxAdmissionPhase(ctx, "lock/open")
+	defer func() { endOpen() }()
 	if !validMUBinding(binding) {
 		return nil, ErrMUState
 	}
@@ -159,8 +161,8 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 	if s.lock, err = a2aOpenFile(dir, "mu.lock", false); err != nil {
 		return nil, ErrMUState
 	}
-	if lockStateFile(ctx, s.lock) != nil {
-		return nil, ErrMUState
+	if err := lockStateFile(ctx, s.lock); err != nil {
+		return nil, linuxAdmissionRefusal(err, ErrMUState)
 	}
 	if s.file, err = muOpenJournal(dir, false); err != nil {
 		return nil, ErrMUState
@@ -169,6 +171,8 @@ func openMUState(ctx context.Context, config MUStateConfig, binding MUBinding) (
 	if err != nil || st.Size() == 0 || st.Size() > journalScanMaxBytes {
 		return nil, ErrMUState
 	}
+	endOpen()
+	endOpen = linuxAdmissionPhase(ctx, "replay")
 	for {
 		frame, err := readJournalFrame(s.file, s.link)
 		if err == io.EOF {

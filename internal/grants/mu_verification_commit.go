@@ -206,8 +206,11 @@ func (s *muState) reserveVerified(u MUUse, c muVerificationCommit) (uint64, erro
 
 // The domain passes its original absolute final-admission deadline.
 func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDeadline time.Time) (uint64, error) {
-	if finalDeadline.IsZero() || c.deadline.IsZero() || !linuxClock(c.clock).now().Before(finalDeadline) || !linuxClock(c.clock).now().Before(c.deadline) {
+	if finalDeadline.IsZero() || c.deadline.IsZero() {
 		return 0, ErrMUState
+	}
+	if !linuxClock(c.clock).now().Before(finalDeadline) || !linuxClock(c.clock).now().Before(c.deadline) {
+		return 0, linuxDeadlineRefusal(ErrMUState)
 	}
 	if c.deadline.Before(finalDeadline) {
 		finalDeadline = c.deadline
@@ -278,7 +281,7 @@ func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDea
 		return 0, err
 	}
 	if !linuxClock(c.clock).now().Before(finalDeadline) {
-		return 0, ErrMUState
+		return 0, linuxDeadlineRefusal(ErrMUState)
 	}
 	link := s.link
 	if err := s.append(journalReservation, body); err != nil {
@@ -292,7 +295,7 @@ func (s *muState) reserveVerifiedUntil(u MUUse, c muVerificationCommit, finalDea
 	// A late completed append remains held and refuses before any effect. This
 	// fences dispatch; it is not a qualified 100 ms storage-return guarantee.
 	if !linuxClock(c.clock).now().Before(finalDeadline) {
-		return 0, ErrMUState
+		return 0, linuxDeadlineRefusal(ErrMUState)
 	}
 	return r.sequence, nil
 }

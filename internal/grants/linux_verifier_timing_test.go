@@ -4,73 +4,95 @@ package grants
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-// Race runs check the same real cryptography and admission logic with explicit
-// test time. This separate gate measures the shipping real-clock path without
-// instrumentation. All samples count, including slow samples; there are no
-// warmup exclusions or retries. Nearest-rank p95 is sorted[ceil(.95*N)-1].
+// Fixture preparation is outside timing. Every path attempt owns fresh keys,
+// signed records, journal and cleanup. No warmup, retries or replacement samples.
 func TestLinuxRealVerifierP95(t *testing.T) {
-	const samples = linuxVerifierSampleCount
-	advisory := make([]time.Duration, 0, samples)
-	final := make([]time.Duration, 0, samples)
-	t.Logf("fixture: fresh ephemeral P-256 GrantRoot/publisher, Ed25519 service/revoker/agent; signed publisher, grant, author attestation, message, two revocation snapshots; once work.assign; A1; empty journal; required_samples=%d p95_limit_ns=%d max_exclusive_ns=%d p95=nearest-rank runs=1 retries=0", samples, linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds())
-	for i := 0; i < samples; i++ {
-		// Expensive key generation/signing and filesystem fixture creation are outside
-		// timing. Provider copy, verifier construction and actual signed admission are
-		// inside the advisory interval. No authorization or crypto is mocked.
-		g := newLinuxCombinedRig(t)
-		linuxContractScope(g.dock, "once")
-		in := linuxProviderTestInput(g.dock)
-		start := time.Now()
-		v, err := newLinuxProviderView(in)
+	t.Logf("fixture: fresh ephemeral P-256 GrantRoot/publisher, Ed25519 service/revoker/agent; signed publisher, grant, author attestation, message, two revocation snapshots; once work.assign; A1; empty journal; required_samples=%d p95_limit_ns=%d max_exclusive_ns=%d p95=nearest-rank runs=1 retries=0", linuxVerifierSampleCount, linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds())
+	results := collectLinuxVerifierAttempts(func(path string, i int) linuxVerifierAttemptResult {
+		r := linuxVerifierAttemptResult{}
+		var fixture string
+		ok := t.Run(fmt.Sprintf("%s/%02d", path, i), func(t *testing.T) {
+			// Fatal fixture setup errors are confined to this attempt. The collector
+			// still invokes every remaining path/index and records it as incomplete.
+			fixture = t.TempDir()
+			root, err := filepath.EvalSymlinks(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			g := newLinuxCombinedRigAt(t, filepath.Join(root, "state"))
+			linuxContractScope(g.dock, "once")
+			if path == "construction+advisory" {
+				in := linuxProviderTestInput(g.dock)
+				start := time.Now()
+				v, err := newLinuxProviderView(in)
+				var a LinuxAdmission
+				if err == nil {
+					a, err = v.advisory()
+				}
+				r.elapsed, r.measured, r.refusal = time.Since(start), true, err
+				if err == nil {
+					_, realClock := v.clock.(linuxRealClock)
+					r.qualified = realClock && len(a.Snapshots) == 2 && len(a.plan.originals) == 2
+				}
+			} else {
+				// Production stages the domain before the final interval. Handle
+				// starts its unchanged 100ms fence before contention and journal open.
+				d, err := NewLinuxAdmissionDomain(linuxDomainTestUpdate(g), map[string]MUEffect{"work.assign": g.effect})
+				if err != nil {
+					r.refusal = err
+					return
+				}
+				_, realClock := d.clock.(linuxRealClock)
+				trace := &linuxVerifierTrace{}
+				ctx := context.WithValue(context.Background(), linuxAdmissionObserverKey{}, trace)
+				trace.start = time.Now()
+				out, err := d.Handle(ctx, g.dock.event)
+				r.elapsed, r.measured, r.refusal = time.Since(trace.start), true, err
+				r.qualified = err == nil && realClock && out != nil && out.State == "succeeded" && g.calls == 1
+				r.phases = trace.snapshot()
+				if phaseErr := validateLinuxVerifierPhases(r.phases, r.elapsed, r.qualified); phaseErr != nil {
+					r.qualified = false
+					r.refusal = errors.Join(r.refusal, phaseErr)
+				}
+				t.Logf("outcome=%v effect_calls=%d phases=%+v", out, g.calls, r.phases)
+			}
+		})
+		// TempDir cleanup has already run, including after fixture Fatal. Verify
+		// removal separately; a cleanup/test failure cannot become qualification.
+		if fixture != "" {
+			if _, err := os.Lstat(fixture); !errors.Is(err, os.ErrNotExist) {
+				r.cleanupErr = fmt.Errorf("fixture removal not confirmed: %v", err)
+			}
+		} else {
+			r.cleanupErr = errors.New("fixture root unavailable; cleanup unconfirmed")
+		}
+		if !ok {
+			r.qualified = false
+			r.refusal = errors.Join(r.refusal, errors.New("fixture or cleanup failed"))
+		}
+		t.Logf("sample=%d path=%s measured=%t elapsed_ns=%d qualified=%t refusal_class=%s refusal=%v cleanup_error=%v phases=%+v", i, path, r.measured, r.elapsed.Nanoseconds(), r.qualified, linuxVerifierRefusalClass(r.refusal), r.refusal, r.cleanupErr, r.phases)
+		return r
+	})
+	for _, path := range linuxVerifierPaths {
+		s, err := evaluateLinuxVerifierAttempts(results[path])
+		t.Logf("path=%s attempts=%d measured_samples=%d qualified_samples=%d required_samples=%d deadline_refusals=%d state_refusals=%d other_refusals=%d incomplete=%d cleanup_failures=%d observed_rank=%d observed_p95_ns=%d observed_max_ns=%d p95_limit_ns=%d max_exclusive_ns=%d observed_values_ns=%v", path, len(results[path]), len(s.observed), s.qualified, linuxVerifierSampleCount, s.deadline, s.state, s.other, s.incomplete, s.cleanupFailures, s.stats.rank, s.stats.p95.Nanoseconds(), s.stats.max.Nanoseconds(), linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds(), durationNanoseconds(s.observed))
 		if err != nil {
-			t.Fatal(err)
-		}
-		a, verifyErr := v.advisory()
-		end := time.Now()
-		elapsed := end.Sub(start)
-		advisory = append(advisory, elapsed)
-		t.Logf("sample=%d path=construction+advisory start=%s end=%s elapsed_ns=%d", i, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), elapsed.Nanoseconds())
-		if verifyErr != nil || len(a.Snapshots) != 2 || len(a.plan.originals) != 2 {
-			t.Fatal("real signed advisory", verifyErr)
-		}
-		if _, ok := v.clock.(linuxRealClock); !ok {
-			t.Fatal("production provider clock changed")
-		}
-		// Stage the domain outside the final-admission interval, as production does.
-		// Handle starts its real 100ms deadline before lock/open and includes the
-		// actual verifier, original-history reservation, intent, effect and outcome.
-		d, err := NewLinuxAdmissionDomain(linuxDomainTestUpdate(g), map[string]MUEffect{"work.assign": g.effect})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := d.clock.(linuxRealClock); !ok {
-			t.Fatal("public constructor clock changed")
-		}
-		start = time.Now()
-		out, handleErr := d.Handle(context.Background(), g.dock.event)
-		end = time.Now()
-		elapsed = end.Sub(start)
-		final = append(final, elapsed)
-		t.Logf("sample=%d path=final-admission start=%s end=%s elapsed_ns=%d", i, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), elapsed.Nanoseconds())
-		if handleErr != nil || out == nil || out.State != "succeeded" || g.calls != 1 {
-			t.Fatal("real final admission", handleErr, out, g.calls)
+			t.Logf("path=%s FAIL: %v", path, err)
 		}
 	}
-	for _, series := range []struct {
-		name   string
-		values []time.Duration
-	}{{"construction+advisory", advisory}, {"final-admission", final}} {
-		stats, err := classifyLinuxVerifierTiming(series.values)
-		t.Logf("path=%s actual_samples=%d required_samples=%d rank=%d p95_ns=%d max_ns=%d p95_limit_ns=%d max_exclusive_ns=%d values_ns=%v", series.name, stats.count, samples, stats.rank, stats.p95.Nanoseconds(), stats.max.Nanoseconds(), linuxVerifierP95Limit.Nanoseconds(), linuxVerifierMaxExclusive.Nanoseconds(), durationNanoseconds(series.values))
-		if err != nil {
-			t.Errorf("%s real verifier gate: %v (100ms product fence unchanged)", series.name, err)
-		}
+	if err := linuxVerifierAttemptsError(results); err != nil {
+		t.Errorf("real verifier gate: %v (100ms product fence unchanged)", err)
 	}
 }
+
 func durationNanoseconds(values []time.Duration) []int64 {
 	out := make([]int64, len(values))
 	for i, d := range values {

@@ -46,6 +46,9 @@ func lockStateFile(ctx context.Context, f *os.File) error {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			if ctx.Err() == context.DeadlineExceeded {
+				return linuxDeadlineRefusal(errStateLockUnavailable)
+			}
 			return errStateLockUnavailable
 		case <-timer.C:
 		}

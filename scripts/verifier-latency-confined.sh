@@ -120,4 +120,4 @@ env -i PATH="$toolchain/bin:/usr/bin:/bin" HOME="$state/home" TMPDIR="$state/tmp
 # Fixture signing is outside timing. Exactly 40/path; one run, zero retries.
 # Nearest-rank p95 is rank 38 of 40; require p95 <=80ms AND max <100ms.
 "${sandbox[@]}" go test -count=1 -v ./internal/grants \
-  -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion)$'
+  -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion|TestLinuxVerifierAttemptControls|TestLinuxVerifierRefusalAndQualificationControls|TestLinuxAdmissionDeadlineCompatibility|TestLinuxAdmissionDeadlineCauseControls|TestLinuxAdmissionPhaseEvidence|TestLinuxAdmissionLateStateIsNotDeadline|TestLinuxAdmissionLockCauseControls)$'

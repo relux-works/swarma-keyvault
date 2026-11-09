@@ -104,7 +104,7 @@ func (r *LinuxReceiver) HandleProjection(ctx context.Context, raw []byte, room, 
 func (r *LinuxReceiver) check(e MUEnvelopeEvent, s *muState, snapshots *linuxRevocationState) (d MUDecision, revocation error, err error) {
 	now, err := r.clock()
 	if err != nil || now.IsZero() || now.Nanosecond() != 0 {
-		return MUDecision{}, nil, ErrMUState
+		return MUDecision{}, nil, linuxAdmissionRefusal(err, ErrMUState)
 	}
 	admission, err := r.verifier.VerifyAdmission(linuxCloneEvent(e), now)
 	for _, snapshot := range admission.Snapshots {
@@ -208,7 +208,7 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 	e := linuxCloneEvent(input)
 	s, err := r.open(ctx, r.config.State, r.config.Binding)
 	if err != nil {
-		return nil, ErrMUState
+		return nil, linuxAdmissionRefusal(err, ErrMUState)
 	}
 	defer s.close()
 	snapshots, err := openLinuxRevocationState(s)
@@ -301,32 +301,57 @@ func (r *LinuxReceiver) Handle(ctx context.Context, input MUEnvelopeEvent) (*MUO
 		return nil, ErrMUExecution
 	}
 	if ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, linuxDeadlineRefusal(ErrMUState)
+		}
 		return nil, ErrMUState
 	}
 	use := MUUse{Once: again.Use == "once", GrantRoot: again.GrantRoot, GrantID: again.GrantID, Action: again.Action, TargetKind: again.TargetKind, TargetID: again.TargetID,
 		Requester: again.Author, Nonce: again.Nonce, Audience: again.Audience, RequestHash: again.RequestHash}
 	var seq uint64
+	endReserve := linuxAdmissionPhase(ctx, "reserve/fsync")
 	if r.final != nil {
 		seq, err = r.final.reserve(s, use)
 	} else {
 		seq, err = s.reserve(use)
 	}
+	endReserve()
 	if err != nil {
 		return nil, err
 	}
-	if err := s.markIntent(seq); err != nil {
+	endIntent := linuxAdmissionPhase(ctx, "intent/fsync")
+	err = s.markIntent(seq)
+	endIntent()
+	if err != nil {
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
 	}
 	// Intent persistence shares the original budget; a late intent keeps the
 	// reservation unknown and never dispatches an effect.
-	if ctx.Err() != nil || (r.final != nil && !r.final.live()) {
+	if ctx.Err() != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &MUOutcome{State: "unknown"}, linuxDeadlineRefusal(ErrMUUnknown)
+		}
+		// A deterministic clock can cancel at the original fence as well.
+		if r.final != nil {
+			if err := r.final.liveError(ErrMUUnknown); err != nil {
+				return &MUOutcome{State: "unknown"}, err
+			}
+		}
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
+	}
+	if r.final != nil {
+		if err := r.final.liveError(ErrMUUnknown); err != nil {
+			return &MUOutcome{State: "unknown"}, err
+		}
 	}
 	receipt, err := effect.Execute(ctx, again)
 	if err != nil || len(receipt) == 0 || len(receipt) > 8192 {
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
 	}
-	if err := s.recordOutcome(seq, receipt); err != nil {
+	endOutcome := linuxAdmissionPhase(ctx, "outcome/fsync")
+	err = s.recordOutcome(seq, receipt)
+	endOutcome()
+	if err != nil {
 		return &MUOutcome{State: "unknown"}, ErrMUUnknown
 	}
 	return &MUOutcome{State: "succeeded", Receipt: bytes.Clone(receipt)}, nil

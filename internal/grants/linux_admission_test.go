@@ -22,9 +22,17 @@ type linuxCombinedRig struct {
 
 func newLinuxCombinedRig(t *testing.T) *linuxCombinedRig {
 	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return newLinuxCombinedRigAt(t, filepath.Join(root, "state"))
+}
+
+func newLinuxCombinedRigAt(t *testing.T, dir string) *linuxCombinedRig {
+	t.Helper()
 	g := &linuxCombinedRig{dock: newLinuxVerifierDock(t)}
 	d := g.dock
-	dir := filepath.Join(t.TempDir(), "state")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
 	}

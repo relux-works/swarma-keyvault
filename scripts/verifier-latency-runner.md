@@ -1,5 +1,31 @@
 # Hosted verifier runner prerequisite
 
+The measurement runs once, with zero retries or warmup exclusions. It prepares
+an independent fixture for every attempt on each path, records all 40 attempts
+per path even after a refusal, and confirms fixture cleanup after every attempt.
+Each path must have 40 successful qualified samples, nearest-rank p95 <=80ms,
+and every sample <100ms. Any refusal, incomplete attempt or cleanup failure
+fails the aggregate. The product's 100ms final-admission fence is unchanged.
+
+Logs separate observed elapsed distributions (including refused measurements)
+from successful qualification counts and refusal classes. A deadline class comes
+only from an actual deadline fence, never from elapsed time or the generic
+state-unavailable sentinel. It does not establish environmental noise or grant
+a passing qualification. Other state and storage refusals remain failures.
+Deadline errors retain their existing text, `errors.Is` sentinel chain and
+`errors.As` platform refusal code. Private test observers provide monotonic
+start/end offsets for domain locking, lock/open, journal replay, real verification,
+reservation/fsync, intent/fsync and outcome/fsync inside final admission. Unreached
+phases remain absent; incomplete brackets fail evidence validation. The observers
+are installed only by same-package tests and supply no authority or clock.
+
+The confined invocation also runs deterministic injected-result controls: early
+refusals must leave both paths' remaining attempts intact and fail the aggregate;
+deadline/state refusals must stay distinct at equal elapsed values; in-budget
+successes pass; invalid counts, incomplete samples and cleanup errors refuse.
+These controls run on Darwin and Linux, including race builds. They prove gate
+logic and fence behavior, not hosted timing or namespace qualification.
+
 The non-race verifier job fixes `runs-on: ubuntu-24.04` (amd64). The runner
 owner permits the exact official Ubuntu archive bubblewrap package, including
 its postinst sysctl, only on the disposable GitHub-hosted VM for this job.

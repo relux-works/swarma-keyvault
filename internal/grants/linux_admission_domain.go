@@ -333,14 +333,23 @@ func (d *LinuxAdmissionDomain) Handle(ctx context.Context, e MUEnvelopeEvent) (*
 	// Start once, BEFORE contention or journal opening. No boundary renews this.
 	final, cancel := linuxClock(d.clock).withDeadline(ctx, linuxClock(d.clock).now().Add(linuxProviderFinalLimit))
 	defer cancel()
+	endLock := linuxAdmissionPhase(final, "domain-lock")
 	if err := d.lock(final); err != nil {
+		endLock()
+		if final.Err() == context.DeadlineExceeded {
+			return nil, linuxDeadlineRefusal(err)
+		}
 		return nil, err
 	}
+	endLock()
 	defer d.unlock()
 	s := d.state
 	p := s.prerequisites
-	if d.disabled || !p.Clock || !p.Continuity || p.StorageReturnBound <= 0 || p.StorageReturnBound > linuxProviderFinalLimit || !s.view.usable() {
+	if d.disabled || !p.Clock || !p.Continuity || p.StorageReturnBound <= 0 || p.StorageReturnBound > linuxProviderFinalLimit {
 		return nil, linuxVerifierRefuse("time_unavailable")
+	}
+	if !s.view.usable() {
+		return nil, linuxDeadlineRefusal(linuxVerifierRefuse("time_unavailable"))
 	}
 	deadline, _ := final.Deadline()
 	if s.view.deadline.Before(deadline) {
@@ -362,8 +371,8 @@ func (d *LinuxAdmissionDomain) receiver(s linuxDomainState, lease *linuxFinalAdm
 	c := s.receiver
 	c.RootRevocations = func() ([]MURevocation, error) { return append([]MURevocation(nil), s.roots...), nil }
 	r := NewLinuxReceiver(c, lease, s.registry, d.effects, func() (time.Time, error) {
-		if !lease.live() {
-			return time.Time{}, ErrMUState
+		if err := lease.liveError(ErrMUState); err != nil {
+			return time.Time{}, err
 		}
 		return s.view.input.State.Now, nil
 	})
@@ -386,10 +395,31 @@ type linuxFinalAdmission struct {
 }
 
 func (l *linuxFinalAdmission) live() bool {
-	return l != nil && l.ctx.Err() == nil && linuxClock(l.view.clock).now().Before(l.deadline) && l.view.usable()
+	return l.liveError(ErrMUState) == nil
+}
+
+func (l *linuxFinalAdmission) liveError(refusal error) error {
+	if l == nil || l.deadline.IsZero() {
+		return refusal
+	}
+	if l.ctx.Err() == context.DeadlineExceeded {
+		return linuxDeadlineRefusal(refusal)
+	}
+	// The injected test clock may cancel a context at the absolute fence. The
+	// clock comparison itself proves expiry, independently of overall elapsed.
+	if !linuxClock(l.view.clock).now().Before(l.deadline) || !l.view.usable() {
+		return linuxDeadlineRefusal(refusal)
+	}
+	if l.ctx.Err() != nil {
+		return refusal
+	}
+	return nil
 }
 func (l *linuxFinalAdmission) VerifyAdmission(e MUEnvelopeEvent, now time.Time) (LinuxAdmission, error) {
-	if !l.live() || !now.Equal(l.view.input.State.Now) || !reflect.DeepEqual(e, l.view.input.Event) {
+	if err := l.liveError(ErrMUState); err != nil {
+		return LinuxAdmission{}, err
+	}
+	if !now.Equal(l.view.input.State.Now) || !reflect.DeepEqual(e, l.view.input.Event) {
 		return LinuxAdmission{}, ErrMUState
 	}
 	if l.baseline != nil {
@@ -399,13 +429,15 @@ func (l *linuxFinalAdmission) VerifyAdmission(e MUEnvelopeEvent, now time.Time) 
 		// real invocation under this same exclusive lease and absolute deadline.
 		return a, err
 	}
+	endVerify := linuxAdmissionPhase(l.ctx, "verify")
+	defer endVerify()
 	p, err := NewLinuxVerifier(l.view.input.Config, l.view, l.view, nil)
 	if err != nil {
 		return LinuxAdmission{}, err
 	}
 	a, err := p.VerifyAdmission(e, now)
-	if err == nil && !l.live() {
-		err = linuxVerifierRefuse("time_unavailable")
+	if err == nil {
+		err = l.liveError(linuxVerifierRefuse("time_unavailable"))
 	}
 	if err == nil {
 		l.admission = a
@@ -414,7 +446,10 @@ func (l *linuxFinalAdmission) VerifyAdmission(e MUEnvelopeEvent, now time.Time) 
 	return a, err
 }
 func (l *linuxFinalAdmission) reserve(s *muState, u MUUse) (uint64, error) {
-	if !l.live() || !l.realVerified {
+	if err := l.liveError(ErrMUState); err != nil {
+		return 0, err
+	}
+	if !l.realVerified {
 		return 0, ErrMUState
 	}
 	c, err := l.view.commitCandidate(l.admission)
