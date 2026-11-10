@@ -315,11 +315,9 @@ func schnorrSign(privKey, nonce *btcec.ModNScalar, pubKey *btcec.PublicKey, hash
 	)
 
 	var e btcec.ModNScalar
-	if overflow := e.SetBytes((*[32]byte)(commitment)); overflow != 0 {
-		k.Zero()
-		str := "hash of (r || P || m) too big"
-		return nil, signatureError(ecdsa_schnorr.ErrSchnorrHashValue, str)
-	}
+	// SetBytes reduces modulo n. A challenge at or above n is valid BIP-340
+	// input, so its overflow flag must not become a signing refusal.
+	e.SetBytes((*[32]byte)(commitment))
 
 	// Step 13.
 	//

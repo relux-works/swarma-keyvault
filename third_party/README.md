@@ -1,8 +1,9 @@
 # Explicit cryptographic source repairs
 
 The root `go.mod` explicitly replaces these three modules with local source.
-The existing signing, nonce derivation and precomputed base-multiplication
-algorithms are retained. All copies retain their upstream ISC licenses.
+Nonce derivation and precomputed base multiplication are retained. The Schnorr
+signer also corrects challenge reduction as described below. All copies retain
+their upstream ISC licenses.
 
 | Module | Version and upstream commit | Original module checksum |
 | --- | --- | --- |
@@ -14,6 +15,18 @@ The exact changes from those source versions are in
 [`patches/cleanup.patch`](patches/cleanup.patch). The btcec module's local
 replacements also apply when running its retained upstream tests directly.
 This is an explicit source repair, not a modification of the Go module cache.
+
+The Schnorr signer reduces every 32-byte challenge modulo the curve group order,
+as required by [BIP-340](https://bips.dev/340/). The pinned signer previously
+refused challenges at or above that order even though its scalar conversion
+already computed the reduced value. Self-verification, private-key and nonce
+validation, OS entropy in the vault and named-buffer cleanup remain unchanged.
+Boundary tests exercise actual signing at `n-1`, `n`, `n+1` and `2^256-1` with
+independent expected responses derived from official vector 0. They substitute
+synthetic challenge outputs through temporary Go source overlays; there is no
+production hash override or claimed SHA-256 preimage. A control reinstates the
+original refusal and must fail for that specific reason. Real-hash official
+vectors and wrong-key/message tests separately cover signature binding.
 
 Named signing scalars, raw private encodings, secret-derived nonce hashes,
 effective nonce/response intermediates, auxiliary input copies and the fast
