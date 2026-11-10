@@ -100,7 +100,9 @@ offline backup, deriving a NIP-06 Nostr leaf and Namecoin account 0 from fixed
 paths. Only those two authorities persist, as separately device-wrapped
 ciphertexts in one atomic login-Keychain item. The Namecoin wrap requires
 Touch ID without password fallback; Nostr reports
-`storage=enclave-wrapped-keychain`, `presence=false`. Both routes retain the
+`storage=enclave-wrapped-keychain`, `presence=false`. Uncertain mutations return
+`recovery_outcome_unknown` with an unconfirmed public reference and exit 1;
+failed receipts also return failure. Both routes retain the
 sole-application Keychain ACL and refuse private export. Recoverable secp256k1
 material exists transiently in vault memory; it is not hardware non-extractable.
 Read [Nostr commands](docs/nostr.md) and [recovery, custody limits and attended

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -90,9 +93,9 @@ func runRecovery(args []string, out output) int {
 	m := makeRecoveryManager(newRecoveryBackend(), keyvault.FileLock{Path: path})
 	if op == "delete" {
 		if err := m.Delete(q.Service, q.Version, expectedGroup); err != nil {
-			return out.fail(err)
+			return recoveryMutationFailure(out, err)
 		}
-		return out.success(map[string]bool{"deleted": true}, func(w io.Writer) { fmt.Fprintln(w, "deleted: true") })
+		return recoveryMutationReceipt(out, "delete", keyvault.RecoveryRecord{Service: q.Service, Version: q.Version, GroupID: expectedGroup}, map[string]bool{"deleted": true}, "deleted: true\n", nil)
 	}
 	var r keyvault.RecoveryRecord
 	if op == "pub" {
@@ -101,9 +104,57 @@ func runRecovery(args []string, out output) int {
 		r, err = m.Create(q, terminal, op == "restore")
 	}
 	if err != nil {
-		return out.fail(err)
+		return recoveryMutationFailure(out, err)
+	}
+	text := fmt.Sprintf("group: %s\nnpub: %s\npublic_key: %s\nnamecoin_xpub: %s\nnamecoin_origin: %s\nnostr_presence: none\nnamecoin_presence: biometry-any\nprivate_export: false\n", r.Account(), r.Nostr.NPub, r.Nostr.PublicKey, r.Namecoin.XPub, r.Namecoin.Origin)
+	if op != "pub" {
+		return recoveryMutationReceipt(out, op, r, r, text, nil)
 	}
 	return out.success(r, func(w io.Writer) {
 		fmt.Fprintf(w, "group: %s\nnpub: %s\npublic_key: %s\nnamecoin_xpub: %s\nnamecoin_origin: %s\nnostr_presence: none\nnamecoin_presence: biometry-any\nprivate_export: false\n", r.Account(), r.Nostr.NPub, r.Nostr.PublicKey, r.Namecoin.XPub, r.Namecoin.Origin)
 	})
+}
+
+// Mutation replies are checked independently of the general CLI emitter. A
+// receipt failure cannot turn one completed effect into a reported success.
+func recoveryMutationReceipt(out output, operation string, reference keyvault.RecoveryRecord, result any, text string, err error) int {
+	code := exitOK
+	if err != nil {
+		code = exitFailure
+	}
+	var b []byte
+	if out.json {
+		reply := response{OK: err == nil, Command: out.command, Result: result}
+		if err != nil {
+			reply.Error = contractError(err)
+		}
+		var encodeErr error
+		b, encodeErr = json.MarshalIndent(reply, "", "  ")
+		if encodeErr != nil {
+			return recoveryReceiptLost(out, operation, reference)
+		}
+		b = append(b, '\n')
+	} else {
+		b = []byte(text)
+	}
+	n, writeErr := out.stdout.Write(b)
+	if writeErr != nil || n != len(b) {
+		return recoveryReceiptLost(out, operation, reference)
+	}
+	return code
+}
+func recoveryReceiptLost(out output, operation string, reference keyvault.RecoveryRecord) int {
+	// One bounded public diagnostic; never retry stdout or print writer errors.
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "recovery_outcome_unknown: %s may have completed; UNCONFIRMED reference %s group_id=%s; reconcile; do not retry or delete\n", operation, reference.Account(), reference.GroupID)
+	_, _ = out.stderr.Write(b.Bytes())
+	return exitFailure
+}
+func recoveryMutationFailure(out output, err error) int {
+	var unknown *keyvault.RecoveryOutcomeUnknown
+	if !errors.As(err, &unknown) {
+		return out.fail(err)
+	}
+	text := fmt.Sprintf("recovery_outcome_unknown: %s; UNCONFIRMED reference %s group_id=%s; reconcile; do not retry or delete\n", unknown.Operation, unknown.Reference.Account(), unknown.Reference.GroupID)
+	return recoveryMutationReceipt(out, unknown.Operation, unknown.Reference, unknown, text, err)
 }

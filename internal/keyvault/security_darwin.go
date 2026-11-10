@@ -275,7 +275,12 @@ type NostrSecurityStore struct{}
 
 func NewNostrSecurityStore() *NostrSecurityStore { return &NostrSecurityStore{} }
 
-func (*NostrSecurityStore) Create(request NostrRecord) (NostrRecord, error) {
+func (s *NostrSecurityStore) Create(request NostrRecord) (NostrRecord, error) {
+	// Manager holds the shared vault lock. Recheck the full public inventory
+	// before generating material or calling SecItemAdd, including paired names.
+	if err := checkNostrReservation(s, request.Service, request.Purpose, request.Version); err != nil {
+		return NostrRecord{}, err
+	}
 	record, secret, err := newNostrMaterial(request)
 	if err != nil {
 		return NostrRecord{}, err

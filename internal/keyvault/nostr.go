@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
 	"io"
 	"sort"
 	"strconv"
@@ -305,11 +304,7 @@ func (m *NostrManager) Generate(service, purpose string, version int) (NostrReco
 		return NostrRecord{}, nostrRefuse("lock_unavailable")
 	}
 	defer release()
-	_, err = m.Describe(service, purpose, version)
-	if err == nil {
-		return NostrRecord{}, nostrRefuse("duplicate")
-	}
-	if !errors.Is(err, ErrNotFound) {
+	if err := checkNostrReservation(m.backend, service, purpose, version); err != nil {
 		return NostrRecord{}, err
 	}
 	r := NostrRecord{Schema: "nostr-key/1", Service: service, Purpose: purpose, Version: version, Algorithm: "secp256k1-bip340", Storage: "keychain-acl", Created: m.now().UTC().Truncate(time.Second).Format(time.RFC3339)}

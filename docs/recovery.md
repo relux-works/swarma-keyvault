@@ -54,7 +54,9 @@ The Nostr projection retains `nostr-key/1` public fields and explicitly reports
 `storage=enclave-wrapped-keychain`, `presence=false`, `private_export=false`.
 Legacy random-key records remain explicitly `storage=keychain-acl`; they are
 not silently interpreted as wrapped recovery records. A duplicate physical or
-logical address refuses before words are requested and again before atomic add.
+logical address in either creation order refuses. Recovery checks before words
+are requested and again before atomic add; legacy generation checks the physical
+recovery account and both logical purposes under the same vault lock.
 Nothing is overwritten, rotated or removed during generation or restore.
 
 Example syntax for the selected human sitting:
@@ -82,10 +84,17 @@ mac-keyvault recovery delete qualification --version 1 --expected-group-id PUBLI
 ```
 
 Choose KEEP by default when retaining an old backup. An explicit removal must
-identify one item and its retained public pin; an incorrect pin, OS refusal or
-attempt to delete half a pair preserves it. The vault never reads the old
+identify one item and its retained public pin; an incorrect pin or a definite
+pre-effect refusal preserves it. Deleting half a pair is not supported. The vault never reads the old
 private value to remove it. A lost/nonzero response can follow a native effect;
-reconcile the public record before retrying. Several removals are separate
+the process returns exit 1 and `recovery_outcome_unknown` when the native
+mutation cannot be confirmed. In JSON, `ok=false` and that error accompany
+`result={outcome:"unknown",operation:"generate"|"restore"|"delete",reference:PUBLIC_RECORD}`.
+The reference is explicitly UNCONFIRMED, not proof of creation or deletion.
+Definite pre-effect and duplicate refusals remain distinct. Failed or short
+receipt writes also return exit 1 and attempt one bounded public diagnostic.
+If either output channel is lost, retain UNKNOWN. Reconcile the public reference;
+do not automatically retry or delete. Several removals are separate
 effects, not a transaction. Retained retired keys are not an active identity.
 
 ## Binary and memory boundary

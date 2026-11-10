@@ -51,7 +51,7 @@ func (*NostrSecurityStore) RecoveryList() ([]RecoveryRecord, error) {
 
 func (*NostrSecurityStore) RecoveryStore(r RecoveryRecord, encrypted []byte) error {
 	if _, err := parseRecoveryCiphertext(encrypted, r); err != nil {
-		return err
+		return &RecoveryNotAppliedError{Err: err}
 	}
 	metadata, _ := json.Marshal(r)
 	account := C.CString(r.Account())
@@ -60,7 +60,7 @@ func (*NostrSecurityStore) RecoveryStore(r RecoveryRecord, encrypted []byte) err
 	defer C.free(unsafe.Pointer(tag))
 	status := int(C.MacKeyVaultRecoveryCreate(account, tag, (*C.uchar)(unsafe.Pointer(&encrypted[0])), C.size_t(len(encrypted))))
 	if status == -25299 {
-		return recoveryRefuse("duplicate")
+		return &RecoveryNotAppliedError{Err: recoveryRefuse("duplicate")}
 	}
 	if status != 0 {
 		return &StatusError{Op: "recovery create", Status: status}
@@ -95,7 +95,7 @@ func recoveryNativeRead(r RecoveryRecord) (recoveryCiphertext, error) {
 
 func (*NostrSecurityStore) RecoveryDelete(r RecoveryRecord) error {
 	if validateRecoveryRecord(r) != nil {
-		return recoveryRefuse("invalid_record")
+		return &RecoveryNotAppliedError{Err: recoveryRefuse("invalid_record")}
 	}
 	metadata, _ := json.Marshal(r)
 	return recoveryNativeDelete(r.Account(), metadata)

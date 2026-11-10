@@ -45,7 +45,7 @@ func (f *recoveryFakeStore) RecoveryList() ([]RecoveryRecord, error) {
 }
 func (f *recoveryFakeStore) RecoveryStore(r RecoveryRecord, data []byte) error {
 	if f.fail {
-		return recoveryRefuse("store_refused")
+		return &RecoveryNotAppliedError{Err: recoveryRefuse("store_refused")}
 	}
 	if f.data == nil {
 		f.data = map[string][]byte{}
@@ -57,7 +57,7 @@ func (f *recoveryFakeStore) RecoveryStore(r RecoveryRecord, data []byte) error {
 }
 func (f *recoveryFakeStore) RecoveryDelete(r RecoveryRecord) error {
 	if f.fail {
-		return recoveryRefuse("delete_refused")
+		return &RecoveryNotAppliedError{Err: recoveryRefuse("delete_refused")}
 	}
 	f.deletes++
 	for i, g := range f.groups {

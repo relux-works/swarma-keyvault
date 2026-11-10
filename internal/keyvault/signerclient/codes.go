@@ -8,6 +8,8 @@ import "sort"
 // test all read ErrorContract, and the keyvault package's Code* constants
 // are aliases of these, so a code cannot exist in one place and not the
 // other. A consumer vendors this package verbatim (stdlib only).
+const CodeRecoveryOutcomeUnknown = "recovery_outcome_unknown"
+
 const (
 	CodeUsage                = "usage"
 	CodeFailure              = "failure"
@@ -75,6 +77,7 @@ type ErrorCode struct {
 // through the server), and the golden coverage test enumerates this table
 // against that corpus in both directions.
 var ErrorContract = []ErrorCode{
+	{CodeRecoveryOutcomeUnknown, ExitFailure, false, "recovery mutation effect or receipt cannot be confirmed; reconcile the unconfirmed public reference without automatic retry or deletion"},
 	{CodeUsage, ExitUsage, true, "bad flags/args; signer serve writes it as the startup hello"},
 	{CodeFailure, ExitFailure, true, "an I/O or backend error outside the Security.framework status space (lock path, a backend error that is not an OSStatus)"},
 	{CodeNotFound, ExitFailure, true, "no record for address/kind/version: the hello when the address does not resolve, a response when the generation vanished after the hello"},

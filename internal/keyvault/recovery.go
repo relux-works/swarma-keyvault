@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 )
@@ -16,7 +17,9 @@ type RecoveryTerminal interface {
 }
 
 // RecoveryBackend exposes public metadata and ciphertext only. Native custody
-// creates hardware wrapping keys in the paired, verified helper.
+// creates hardware wrapping keys in the paired, verified helper. A mutation
+// error is uncertain unless the backend returns RecoveryNotAppliedError, which
+// guarantees no effect (including a definite atomic-add duplicate).
 type RecoveryBackend interface {
 	NostrBackend
 	RecoveryList() ([]RecoveryRecord, error)
@@ -216,7 +219,15 @@ func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, r
 		return zero, err
 	}
 	if err := m.backend.RecoveryStore(r, encoded); err != nil {
-		return zero, err
+		var noEffect *RecoveryNotAppliedError
+		if errors.As(err, &noEffect) {
+			return zero, err
+		}
+		operation := "generate"
+		if restore {
+			operation = "restore"
+		}
+		return r, recoveryMutationError(operation, r, err)
 	}
 	return r, nil
 }
@@ -278,5 +289,8 @@ func (m *RecoveryManager) Delete(service string, version int, expectedGroup stri
 	if r.GroupID != expectedGroup {
 		return recoveryRefuse("public_pin_mismatch")
 	}
-	return m.backend.RecoveryDelete(r)
+	if err := m.backend.RecoveryDelete(r); err != nil {
+		return recoveryMutationError("delete", r, err)
+	}
+	return nil
 }
