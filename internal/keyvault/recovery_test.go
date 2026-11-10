@@ -72,10 +72,22 @@ func (f *recoveryFakeStore) RecoveryDelete(r RecoveryRecord) error {
 func (f *recoveryFakeStore) NostrDelete(NostrRecord) error { f.deletes++; return nil }
 
 type recoveryFakeTerminal struct {
-	phrase             []byte
-	confirmation, read int
-	refuse             bool
-	seen               [][]byte
+	identityConfirmation int
+	identityRefuse       bool
+	plans                []RecoveryPlan
+	phrase               []byte
+	confirmation, read   int
+	refuse               bool
+	seen                 [][]byte
+}
+
+func (t *recoveryFakeTerminal) ConfirmIdentities(p RecoveryPlan) error {
+	t.identityConfirmation++
+	t.plans = append(t.plans, p)
+	if t.identityRefuse {
+		return errors.New("identity mismatch")
+	}
+	return nil
 }
 
 func (t *recoveryFakeTerminal) ConfirmMnemonic(words [][]byte) error {
@@ -339,7 +351,7 @@ func TestRecoveryDuplicateAndExactDeletion(t *testing.T) {
 	if terminal.confirmation != 0 || h.calls != 2 || f.stores != 1 {
 		t.Fatal("duplicate reached secrets")
 	}
-	err = m.Delete(r.Service, r.Version, strings.Repeat("1", 32))
+	err = recoveryTestDelete(m, r.Service, r.Version, strings.Repeat("1", 32))
 	recoveryCode(t, err, "public_pin_mismatch")
 	if f.deletes != 0 || len(f.groups) != 1 {
 		t.Fatal("wrong pin deleted")
@@ -348,13 +360,13 @@ func TestRecoveryDuplicateAndExactDeletion(t *testing.T) {
 	err = n.Delete(r.Service, "nostr", r.Nostr.Version, r.Nostr.NPub)
 	nostrCode(t, err, "paired_group_requires_group_delete")
 	f.fail = true
-	err = m.Delete(r.Service, r.Version, r.GroupID)
+	err = recoveryTestDelete(m, r.Service, r.Version, r.GroupID)
 	recoveryCode(t, err, "delete_refused")
 	if f.deletes != 0 || len(f.groups) != 1 {
 		t.Fatal("refused delete changed state")
 	}
 	f.fail = false
-	if err := m.Delete(r.Service, r.Version, r.GroupID); err != nil {
+	if err := recoveryTestDelete(m, r.Service, r.Version, r.GroupID); err != nil {
 		t.Fatal(err)
 	}
 	if f.deletes != 1 || len(f.groups) != 0 || len(f.data) != 0 {

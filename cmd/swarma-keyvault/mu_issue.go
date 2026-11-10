@@ -9,13 +9,10 @@ import (
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
-const muIssueUsage = "swarma-keyvault grants mu-issue --kind grant|mac-agent|publisher|publisher-ed25519 --spec FILE --owner-spki-der FILE (--subject-spki-der FILE | --subject-attestation FILE --publisher-attestation FILE)"
-
-// muOwnerAddress is the owner grant root: the same Secure Enclave key, with
-// Touch ID presence, that the existing owner issuance route signs with.
-var muOwnerAddress = keyvault.Address{Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1}
+const muIssueUsage = "swarma-keyvault grants mu-issue --kind grant|mac-agent|publisher|publisher-ed25519 --spec FILE --owner-spki-der FILE" + ownerAddressUsage + " (--subject-spki-der FILE | --subject-attestation FILE --publisher-attestation FILE)"
 
 // errMUOwnerKey refuses a resolved key that is not the pinned owner root.
 var errMUOwnerKey = errors.New("mu-owner-key-mismatch")
@@ -32,6 +29,7 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 	usage := func() int { fmt.Fprintln(stderr, muIssueUsage); return 2 }
 	f := flag.NewFlagSet("mu-issue", flag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	ownerKey := addOwnerAddressFlags(f)
 	var kind, spec, owner, subject, agentAtt, publisherAtt onceString
 	f.Var(&kind, "kind", "grant, mac-agent, publisher or publisher-ed25519")
 	f.Var(&spec, "spec", "JSON specification file")
@@ -51,6 +49,10 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 		(kind.value != "grant" && !attestation) || subject.set != attestation || (attestation && (subject.value == "" || subject.value == "-")) ||
 		agentAtt.set == attestation || publisherAtt.set == attestation ||
 		(!attestation && (agentAtt.value == "" || agentAtt.value == "-" || publisherAtt.value == "" || publisherAtt.value == "-")) {
+		return usage()
+	}
+	address, err := ownerKey.address()
+	if err != nil {
 		return usage()
 	}
 	raw, err := readInput(spec.value, nil, 16384)
@@ -110,6 +112,10 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "specification refused: issuer is not the given owner root")
 		return 1
 	}
+	if err := ownerkey.CheckPresenceReason(address, reason); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	digest := plan.Digest()
 	prompt := func(d []byte) string {
 		if !bytes.Equal(d, digest[:]) {
@@ -117,8 +123,8 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 		}
 		return reason
 	}
-	result, err := newIssueManager(prompt).SignIfKey(muOwnerAddress, digest[:], func(key keyvault.ResolvedSigningKey) error {
-		if key.Address != muOwnerAddress || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, pin) {
+	result, err := newIssueManager(prompt).SignIfKey(address, digest[:], func(key keyvault.ResolvedSigningKey) error {
+		if key.Address != address || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, pin) {
 			return errMUOwnerKey
 		}
 		text := rendering + "Touch ID reason: " + reason + "\n"

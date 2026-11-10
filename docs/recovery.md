@@ -33,7 +33,7 @@ Adding fingerprints does not invalidate a `biometryAny` key. This differs from
 
 After confirmation, the vault persists one atomic paired recovery item in the
 login Keychain under `works.relux.mac-keyvault.nostr.v1`, account
-`SERVICE/recovery@GROUP_VERSION`. A sole-application decrypt ACL trusts the
+`NOSTR_IDENTITY/recovery@GROUP_VERSION`. A sole-application decrypt ACL trusts the
 current signed vault. Its public metadata links both purposes and public pins.
 The value contains two separate ciphertext envelopes and their opaque device
 wrapping-key representations. No mnemonic, entropy, BIP-39 seed, master key or
@@ -59,14 +59,53 @@ are requested and again before atomic add; legacy generation checks the physical
 recovery account and both logical purposes under the same vault lock.
 Nothing is overwritten, rotated or removed during generation or restore.
 
-Example syntax for the selected human sitting:
+## Independent purpose identities
+
+Nostr and Namecoin receive separate required public identity parameters. They
+may be equal or different. The physical paired record is anchored by the Nostr
+identity; its logical records are `A/nostr@N` and `B/namecoin@M`. Identities are
+vault service names, not an OS account, Matrix account or inferred display name.
+
+Before a mutation creates even a lock file, the vault displays the physical
+record and both logical addresses and requires the user to retype A and B on
+the controlling terminal. A mismatch or EOF leaves storage and lock prerequisites
+untouched. Deletion requires the Namecoin identity as well as the physical
+address and retained group pin, and confirms both identities too.
+
+An advisory plan reads the actual public inventory without creating a lock or
+its parent. It reuses an existing admitted lock when available. Each omitted
+generation is the next number after the largest existing generation for that
+specific identity and purpose, starting at 1; the three families advance
+independently. Explicit generations are also allowed. The maximum is
+2147483647; exhaustion refuses. The JSON result uses
+`schema=keyvault-recovery-plan/1` and names both identities, all three generations
+and all three addresses. It is a snapshot, not a reservation. Generate or
+restore must receive the exact selected generations; a collision under the
+mutation lock refuses without choosing a replacement or overwriting anything.
+
+Example syntax for an attended operation:
 
 ```sh
-mac-keyvault --json recovery generate --service example --version 1 --nostr-version 2 --namecoin-version 1
+mac-keyvault --json recovery plan --nostr-identity example --namecoin-identity wallet
+mac-keyvault --json recovery generate --nostr-identity example --namecoin-identity wallet --version 1 --nostr-version 2 --namecoin-version 1
 mac-keyvault --json recovery pub example --version 1
 mac-keyvault nostr pub example/nostr --version 2 --format npub
-mac-keyvault --json recovery restore --service restored --version 1 --nostr-version 2 --namecoin-version 1 --expected-npub NPUB --expected-namecoin-xpub XPUB --expected-origin '[fingerprint/84h/7h/0h]'
+mac-keyvault --json recovery restore --nostr-identity restored --namecoin-identity restored-wallet --version 1 --nostr-version 2 --namecoin-version 1 --expected-npub NPUB --expected-namecoin-xpub XPUB --expected-origin '[fingerprint/84h/7h/0h]'
 ```
+
+The explicit legacy `--service S` alias selects A=B=S. It cannot be mixed
+with either purpose identity flag. Missing identities, mixed forms, repeated
+security parameters and malformed generations refuse before custody is
+constructed. There is no identity default or environment override.
+
+New paired records use `keyvault-recovery/2` with an explicit `service` in each
+purpose; the top-level service must equal the Nostr service. New paired
+ciphertext uses `keyvault-recovery-ciphertext/2` and the v2 metadata-binding
+domain. The existing per-purpose envelope primitive is unchanged. V1 readers
+retain their exact canonical bytes and binding domain, inheriting their one
+service only for v1. V2 never falls back to the top-level service for a missing
+purpose service. Each record schema accepts only its matching ciphertext
+schema; reading an old record performs no migration or rewrapping.
 
 Restore reads exactly 24 words once, with echo disabled, and compares all three
 retained public pins **before creating a wrapping key or storing an item**.
@@ -80,11 +119,11 @@ Removal is a separate, exact operation:
 
 ```sh
 mac-keyvault nostr delete example/nostr --version 1 --expected-npub OLD_NPUB
-mac-keyvault recovery delete qualification --version 1 --expected-group-id PUBLIC_GROUP_ID
+mac-keyvault recovery delete qualification --namecoin-identity qualification-wallet --version 1 --expected-group-id PUBLIC_GROUP_ID
 ```
 
 Choose KEEP by default when retaining an old backup. An explicit removal must
-identify one item and its retained public pin; an incorrect pin or a definite
+identify both purpose identities, one item and its retained public pin; an incorrect identity or pin or a definite
 pre-effect refusal preserves it. Deleting half a pair is not supported. The vault never reads the old
 private value to remove it. A lost/nonzero response can follow a native effect;
 the process returns exit 1 and `recovery_outcome_unknown` when the native
@@ -100,6 +139,61 @@ reaches that diagnostic when stderr remains available.
 If either output channel is lost, retain UNKNOWN. Reconcile the public reference;
 do not automatically retry or delete. Several removals are separate
 effects, not a transaction. Retained retired keys are not an active identity.
+
+## Attended seed setup release
+
+On the supported macOS architecture, verify the release archive and its
+`SHA256SUMS`, then open an unrecorded foreground terminal in the extracted
+directory. Use the current unprivileged macOS account and pass both identities:
+
+```sh
+./keyvault-seed --nostr-identity example-nostr --namecoin-identity example-wallet
+```
+
+An identity is 1–40 lowercase ASCII letters, digits or hyphens. The values
+may be equal. Omit generations to get an advisory next generation for each
+of the three record families, or use `--version`, `--nostr-version` and
+`--namecoin-version` to request exact generations. The release assets are
+normally beside the command; `--artifact-dir` selects an absolute directory.
+If you set disposable names with `--qualification-nostr-identity` and
+`--qualification-namecoin-identity`, supply both and use unused names.
+
+The command checks its embedded manifest and code pins and reads the actual
+public inventory. It shows both actual and disposable targets, the exact
+installation files and vault lock path before asking you to retype the two
+identities separately. It then installs a new private release directory under
+`~/Library/Application Support/swarma-keyvault/bin/`; an existing destination
+refuses. It creates no launchers and replaces no trusted binaries or ACLs.
+
+The disposable restore uses a published public fixture in its own terminal.
+The command checks its public signature, the read-only duplicate refusal and
+the refused use by the release’s distinct qualification executable. Check the
+sole-vault application ACL when asked. Keep the disposable record. The vault
+then asks you to retype the actual identities and displays **one new 24-word
+mnemonic** on the foreground terminal. Make two offline copies and confirm the
+three hidden word prompts. Expect two Touch ID checks in total, one for each
+pair. Decline a password prompt. The setup command never reads the real
+mnemonic terminal or sends the words through its JSON output.
+
+After public readback, stdout reports the exact selected identities, Nostr
+x-only key and npub, and Namecoin account xpub and origin. Give a recipient
+only the public fields they need. If a run stops after a mutation could have
+occurred, keep the records and reconcile the indicated public addresses. An
+`UNCONFIRMED` reference does not prove creation. Do not retry or delete based
+on a lost or partial receipt.
+
+Release builders use the existing matched-pair builder with `--seed-version`:
+
+```sh
+go run ./tools/recoverybuild --out /absolute/new/ignored/build-directory --seed-version v0.2.0
+```
+
+It builds the hardened vault/helper first, then the restricted qualification
+binary and the manifest, then the seed utility with the exact manifest and
+artifact pins. `SHA256SUMS` covers the shipped executables and manifest;
+`build.log` is local build evidence, not a release asset. The manifest does
+not include the utility’s hash; the outer checksum list does. The builder
+does not install or exercise custody.
 
 ## Binary and memory boundary
 
@@ -146,7 +240,9 @@ outside this interface.
 
 `go test -race ./internal/keyvault ./cmd/mac-keyvault ./tools/recoverybuild`
 includes published NIP-06/BIP-32 cases, an unmodified reference fixture set,
-wrong-key/tag/pin/purpose cases, atomic-write/cleanup refusal checks and isolated
+wrong-key/tag/pin/purpose cases, independent identity/version reservations,
+first-user no-write planning, confirmed exact pair deletion, atomic-write/cleanup
+refusal checks and isolated
 PTY controls with a fake custody implementation. Public-output leak plants
 exercise the checker with each synthetic fixture word. Actual running signed
 public helper fixtures test the code-admission boundary without Keychain use.

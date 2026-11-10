@@ -40,7 +40,7 @@ func TestPublishedSeeds(t *testing.T) {
 // names a positive control present in the family, and every case has at
 // least one step with an expected verdict.
 func TestMacFamilyShape(t *testing.T) {
-	cases, err := MacFamily()
+	cases, err := MacFamily("owner:fixture-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,11 +70,11 @@ func TestMacFamilyShape(t *testing.T) {
 // pins and registry evidence on every case, an agent snapshot on every step,
 // and every negative names a positive control present in the family.
 func TestLinuxFamilyShape(t *testing.T) {
-	mac, err := MacFamily()
+	mac, err := MacFamily("owner:fixture-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
-	linux, err := LinuxFamily()
+	linux, err := LinuxFamily("owner:fixture-owner", 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestPublisherEd25519FamilyShape(t *testing.T) {
 			ids[c.ID] = true
 		}
 	}
-	p2, err := PublisherEd25519Family()
+	p2, err := PublisherEd25519Family("owner:fixture-owner")
 	if err != nil {
 		t.Fatal(err)
 	}

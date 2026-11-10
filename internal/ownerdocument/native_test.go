@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 // A public toy signer exercises the actual native dispatch composition. It has
@@ -99,10 +100,15 @@ func (f *nativeFixture) CallDocument(ctx context.Context, req keyvault.EnclaveRe
 
 func nativeManagerFixture(t *testing.T) (*keyvault.Manager, *keyvault.EnclaveStore, *nativeFixture) {
 	t.Helper()
+	return nativeManagerFor(t, ownerAddress)
+}
+
+func nativeManagerFor(t *testing.T, address keyvault.Address) (*keyvault.Manager, *keyvault.EnclaveStore, *nativeFixture) {
+	t.Helper()
 	f := &nativeFixture{t: t}
 	store := keyvault.NewEnclaveStore(filepath.Join(t.TempDir(), "enclave"), f)
 	m := keyvault.NewOwnerDocumentManager(store)
-	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1, Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone, Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS}, Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "synthetic", Host: "synthetic", Tool: "synthetic", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
+	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: address.Service, Purpose: address.Purpose, Version: address.Version, Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone, Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS}, Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "synthetic", Host: "synthetic", Tool: "synthetic", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
 	tag, err := keyvault.EncodeRecord(record)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +134,7 @@ func TestNativeTypedDispatchExactBytesOrder(t *testing.T) {
 			if strings.Join(f.events, ",") != "full-render,explicit-confirm,private-call,public-verify" || f.calls != 1 || checks != 4 {
 				t.Fatal(f.events, f.calls, checks)
 			}
-			if !bytes.Equal(f.last.Document.Document, []byte(text)) || len(f.last.Document.Reason) > 200 || !strings.Contains(f.last.Document.Reason, fmt.Sprintf("%x", p.digest)) || !strings.HasSuffix(f.last.Document.Reason, " with alexis/grants-owner-v1 v1") {
+			if !bytes.Equal(f.last.Document.Document, []byte(text)) || len(f.last.Document.Reason) > 200 || !strings.Contains(f.last.Document.Reason, fmt.Sprintf("%x", p.digest)) || !strings.HasSuffix(f.last.Document.Reason, " with synthetic-owner/grants-owner-v1 v1") {
 				t.Fatal("bytes/full digest/actual key reason drift")
 			}
 		})
@@ -186,5 +192,34 @@ func TestNativeTypedDispatchWrongPinRefusesBeforeReview(t *testing.T) {
 	der, err := p.signNative(context.Background(), m, func() error { return nil })
 	if !errors.Is(err, ErrPublic) || len(der) != 0 || f.calls != 0 {
 		t.Fatal(err, f.calls)
+	}
+}
+
+// A different configured service and generation reach the typed review with
+// that exact label and reason. An unconfigured or mismatched key cannot review.
+func TestNativeTypedDispatchConfiguredAddress(t *testing.T) {
+	address := ownerAddress
+	address.Service, address.Version = "second-owner", 23
+	raw := []byte("Second exact document")
+	if _, err := Prepare(keyvault.Address{}, raw, fixturePublic(t)); !errors.Is(err, ownerkey.ErrAddress) {
+		t.Fatal("missing configuration admitted", err)
+	}
+	p, err := Prepare(address, raw, fixturePublic(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rendered bytes.Buffer
+	if err := p.Render(&rendered); err != nil || !strings.Contains(rendered.String(), "\nKey: second-owner/grants-owner-v1 v23\n") {
+		t.Fatal("review did not show configured key", err)
+	}
+	wrong, _, wrongPeer := nativeManagerFixture(t)
+	if der, err := p.signNative(context.Background(), wrong, func() error { return nil }); err == nil || der != nil || wrongPeer.calls != 0 || len(wrongPeer.events) != 0 {
+		t.Fatal("other configured key reached review", err)
+	}
+	m, _, peer := nativeManagerFor(t, address)
+	der, err := p.signNative(context.Background(), m, func() error { return nil })
+	if err != nil || p.Verify(der) != nil || peer.calls != 1 || peer.last.Document.Label != address.Label() ||
+		!strings.HasSuffix(peer.last.Document.Reason, " with second-owner/grants-owner-v1 v23") {
+		t.Fatal("configured key did not bind typed review and signature", err)
 	}
 }

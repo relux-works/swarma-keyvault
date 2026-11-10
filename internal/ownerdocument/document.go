@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 const (
@@ -39,17 +40,19 @@ var (
 	ErrOutcomeUnknown    = errors.New("owner-document-outcome-unknown: private dispatch may have occurred; no signature released; do not retry")
 )
 
-var ownerAddress = keyvault.Address{Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1}
-
 // Prepared owns its document and independent public pin. No JSON conversion,
 // newline insertion, Unicode normalization, domain prefix or envelope is signed.
 type Prepared struct {
+	address  keyvault.Address
 	document []byte
 	public   []byte
 	digest   [32]byte
 }
 
-func Prepare(document, publicDER []byte) (*Prepared, error) {
+func Prepare(address keyvault.Address, document, publicDER []byte) (*Prepared, error) {
+	if err := ownerkey.ValidateAddress(address); err != nil {
+		return nil, err
+	}
 	if err := admitText(document); err != nil {
 		return nil, err
 	}
@@ -62,7 +65,7 @@ func Prepare(document, publicDER []byte) (*Prepared, error) {
 	if err != nil || !bytes.Equal(canonical, publicDER) {
 		return nil, ErrPublic
 	}
-	return &Prepared{document: bytes.Clone(document), public: bytes.Clone(publicDER), digest: sha256.Sum256(document)}, nil
+	return &Prepared{address: address, document: bytes.Clone(document), public: bytes.Clone(publicDER), digest: sha256.Sum256(document)}, nil
 }
 
 // Admission is deliberately narrower than all valid UTF-8: printable ASCII,
@@ -173,7 +176,7 @@ func (p *Prepared) Render(w io.Writer) error {
 	if p.document[len(p.document)-1] == '\n' {
 		lf = "present"
 	}
-	header := fmt.Sprintf("UNSIGNED exact UTF-8 document; %d bytes; terminal LF %s\nKey: alexis/grants-owner-v1 v1\nSHA256: %x\nBEGIN DOCUMENT (next %d bytes)\n", len(p.document), lf, p.digest, len(p.document))
+	header := fmt.Sprintf("UNSIGNED exact UTF-8 document; %d bytes; terminal LF %s\nKey: %s\nSHA256: %x\nBEGIN DOCUMENT (next %d bytes)\n", len(p.document), lf, p.address, p.digest, len(p.document))
 	for _, part := range [][]byte{[]byte(header), bytes.Clone(p.document), []byte("\nEND DOCUMENT (separator LF above is not document data)\n")} {
 		if n, err := w.Write(part); err != nil {
 			return err
@@ -254,8 +257,8 @@ func (p *Prepared) signNative(ctx context.Context, manager *keyvault.Manager, ch
 	// dispatched. No timeout/cancellation or output failure is safe to auto-retry.
 	admitted := false
 	digest := p.digest
-	result, err := manager.SignOwnerDocument(ctx, ownerAddress, digest[:], bytes.Clone(p.document), func(key keyvault.ResolvedSigningKey) error {
-		if key.Address != ownerAddress || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
+	result, err := manager.SignOwnerDocument(ctx, p.address, digest[:], bytes.Clone(p.document), func(key keyvault.ResolvedSigningKey) error {
+		if key.Address != p.address || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
 			return ErrPublic
 		}
 		if err := check(); err != nil {

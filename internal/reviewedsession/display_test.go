@@ -7,7 +7,14 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
+
+const ownerKeyDisplay = "fixture-owner/grants-owner-v1 v7"
+
+var expectedOwnerKey = signerclient.Address{Kind: signerclient.KindKey, Service: "fixture-owner", Purpose: ownerkey.GrantPurpose, Version: 7}
 
 func testDigest() [32]byte {
 	var d [32]byte
@@ -32,11 +39,11 @@ func TestDigestCueAndFullReasonBinding(t *testing.T) {
 		if p == muGrantMac {
 			f.actions, f.targets, f.use = 2, 2, "once"
 		}
-		reason, err := renderReason(f, d, ownerKeyDisplay)
+		reason, err := renderReason(f, d, expectedOwnerKey, ownerKeyDisplay)
 		if err != nil {
 			t.Fatalf("%s: %v", p, err)
 		}
-		if err := checkFinalReason(f, d, d[:], ownerKeyDisplay, reason); err != nil {
+		if err := checkFinalReason(f, d, d[:], expectedOwnerKey, ownerKeyDisplay, reason); err != nil {
 			t.Fatal(err)
 		}
 		for name, altered := range map[string]string{
@@ -47,18 +54,18 @@ func TestDigestCueAndFullReasonBinding(t *testing.T) {
 			"newline":        reason + "\n", "oversized": reason + strings.Repeat("x", 201),
 		} {
 			t.Run(string(p)+"/"+name, func(t *testing.T) {
-				if checkFinalReason(f, d, d[:], ownerKeyDisplay, altered) == nil {
+				if checkFinalReason(f, d, d[:], expectedOwnerKey, ownerKeyDisplay, altered) == nil {
 					t.Fatal("accepted altered final request")
 				}
 			})
 		}
-		if checkFinalReason(f, d, other[:], ownerKeyDisplay, reason) == nil {
+		if checkFinalReason(f, d, other[:], expectedOwnerKey, ownerKeyDisplay, reason) == nil {
 			t.Fatal("accepted same cue, different last digest byte")
 		}
-		if checkFinalReason(f, d, d[:31], ownerKeyDisplay, reason) == nil {
+		if checkFinalReason(f, d, d[:31], expectedOwnerKey, ownerKeyDisplay, reason) == nil {
 			t.Fatal("accepted short digest")
 		}
-		if checkFinalReason(f, d, d[:], "alexis/grants-owner-v1 v2", reason) == nil {
+		if checkFinalReason(f, d, d[:], expectedOwnerKey, "fixture-owner/grants-owner-v1 v8", reason) == nil {
 			t.Fatal("accepted different resolved generation")
 		}
 	}
@@ -67,7 +74,7 @@ func TestDigestCueAndFullReasonBinding(t *testing.T) {
 func TestWholeReasonBudget(t *testing.T) {
 	d := testDigest()
 	base := titleFacts{profile: repository}
-	short, err := renderReason(base, d, ownerKeyDisplay)
+	short, err := renderReason(base, d, expectedOwnerKey, ownerKeyDisplay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +85,7 @@ func TestWholeReasonBudget(t *testing.T) {
 	for _, length := range []int{199, 200, 201, 400} {
 		f := base
 		f.optionalToken = strings.Repeat("x", length-utf8.RuneCountInString(short)-2)
-		reason, err := renderReason(f, d, ownerKeyDisplay)
+		reason, err := renderReason(f, d, expectedOwnerKey, ownerKeyDisplay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,17 +135,17 @@ func TestClosedProfilesAndPolicyTitles(t *testing.T) {
 		if p.included() {
 			t.Fatal(p)
 		}
-		if _, err := renderReason(titleFacts{profile: p}, d, ownerKeyDisplay); err == nil {
+		if _, err := renderReason(titleFacts{profile: p}, d, expectedOwnerKey, ownerKeyDisplay); err == nil {
 			t.Fatal(p)
 		}
 	}
 	f := titleFacts{profile: muGrantMac, actions: 2, targets: 2, use: "until_expiry"}
-	if reason, err := renderReason(f, d, ownerKeyDisplay); err != nil || !strings.Contains(reason, "до истечения срока") {
+	if reason, err := renderReason(f, d, expectedOwnerKey, ownerKeyDisplay); err != nil || !strings.Contains(reason, "до истечения срока") {
 		t.Fatal(reason, err)
 	}
 	for _, use := range []string{"", "unlimited", "Once", "1"} {
 		f.use = use
-		if _, err := renderReason(f, d, ownerKeyDisplay); err == nil {
+		if _, err := renderReason(f, d, expectedOwnerKey, ownerKeyDisplay); err == nil {
 			t.Fatal(use)
 		}
 	}

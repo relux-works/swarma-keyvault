@@ -763,6 +763,9 @@ func (m *Manager) SignIfKey(addr Address, digest []byte, allow func(ResolvedSign
 // no generic digest signer fallback. After native consent, the final source
 // check and current signing policy must still allow dispatch.
 func (m *Manager) SignOwnerDocument(ctx context.Context, addr Address, digest, document []byte, allow func(ResolvedSigningKey) error, final func() error) (SignResult, error) {
+	if err := validateDocumentAddress(addr); err != nil {
+		return SignResult{}, err
+	}
 	if ctx == nil || final == nil || allow == nil {
 		return SignResult{}, errors.New("owner document: missing gate")
 	}

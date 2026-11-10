@@ -13,7 +13,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/ownerdocument"
 )
 
-const ownerDocumentUsage = "swarma-keyvault owner-document review|sign|verify --document FILE --owner-spki-der FILE [--signature FILE (verify only)]"
+const ownerDocumentUsage = "swarma-keyvault owner-document review|sign|verify --document FILE --owner-spki-der FILE" + ownerAddressUsage + " [--signature FILE (verify only)]"
 
 func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 	usage := func() int { fmt.Fprintln(stderr, ownerDocumentUsage); return 2 }
@@ -26,6 +26,7 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 	}
 	f := flag.NewFlagSet("owner-document "+op, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	ownerOptions := addOwnerAddressFlags(f)
 	var document, public, signature onceString
 	f.Var(&document, "document", "exact nonempty bounded UTF-8 regular file (no symlinks)")
 	f.Var(&public, "owner-spki-der", "independent exact owner P-256 SPKI DER pin")
@@ -42,6 +43,10 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 	if f.NArg() != 0 || !document.set || !public.set || document.value == "" || document.value == "-" || public.value == "" || public.value == "-" || op == "verify" && (!signature.set || signature.value == "" || signature.value == "-") {
 		return usage()
 	}
+	address, err := ownerOptions.address()
+	if err != nil {
+		return usage()
+	}
 	raw, err := ownerdocument.ReadFile(document.value, ownerdocument.MaxDocumentBytes)
 	if err != nil {
 		fmt.Fprintln(stderr, "owner-document: cannot read bounded regular document")
@@ -52,7 +57,7 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "owner-document: cannot read bounded public DER")
 		return 1
 	}
-	p, err := ownerdocument.Prepare(raw, pin)
+	p, err := ownerdocument.Prepare(address, raw, pin)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

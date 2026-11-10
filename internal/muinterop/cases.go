@@ -33,13 +33,16 @@ func foreignSigned(k *Key, keyID string, p *mugrant.Plan) ([]byte, error) {
 // MacFamily builds the Mac-issued, Mac-authored family: every case a Linux
 // verifier must judge exactly as the Mac receiver does. Each negative differs
 // from its positive control in one fact.
-func MacFamily() ([]Case, error) {
+func MacFamily(owner string) ([]Case, error) {
+	if ValidateFixtureOwner(owner) != nil {
+		return nil, ErrFixtureIdentity
+	}
 	w, err := newWorld()
 	if err != nil {
 		return nil, err
 	}
 	assign := []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: product}}}
-	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:test-owner"}}
+	account := mugrant.Entry{Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: owner}}
 	rooms := []mugrant.Entry{{Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "swarma-space"}}, {Action: "room.membership", Target: mugrant.Target{Kind: "room-scope", ID: "other-space"}}}
 	current := grantSpec{root: w.root, use: mugrant.UseUntilExpiry, nb: T0.Add(-time.Hour), ex: T0.Add(30 * 24 * time.Hour), entries: append(append(assign, account), rooms...), nonceTag: "until-expiry"}
 	// A once grant has one action and one target, so its per-right allowance
@@ -94,8 +97,8 @@ func MacFamily() ([]Case, error) {
 		return nil, err
 	}
 	pins := Pins{GrantRoot: w.root.ID, Audience: audience, PublisherKey: w.publisher.ID, Room: room, ReceiverMXID: receiverMXID, SenderMXID: senderMXID,
-		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: "owner:test-owner", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
-		RegistryOwners: map[string]string{"@own-agent:interop.invalid": "owner:test-owner", "@other-owner-agent:interop.invalid": "owner:other"}}
+		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: owner, RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
+		RegistryOwners: map[string]string{"@own-agent:interop.invalid": owner, "@other-owner-agent:interop.invalid": owner + "-other"}}
 	records := func(grants ...[]byte) Records {
 		r := Records{AgentAttestation: B64(agentAtt), PublisherAttestation: B64(publisherAtt)}
 		for _, g := range grants {
@@ -149,11 +152,11 @@ func MacFamily() ([]Case, error) {
 		return nil, err
 	}
 	const accountText = "Retire an agent account"
-	rIvan, err := req(w.agent, "account.manage", "account-scope", "owner:test-owner", map[string]string{"account": "@other-owner-agent:interop.invalid"}, accountText, "account")
+	rOtherOwner, err := req(w.agent, "account.manage", "account-scope", owner, map[string]string{"account": "@other-owner-agent:interop.invalid"}, accountText, "account")
 	if err != nil {
 		return nil, err
 	}
-	rOwn, err := req(w.agent, "account.manage", "account-scope", "owner:test-owner", map[string]string{"account": "@own-agent:interop.invalid"}, accountText, "account")
+	rOwn, err := req(w.agent, "account.manage", "account-scope", owner, map[string]string{"account": "@own-agent:interop.invalid"}, accountText, "account")
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +316,7 @@ func MacFamily() ([]Case, error) {
 		one("M-P-account-own-owner", "account.manage on an account the owner holds is admitted and executed once.", "",
 			records(gCurrent), ev("$own-owner", rOwn, accountText), fresh, "succeeded"),
 		one("M-N-account-other-owner", "account.manage on an account another owner holds refuses by owner scope before any reservation; only the account argument differs from the positive control.", "M-P-account-own-owner",
-			records(gCurrent), ev("$other-owner", rIvan, accountText), fresh, "mu-request-out-of-owner-scope"),
+			records(gCurrent), ev("$other-owner", rOtherOwner, accountText), fresh, "mu-request-out-of-owner-scope"),
 		one("M-N-expired", "A grant whose interval ended before the trusted time refuses.", "M-P-accept",
 			records(gExpired), ev("$expired", rAccept, text), fresh, "expired"),
 		one("M-N-revoked", "A fresh publisher snapshot that revokes the grant refuses the request.", "M-P-accept",

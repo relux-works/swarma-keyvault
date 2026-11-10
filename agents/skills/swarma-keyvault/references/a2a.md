@@ -11,7 +11,7 @@ All names below follow `swarma-keyvault grants`; syntax is inert.
 
 | Command | Actual flags / role |
 | --- | --- |
-| `a2a-prepare` | `--payload FILE\|- --owner-spki-der FILE --requester-spki-der FILE`; unchanged checked payload and full review, no private call |
+| `a2a-prepare` | `--payload FILE\|- --owner-spki-der FILE --requester-spki-der FILE --owner-mxid MXID --owner-key SERVICE/grants-owner-v1 --owner-key-version N`; unchanged checked payload and full review, no private call |
 | `a2a-issue` | Same flags; OWNER-SITTING typed owner signing, no enrollment/activation |
 | `a2a-request-prepare` | `--payload FILE\|- --request FILE`; prepares the request and exact domain digest |
 | `a2a-request-pack` | Same plus `--signature FILE --public-spki-der FILE`; validates supplied DER signature, does not sign |
@@ -22,7 +22,7 @@ All names below follow `swarma-keyvault grants`; syntax is inert.
 The bounded certificate is `grants-a2a-certificate-1`: full grantee MXID and
 P-256 SPKI hash, one private CREATE of
 `relux-works/matrix-grants-g2-261104`, one use, interval at most 30 minutes, no
-DELETE. Issuance uses the fixed owner key and pin/presence policy of the typed
+DELETE. Issuance uses the explicit owner principal and exact configured key with the independent pin/presence policy of the typed
 issuer. Its action/target/full-grantee/key/window/domain-digest reason is
 bounded to 200 Unicode scalars and never truncated. Actual OS display coverage
 is not established by that limit.

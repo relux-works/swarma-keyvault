@@ -1,6 +1,6 @@
 # Attended offline mnemonic recovery
 
-`mac-keyvault recovery generate|restore|pub|delete` manages an atomic pair from
+`mac-keyvault recovery plan|generate|restore|pub|delete` manages an atomic pair from
 one 24-word English BIP-39 flow, empty passphrase:
 
 - Nostr `m/44'/1237'/0'/0/0`, no presence, x-only hex and npub.
@@ -14,6 +14,17 @@ sole-vault-application Keychain item. No phrase/seed/root/common ancestor is
 stored. Namecoin requires Touch ID, any enrolled finger and no password fallback.
 No Namecoin spend/account-export operation is supplied by this interface.
 
+Use the published `keyvault-seed` release for a first attended setup. Require
+both `--nostr-identity NAME` and `--namecoin-identity NAME` explicitly; equal
+names are allowed. Check the release asset hashes and show the exact install
+and both actual/disposable write targets before asking the human to retype the
+names separately. The user alone runs it in an unrecorded foreground terminal.
+The disposable restore uses only a known-public fixture in a separate PTY;
+one new real phrase enters only the foreground vault. The two Namecoin presence
+checks are Touch ID, one for each pair. A completed run returns public fields
+only; an uncertain receipt requires public reconciliation, never an automatic
+retry or cleanup.
+
 Apply the main skill's OWNER-SITTING boundary to creation, restore, Keychain
 inspection, deletion and signing. Prepare the exact physical/logical versions,
 all retained public pins, expected prompts and complete write set first. The
@@ -25,7 +36,10 @@ Touch ID for Nostr never supplies agent signing authority.
 All three restore pins (npub, Namecoin xpub and origin) are mandatory and checked
 before a wrapping key/item is created. A duplicate group or logical address
 refuses without overwrite. A different valid mnemonic fails the public pins;
-checksum alone does not detect every wrong word. Select every version explicitly.
+checksum alone does not detect every wrong word. The public read-only `plan`
+can select omitted generations independently; pass all three exact generations
+to generate or restore. Retype both purpose identities before any lock or
+custody write.
 
 Use a separately qualified matched hardened vault/helper pair. The source Go
 builder `go run ./tools/recoverybuild --out ABSOLUTE_NEW_DIRECTORY` records hashes,
@@ -42,7 +56,8 @@ recording protection or immunity to a compromised OS. Another Mac restores from
 the off-Mac words and wraps under its own device keys.
 
 Retirement is a separate exact action with KEEP default. A legacy item uses its
-expected npub; a complete paired group uses its expected public group ID. A
+expected npub; a complete paired group uses its expected public group ID and
+both purpose identities. A
 Nostr projection cannot remove half a pair. Never print/export an old secret to
 remove it. A failed/lost native response requires public-state reconciliation;
 several removals are not one atomic transaction. Retired keys remain withdrawn

@@ -10,7 +10,7 @@ Source: `cmd/swarma-keyvault/{main,issue,local,local_verify}.go`,
 | --- | --- |
 | `prepare` | `--plan FILE\|- --owner-mxid MXID --issuer-spki-der FILE`; unsigned repository payload and review |
 | `local-prepare` | Same plus `--requester-spki-der FILE`; distinct local certificate/requester binding |
-| `issue` | `--payload FILE\|- --owner-spki-der FILE`; OWNER-SITTING typed owner signature |
+| `issue` | `--payload FILE\|- --owner-spki-der FILE --owner-mxid MXID --owner-key SERVICE/grants-owner-v1 --owner-key-version N`; OWNER-SITTING typed owner signature |
 | `local-issue` | Same plus `--requester-spki-der FILE`; OWNER-SITTING local-profile signature |
 | `request` | `--payload FILE\|- --requester-spki-der FILE`; OWNER-SITTING private requester signature |
 | `verify` | `--config FILE --certificate FILE --request FILE\|-`, optional test-only `--at RFC3339`; stateless public check |
@@ -24,8 +24,8 @@ local envelope `grants-signed-local-certificate-1`, request envelope
 accepted as a local certificate. Local subject has `account_mxid` and `device_id`,
 not a Matrix device-key proof; `encrypted-dm` is a declared label, not E2EE.
 
-The issue/local-issue slice fixes owner `@alexis:gr.relux.works`, address
-`alexis/grants-owner-v1`, generation 1, and target
+The issue/local-issue slice takes the independently configured owner MXID,
+exact `SERVICE/grants-owner-v1` address and generation. The target stays
 `relux-works/matrix-grants-poc-261031`: first issue, one cycle, private CREATE
 and paired single-use DELETE, no supersedes. The local executor dispatches only
 CREATE. It is not a general repository administrator. Typed signing validates
@@ -45,8 +45,8 @@ When execution of public examples is authorized, use the committed
 It was serialized from `localTestFixture` / `localFixture.envelopes` in
 `internal/grants/local_request_test.go`; only public SPKIs and signed envelopes
 are included. The ephemeral software private keys were never serialized.
-The fixed owner name and repository are required by this local profile's parser;
-the synthetic public pins do not enroll that owner or authorize that repository.
+The example enrollment selects its owner and the profile repository. The
+synthetic public pins do not enroll a real owner or authorize that repository.
 Never install this enrollment as a runtime trust configuration.
 
 On Linux with `bwrap`, from the repository root, supply the absolute path to a

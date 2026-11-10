@@ -31,11 +31,11 @@ Ed25519 signing CLI. For an Ed25519 library workflow, sign the exact
 `Plan.Preimage()` directly rather than its SHA-256 digest; the algorithms do not
 share a signing-input contract.
 
-**OWNER-SITTING:** `mu-issue --kind KIND --spec FILE --owner-spki-der FILE`
+**OWNER-SITTING:** `mu-issue --kind KIND --spec FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N`
 accepts `grant`, `mac-agent`, `publisher`, `publisher-ed25519`.
 For `grant` add both `--subject-attestation` and `--publisher-attestation`;
 for the three attestation kinds add only `--subject-spki-der`.
-The owner signer is fixed `alexis/grants-owner-v1`, generation 1: exact public
+The signer uses the independently configured `SERVICE/grants-owner-v1` and exact generation: exact public
 pin, Enclave, presence, extraction `none`. The typed body/reason are prepared
 before manager construction; full rendering is written just before the private
 call, and the native signature is checked before output. No retry, creation or

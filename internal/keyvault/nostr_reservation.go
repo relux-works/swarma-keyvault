@@ -40,8 +40,8 @@ func checkNostrReservation(backend NostrBackend, service, purpose string, versio
 		if validateRecoveryRecord(g) != nil {
 			return nostrRefuse("invalid_record")
 		}
-		n, _ := nostrAddress(g.Service, "nostr", g.Nostr.Version)
-		c, _ := nostrAddress(g.Service, "namecoin", g.Namecoin.Version)
+		n := g.PurposeAccount(g.Nostr)
+		c := g.PurposeAccount(g.Namecoin)
 		if account == g.Account() || account == n || account == c {
 			return nostrRefuse("duplicate")
 		}

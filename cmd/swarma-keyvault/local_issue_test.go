@@ -55,7 +55,7 @@ func localIssueCLIFixture(t *testing.T) ([]string, []byte, *cliIssueStore, []byt
 		}
 		return keyvault.NewManager(store, nil, keyvault.Origin{})
 	}
-	return []string{"grants", "local-issue", "--payload", "-", "--owner-spki-der", args[5], "--requester-spki-der", path}, raw, store, der
+	return withFixtureOwnerArgs([]string{"grants", "local-issue", "--payload", "-", "--owner-spki-der", args[5], "--requester-spki-der", path}), raw, store, der
 }
 
 // Explicit local authoring and issuance retain exact signed fields, render the
@@ -72,7 +72,7 @@ func TestLocalPrepareIssueCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, review bytes.Buffer
-	prepare := []string{"grants", "local-prepare", "--plan", "-", "--owner-mxid", "@alexis:gr.relux.works", "--issuer-spki-der", args[5], "--requester-spki-der", args[7]}
+	prepare := []string{"grants", "local-prepare", "--plan", "-", "--owner-mxid", fixtureOwnerPrincipal, "--issuer-spki-der", args[5], "--requester-spki-der", args[7]}
 	if code := run(prepare, bytes.NewReader(raw), &out, &review); code != 0 || !bytes.Equal(out.Bytes(), payload) || store.signs != 0 || store.factories != 0 {
 		t.Fatal("local prepare", code, review.String())
 	}

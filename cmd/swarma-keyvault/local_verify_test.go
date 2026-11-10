@@ -66,7 +66,7 @@ func verifyCLIFixture(t *testing.T) ([]string, []byte) {
 	cycle := certificate["cycles"].([]any)[0].(map[string]any)
 	request := map[string]any{"type": "grants-local-operation-1", "request_id": "local-request", "certificate_id": certificate["certificate_id"], "entry_id": entry["entry_id"], "cycle_id": use["cycle_id"], "operation_use_id": use["operation_use_id"], "subject": certificate["subject"], "audience": certificate["audience"], "action": "repository.create", "target": entry["target"], "expires_at": certificate["expires_at"]}
 	root := t.TempDir()
-	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": grants.LocalOwnerMXID,
+	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": fixtureOwnerPrincipal,
 		"owner_spki": base64.RawURLEncoding.EncodeToString(owner.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(requester.item.SPKI),
 		"subject": certificate["subject"], "audience": certificate["audience"], "cycle": cycle, "organization": grants.LocalOrganization, "name": grants.LocalRepository,
 		"state_dir": filepath.Join(root, "ABSENT-STATE"), "gh_path": filepath.Join(root, "ABSENT-PROVIDER")}

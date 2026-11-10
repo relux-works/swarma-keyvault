@@ -41,6 +41,14 @@ func (*recoveryPTYStore) NostrDelete(keyvault.NostrRecord) error       { return 
 type recoveryPTYManager struct{ store *recoveryPTYStore }
 
 func (m recoveryPTYManager) Create(q keyvault.RecoveryRequest, terminal keyvault.RecoveryTerminal, restore bool) (keyvault.RecoveryRecord, error) {
+	a, b := q.NostrIdentity, q.NamecoinIdentity
+	if q.Service != "" {
+		a, b = q.Service, q.Service
+	}
+	p := keyvault.RecoveryPlan{NostrIdentity: a, NamecoinIdentity: b, Group: fmt.Sprintf("%s/recovery@%d", a, q.Version), NostrRecord: fmt.Sprintf("%s/nostr@%d", a, q.NostrVersion), NamecoinRecord: fmt.Sprintf("%s/namecoin@%d", b, q.NamecoinVersion)}
+	if err := terminal.ConfirmIdentities(p); err != nil {
+		return keyvault.RecoveryRecord{}, errors.New("identity confirmation refused")
+	}
 	if restore {
 		phrase, err := terminal.ReadMnemonic()
 		defer clear(phrase)
@@ -70,7 +78,12 @@ func (m recoveryPTYManager) Create(q keyvault.RecoveryRequest, terminal keyvault
 func (recoveryPTYManager) Describe(string, int) (keyvault.RecoveryRecord, error) {
 	return keyvault.RecoveryRecord{}, errors.New("unused")
 }
-func (recoveryPTYManager) Delete(string, int, string) error { return errors.New("unused") }
+func (recoveryPTYManager) Delete(keyvault.RecoveryDeleteRequest, keyvault.RecoveryTerminal) (keyvault.RecoveryRecord, error) {
+	return keyvault.RecoveryRecord{}, errors.New("unused")
+}
+func (recoveryPTYManager) Plan(keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
+	return keyvault.RecoveryPlan{}, errors.New("unused")
+}
 
 // Child uses the actual CLI/parser and real /dev/tty frontend, with an explicit
 // fake crypto/custody manager. Cryptographic/atomic behavior is tested in the
@@ -133,11 +146,12 @@ func TestRecoveryPublicOutputLeakControl(t *testing.T) {
 }
 
 // Positive generation/restore store exactly once through the fake backend.
-// Wrong/empty confirmation, EOF, cancellation and missing controlling TTY store
+// Wrong A/B identities, identity EOF, wrong/empty word confirmation,
+// cancellation and missing controlling TTY store
 // zero. The original terminal ECHO/canonical flags are restored after each
 // isolated child, and captured stdout/stderr contain no fixture word.
 func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
-	for _, mode := range []string{"generate", "wrong", "empty", "empty-confirm", "no-backup", "random-fail", "eof", "cancel", "hangup", "restore", "restore-eof", "no-tty"} {
+	for _, mode := range []string{"generate", "identity-wrong-a", "identity-wrong-b", "identity-eof", "wrong", "empty", "empty-confirm", "no-backup", "random-fail", "eof", "cancel", "hangup", "restore", "restore-eof", "no-tty"} {
 		t.Run(mode, func(t *testing.T) {
 			master, slave := recoveryTestPTY(t)
 			_, err := recoveryGetTermios(int(slave.Fd()))
@@ -171,6 +185,7 @@ func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
 				backed := false
 				restored := false
 				positions := map[int]bool{}
+				identities := map[string]bool{}
 				deadline := time.Now().Add(8 * time.Second)
 			loop:
 				for time.Now().Before(deadline) {
@@ -192,6 +207,21 @@ func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
 					}
 					if n > 0 {
 						transcript += string(data[:n])
+					}
+
+					for _, purpose := range []string{"Nostr", "Namecoin"} {
+						if !identities[purpose] && strings.Contains(transcript, "Retype "+purpose+" identity: ") {
+							identities[purpose] = true
+							if mode == "identity-eof" && purpose == "Nostr" {
+								_, _ = master.Write([]byte{4})
+							} else {
+								answer := "fixture"
+								if mode == "identity-wrong-a" && purpose == "Nostr" || mode == "identity-wrong-b" && purpose == "Namecoin" {
+									answer = "other"
+								}
+								_, _ = master.Write([]byte(answer + "\n"))
+							}
+						}
 					}
 					if !backed && strings.Contains(transcript, "Type BACKED-UP") {
 						backed = true
@@ -236,7 +266,10 @@ func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
 						}
 					}
 				}
-				if mode == "generate" && len(positions) != 3 {
+				if (mode == "identity-wrong-a" || mode == "identity-wrong-b" || mode == "identity-eof") && (strings.Contains(transcript, "Type BACKED-UP") || strings.Contains(transcript, "Restore exactly 24")) {
+					t.Fatal("identity refusal exposed the phrase stage")
+				}
+				if mode == "generate" && (len(positions) != 3 || len(identities) != 2) {
 					t.Fatalf("three distinct positions not confirmed; public child output: %s %s", stdout.String(), stderr.String())
 				}
 				// The only captured secret display belongs to this public synthetic

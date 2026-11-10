@@ -1,6 +1,7 @@
 package keyvault
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 // RecoveryTerminal is the owner terminal inside the vault process. Neither a
 // secret argv/file route nor a private export command is part of this contract.
 type RecoveryTerminal interface {
+	ConfirmIdentities(RecoveryPlan) error
 	ConfirmMnemonic(words [][]byte) error
 	ReadMnemonic() ([]byte, error)
 }
@@ -54,6 +56,7 @@ func NewRecoveryManager(backend RecoveryBackend, lock Locker) *RecoveryManager {
 }
 
 type RecoveryRequest struct {
+	NostrIdentity, NamecoinIdentity            string
 	Service                                    string
 	Version, NostrVersion, NamecoinVersion     int
 	ExpectedNPub, ExpectedXPub, ExpectedOrigin string
@@ -61,10 +64,11 @@ type RecoveryRequest struct {
 
 func validateRecoveryRequest(r RecoveryRequest) error {
 	for _, v := range []struct {
+		service string
 		purpose string
 		version int
-	}{{"recovery", r.Version}, {"nostr", r.NostrVersion}, {"namecoin", r.NamecoinVersion}} {
-		if _, err := nostrAddress(r.Service, v.purpose, v.version); err != nil {
+	}{{r.Service, "recovery", r.Version}, {r.NostrIdentity, "nostr", r.NostrVersion}, {r.NamecoinIdentity, "namecoin", r.NamecoinVersion}} {
+		if _, err := nostrAddress(v.service, v.purpose, v.version); err != nil {
 			return recoveryRefuse("invalid_address")
 		}
 	}
@@ -72,6 +76,10 @@ func validateRecoveryRequest(r RecoveryRequest) error {
 }
 
 func (m *RecoveryManager) preflight(q RecoveryRequest) error {
+	group, _ := nostrAddress(q.Service, "recovery", q.Version)
+	nostr, _ := nostrAddress(q.NostrIdentity, "nostr", q.NostrVersion)
+	namecoin, _ := nostrAddress(q.NamecoinIdentity, "namecoin", q.NamecoinVersion)
+	wanted := map[string]bool{group: true, nostr: true, namecoin: true}
 	groups, err := m.backend.RecoveryList()
 	if err != nil {
 		return err
@@ -80,7 +88,7 @@ func (m *RecoveryManager) preflight(q RecoveryRequest) error {
 		if validateRecoveryRecord(g) != nil {
 			return recoveryRefuse("invalid_record")
 		}
-		if g.Service == q.Service && (g.Version == q.Version || g.Nostr.Version == q.NostrVersion || g.Namecoin.Version == q.NamecoinVersion) {
+		if wanted[g.Account()] || wanted[g.PurposeAccount(g.Nostr)] || wanted[g.PurposeAccount(g.Namecoin)] {
 			return recoveryRefuse("duplicate")
 		}
 	}
@@ -92,7 +100,7 @@ func (m *RecoveryManager) preflight(q RecoveryRequest) error {
 		if validateNostrRecord(key) != nil {
 			return recoveryRefuse("invalid_record")
 		}
-		if key.Service == q.Service && ((key.Purpose == "nostr" && key.Version == q.NostrVersion) || (key.Purpose == "namecoin" && key.Version == q.NamecoinVersion) || (key.Purpose == "recovery" && key.Version == q.Version)) {
+		if wanted[key.Account()] {
 			return recoveryRefuse("duplicate")
 		}
 	}
@@ -101,6 +109,11 @@ func (m *RecoveryManager) preflight(q RecoveryRequest) error {
 
 func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, restore bool) (RecoveryRecord, error) {
 	var zero RecoveryRecord
+	var err error
+	q, err = normalizeRecoveryIdentities(q)
+	if err != nil {
+		return zero, err
+	}
 	if validateRecoveryRequest(q) != nil {
 		return zero, recoveryRefuse("invalid_address")
 	}
@@ -112,6 +125,10 @@ func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, r
 	}
 	if !restore && (q.ExpectedNPub != "" || q.ExpectedXPub != "" || q.ExpectedOrigin != "") {
 		return zero, recoveryRefuse("invalid_arguments")
+	}
+	// Creating the lock/prerequisites is an effect, so confirm first.
+	if err := terminal.ConfirmIdentities(recoveryPlan(q)); err != nil {
+		return zero, recoveryRefuse("identity_confirmation_failed")
 	}
 	release, err := m.lock.Lock()
 	if err != nil {
@@ -189,7 +206,7 @@ func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, r
 	if _, err := io.ReadFull(m.random, id[:]); err != nil {
 		return zero, recoveryRefuse("random_unavailable")
 	}
-	r := RecoveryRecord{Schema: "keyvault-recovery/1", GroupID: hex.EncodeToString(id[:]), Service: q.Service, Version: q.Version, Created: m.now().UTC().Truncate(time.Second).Format(time.RFC3339), Nostr: RecoveryPurpose{Purpose: "nostr", Version: q.NostrVersion, Path: "m/44'/1237'/0'/0/0", Algorithm: "secp256k1-bip340", Presence: "none", PublicKey: material.publicKey, NPub: material.npub, WrappingPoint: n.Point, WrappingFingerprint: n.Fingerprint}, Namecoin: RecoveryPurpose{Purpose: "namecoin", Version: q.NamecoinVersion, Path: "m/84'/7'/0'", Algorithm: "bip32-secp256k1", Presence: "biometry-any", XPub: material.xpub, Origin: material.origin, WrappingPoint: c.Point, WrappingFingerprint: c.Fingerprint}}
+	r := RecoveryRecord{Schema: "keyvault-recovery/2", GroupID: hex.EncodeToString(id[:]), Service: q.Service, Version: q.Version, Created: m.now().UTC().Truncate(time.Second).Format(time.RFC3339), Nostr: RecoveryPurpose{Service: q.NostrIdentity, Purpose: "nostr", Version: q.NostrVersion, Path: "m/44'/1237'/0'/0/0", Algorithm: "secp256k1-bip340", Presence: "none", PublicKey: material.publicKey, NPub: material.npub, WrappingPoint: n.Point, WrappingFingerprint: n.Fingerprint}, Namecoin: RecoveryPurpose{Service: q.NamecoinIdentity, Purpose: "namecoin", Version: q.NamecoinVersion, Path: "m/84'/7'/0'", Algorithm: "bip32-secp256k1", Presence: "biometry-any", XPub: material.xpub, Origin: material.origin, WrappingPoint: c.Point, WrappingFingerprint: c.Fingerprint}}
 	if err := validateRecoveryRecord(r); err != nil {
 		return zero, err
 	}
@@ -205,7 +222,7 @@ func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, r
 	if err != nil {
 		return zero, err
 	}
-	ciphertext := recoveryCiphertext{Schema: "keyvault-recovery-ciphertext/1", Nostr: ne, Namecoin: ce}
+	ciphertext := recoveryCiphertext{Schema: r.ciphertextSchema(), Nostr: ne, Namecoin: ce}
 	encoded, err := json.Marshal(ciphertext)
 	if err != nil {
 		return zero, recoveryRefuse("invalid_envelope")
@@ -273,24 +290,48 @@ func (m *RecoveryManager) Describe(service string, version int) (RecoveryRecord,
 	return result, nil
 }
 
-func (m *RecoveryManager) Delete(service string, version int, expectedGroup string) error {
-	if !lowerHex(expectedGroup, 16) || m.lock == nil || m.backend == nil {
-		return recoveryRefuse("public_pin_required")
+type RecoveryDeleteRequest struct {
+	NostrIdentity, NamecoinIdentity string
+	Version                         int
+	ExpectedGroupID                 string
+}
+
+func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTerminal) (RecoveryRecord, error) {
+	var zero RecoveryRecord
+	if ValidateName("service", CodeInvalidService, q.NostrIdentity) != nil || ValidateName("service", CodeInvalidService, q.NamecoinIdentity) != nil || q.Version < 1 || q.Version > 2147483647 {
+		return zero, recoveryRefuse("invalid_address")
+	}
+	if !lowerHex(q.ExpectedGroupID, 16) || m.lock == nil || m.backend == nil {
+		return zero, recoveryRefuse("public_pin_required")
+	}
+	r, err := m.Describe(q.NostrIdentity, q.Version)
+	if err != nil {
+		return zero, err
+	}
+	if r.GroupID != q.ExpectedGroupID || r.purposeService(r.Namecoin) != q.NamecoinIdentity {
+		return zero, recoveryRefuse("public_pin_mismatch")
+	}
+	before, _ := json.Marshal(r)
+	// Confirmation precedes a creating file lock. The exact public snapshot is
+	// compared again under that lock; changed records are never auto-selected.
+	if terminal == nil || terminal.ConfirmIdentities(recordRecoveryPlan(r)) != nil {
+		return zero, recoveryRefuse("identity_confirmation_failed")
 	}
 	release, err := m.lock.Lock()
 	if err != nil {
-		return recoveryRefuse("lock_unavailable")
+		return zero, recoveryRefuse("lock_unavailable")
 	}
 	defer release()
-	r, err := m.Describe(service, version)
+	current, err := m.Describe(q.NostrIdentity, q.Version)
 	if err != nil {
-		return err
+		return zero, err
 	}
-	if r.GroupID != expectedGroup {
-		return recoveryRefuse("public_pin_mismatch")
+	after, _ := json.Marshal(current)
+	if !bytes.Equal(before, after) {
+		return zero, recoveryRefuse("public_pin_mismatch")
 	}
 	if err := m.backend.RecoveryDelete(r); err != nil {
-		return recoveryMutationError("delete", r, err)
+		return r, recoveryMutationError("delete", r, err)
 	}
-	return nil
+	return r, nil
 }

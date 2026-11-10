@@ -11,7 +11,6 @@ import (
 
 const LocalOrganization = "relux-works"
 const LocalRepository = "matrix-grants-poc-261031"
-const LocalOwnerMXID = "@alexis:gr.relux.works"
 
 // This domain authenticates only the explicitly enrolled local association;
 // it is separate from the existing request correlation digest and Matrix.

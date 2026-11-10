@@ -175,7 +175,7 @@ func TestRecoveryDeleteResponseLoss(t *testing.T) {
 	m, f, _ := recoveryTestManager(t)
 	r := recoveryTestRestore(t, m)
 	m.backend = &recoveryLostDeleteStore{f}
-	err := m.Delete(r.Service, r.Version, r.GroupID)
+	err := recoveryTestDelete(m, r.Service, r.Version, r.GroupID)
 	var u *RecoveryOutcomeUnknown
 	if !errors.As(err, &u) || u.Reference.GroupID != r.GroupID || u.Operation != "delete" || f.deletes != 1 || len(f.groups) != 0 {
 		t.Fatal("delete uncertainty discarded")
@@ -200,7 +200,7 @@ func TestRecoveryKnownNoEffect(t *testing.T) {
 	f.fail = false
 	r = recoveryTestRestore(t, m)
 	f.fail = true
-	err = m.Delete(r.Service, r.Version, r.GroupID)
+	err = recoveryTestDelete(m, r.Service, r.Version, r.GroupID)
 	recoveryCode(t, err, "delete_refused")
 	if errors.As(err, &unknown) || f.deletes != 0 || len(f.groups) != 1 {
 		t.Fatal("known refused delete changed state")

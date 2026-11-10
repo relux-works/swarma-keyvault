@@ -134,8 +134,8 @@ func signerCertificate(t *testing.T, f *fixture, root string, payload []byte, ow
 	digest := sha256.Sum256(append([]byte("swarma-grants/local-certificate/1\n"), payload...))
 	key := writeSyntheticKey(t, root, "owner.pk8", f.owner)
 	args := []string{"certificate", "--payload", path, "--digest", hex.EncodeToString(digest[:]), "--key", key, "--owner-spki", filepath.Join(root, "owner.der"), "--requester-spki", filepath.Join(root, "requester.der")}
-	// Same reverse bytes refuse under the original default before key access.
-	cmd := exec.Command(labFixture(t, "LAB_TEST_SIGNER"), args...)
+	// Same reverse bytes refuse under a different explicitly configured owner.
+	cmd := exec.Command(labFixture(t, "LAB_TEST_SIGNER"), append(append([]string(nil), args...), "--owner-mxid", "@unrelated-owner:example.invalid")...)
 	cmd.Env = []string{"HOME=" + root, "TMPDIR=" + root, "PATH=/nonexistent"}
 	var diag bytes.Buffer
 	cmd.Stderr = &diag

@@ -20,10 +20,10 @@ func (f *recoveryPipeOperations) Create(q keyvault.RecoveryRequest, t keyvault.R
 	fmt.Fprintln(os.Stderr, "fixture_effect=1")
 	return record, err
 }
-func (f *recoveryPipeOperations) Delete(s string, v int, g string) error {
-	err := f.recoveryReceiptOperations.Delete(s, v, g)
+func (f *recoveryPipeOperations) Delete(q keyvault.RecoveryDeleteRequest, terminal keyvault.RecoveryTerminal) (keyvault.RecoveryRecord, error) {
+	record, err := f.recoveryReceiptOperations.Delete(q, terminal)
 	fmt.Fprintln(os.Stderr, "fixture_effect=1")
-	return err
+	return record, err
 }
 
 // This child executes only injected fake mutations. Its stdout is an actual
@@ -47,7 +47,7 @@ func TestRecoveryPipeChild(t *testing.T) {
 	}
 	switch op {
 	case "delete":
-		args = append(args, "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
+		args = append(args, "fixture", "--namecoin-identity", "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
 	case "generate", "restore":
 		args = append(args, "--service", "fixture", "--version", "1", "--nostr-version", "2", "--namecoin-version", "1")
 		if op == "restore" {

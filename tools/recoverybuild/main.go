@@ -148,9 +148,12 @@ func inspect(ctx context.Context, log io.Writer, path string) (artifact, error) 
 	return artifact{Path: path, SHA256: hex.EncodeToString(sum[:]), CDHash: pin, Flags: "0x10002 (adhoc,runtime)", Entitlements: "empty"}, nil
 }
 
-func build(out string) error {
+func build(out, seedVersion string) error {
 	if runtime.GOOS != "darwin" || runtime.Version() != "go1.26.10" {
 		return errors.New("requires macOS and the exact Go version pinned by go.mod")
+	}
+	if seedVersion != "" && !seedVersionPattern.MatchString(seedVersion) {
+		return errors.New("seed version must be vMAJOR.MINOR.PATCH")
 	}
 	if !filepath.IsAbs(out) || filepath.Clean(out) != out {
 		return errors.New("a new absolute output directory is required")
@@ -205,6 +208,9 @@ func build(out string) error {
 	if err != nil {
 		return err
 	}
+	if seedVersion != "" {
+		return buildSeedBundle(ctx, log, goTool, out, seedVersion, strings.TrimSpace(string(head)), strings.TrimSpace(string(tree)), strings.TrimSpace(string(swift)), link, v, h)
+	}
 	m := manifest{Schema: "keyvault-recovery-build/1", Head: strings.TrimSpace(string(head)), Tree: strings.TrimSpace(string(tree)), Go: runtime.Version(), Swift: strings.TrimSpace(string(swift)), Helper: h, Vault: v}
 	encoded, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -220,12 +226,13 @@ func build(out string) error {
 
 func main() {
 	out := flag.String("out", "", "new absolute output directory")
+	seedVersion := flag.String("seed-version", "", "build the complete attended seed release for this version")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "no positional arguments allowed")
 		os.Exit(2)
 	}
-	if err := build(*out); err != nil {
+	if err := build(*out, *seedVersion); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

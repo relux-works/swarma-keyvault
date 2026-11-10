@@ -11,7 +11,10 @@ import (
 // grant revocation publisher (profile grant-revocation-2), appointed by the
 // owner grant root: the publisher a signing service holds on Linux. Each
 // negative differs from P2-P-accept in one fact.
-func PublisherEd25519Family() ([]Case, error) {
+func PublisherEd25519Family(owner string) ([]Case, error) {
+	if ValidateFixtureOwner(owner) != nil {
+		return nil, ErrFixtureIdentity
+	}
 	w, err := newWorld()
 	if err != nil {
 		return nil, err
@@ -188,8 +191,8 @@ func PublisherEd25519Family() ([]Case, error) {
 		return nil, err
 	}
 	pins := Pins{GrantRoot: w.root.ID, Audience: audience, PublisherKey: pub.ID, Room: room, ReceiverMXID: receiverMXID, SenderMXID: senderMXID,
-		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: "owner:test-owner", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
-		RegistryOwners: map[string]string{"@own-agent:interop.invalid": "owner:test-owner"}}
+		AgentKey: w.agent.ID, AgentGeneration: 1, Owner: owner, RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"},
+		RegistryOwners: map[string]string{"@own-agent:interop.invalid": owner}}
 	p256Pins := pins
 	p256Pins.PublisherKey = w.publisher.ID
 	records := func(publisher []byte) Records {

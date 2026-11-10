@@ -42,7 +42,7 @@ func documentCLIFixture(t *testing.T, text string) ([]string, string, string) {
 			t.Fatal(err)
 		}
 	}
-	return []string{"--document", file, "--owner-spki-der", pin}, file, signature
+	return []string{"--document", file, "--owner-spki-der", pin, "--owner-key", "synthetic-document-owner/grants-owner-v1", "--owner-key-version", "5"}, file, signature
 }
 
 func documentRun(args []string, output io.Writer) (int, string) {
@@ -131,5 +131,14 @@ func TestOwnerDocumentCLIInputAndOutputRefusals(t *testing.T) {
 	}
 	if code, err := documentRun(append([]string{"review"}, args...), failingOutput{short: true}); code != 1 || !strings.Contains(err, "full rendering failed") {
 		t.Fatal("short render accepted", code, err)
+	}
+}
+
+// Missing owner configuration is refused before trying to open the document.
+func TestOwnerDocumentCLIExplicitOwnerRequired(t *testing.T) {
+	var out bytes.Buffer
+	args := []string{"review", "--document", "unreadable-document", "--owner-spki-der", "unreadable-pin"}
+	if code, err := documentRun(args, &out); code != 2 || out.Len() != 0 || !strings.Contains(err, "--owner-key-version") {
+		t.Fatal("owner config did not fail before input", code, err)
 	}
 }

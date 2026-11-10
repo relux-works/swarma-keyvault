@@ -257,6 +257,20 @@ func writeFrame(_ object: [String: Any]) throws {
     FileHandle.standardOutput.write(Data([10]))
 }
 
+// Parse the canonical label for one exact supported owner key. The display
+// uses that same service and generation; the reason cannot supply its own label.
+func documentKeyDisplay(_ label: String) -> String? {
+    let prefix = "works.relux.mac-keyvault.key."
+    guard label.hasPrefix(prefix) else { return nil }
+    let parts = label.dropFirst(prefix.count).split(separator: ".", omittingEmptySubsequences: false)
+    guard parts.count == 3, parts[1] == "grants-owner-v1", parts[2].first == "v",
+          let generation = Int32(parts[2].dropFirst()), generation > 0,
+          parts[2] == "v" + String(generation) else { return nil }
+    let service = parts[0].utf8
+    guard (1...40).contains(service.count), service.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }) else { return nil }
+    return "\(parts[0])/\(parts[1]) v\(generation)"
+}
+
 // Immutable owned bytes and a closed identity. No generic reason filtering,
 // digest-prefix UI, external callback or separate-process consent token.
 struct DocumentPlan {
@@ -267,6 +281,7 @@ struct DocumentPlan {
     let spki: Data
     let label: String
     let reason: String
+    let keyDisplay: String
 
     init(_ object: [String: Any]) throws {
         guard Set(object.keys) == Set(["document", "digest", "point", "spki", "label", "reason"]) else {
@@ -281,9 +296,9 @@ struct DocumentPlan {
         guard let decoded = String(data: bytes, encoding: .utf8), Data(decoded.utf8) == bytes,
               !bytes.isEmpty, bytes.count <= 16384,
               digest == Data(SHA256.hash(data: bytes)),
-              label == "works.relux.mac-keyvault.key.alexis.grants-owner-v1.v1",
+              let display = documentKeyDisplay(label),
               point.count == 65, spki.count <= 1024,
-              reason == "mac-keyvault: sign exact UTF-8 document SHA256 \(digest.map { String(format: "%02x", $0) }.joined()) with alexis/grants-owner-v1 v1",
+              reason == "mac-keyvault: sign exact UTF-8 document SHA256 \(digest.map { String(format: "%02x", $0) }.joined()) with \(display)",
               reason.unicodeScalars.count <= maxReasonLength,
               !reason.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.illegalCharacters.contains($0) }) else {
             throw HelperError(code: "bad_request", status: errSecParam, message: "document bytes/digest/key/reason mismatch")
@@ -312,6 +327,7 @@ struct DocumentPlan {
             }
         }
         text = decoded
+        keyDisplay = display
     }
 
     var binding: [String: Any] {
@@ -418,7 +434,7 @@ final class DocumentReviewWindow: NSObject, NSWindowDelegate {
         let digestHex = plan.digest.map { String(format: "%02x", $0) }.joined()
         let spkiHash = Data(SHA256.hash(data: plan.spki)).map { String(format: "%02x", $0) }.joined()
         let terminalLF = plan.bytes.last == 10 ? "present" : "absent"
-        let header = NSTextField(wrappingLabelWithString: "SIGNATURE REVIEW — document below is plain data\nKey: alexis/grants-owner-v1 v1 (Secure Enclave; presence required)\nPublic SPKI SHA256: \(spkiHash)\nDocument SHA256: \(digestHex)\nExact UTF-8: \(plan.bytes.count) bytes; terminal LF \(terminalLF). Scroll to the end, then confirm. No grant authority is asserted.")
+        let header = NSTextField(wrappingLabelWithString: "SIGNATURE REVIEW — document below is plain data\nKey: \(plan.keyDisplay) (Secure Enclave; presence required)\nPublic SPKI SHA256: \(spkiHash)\nDocument SHA256: \(digestHex)\nExact UTF-8: \(plan.bytes.count) bytes; terminal LF \(terminalLF). Scroll to the end, then confirm. No grant authority is asserted.")
         header.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         header.frame = NSRect(x: 20, y: height - 162, width: width - 40, height: 142)
         content.addSubview(header)

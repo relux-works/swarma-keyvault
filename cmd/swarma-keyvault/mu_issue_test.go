@@ -34,7 +34,7 @@ func newMUIssueFixture(t *testing.T, mutate func(*keyvault.Record)) *muIssueFixt
 	f.agent, f.agentID = muCLIKey(t)
 	ownerDER := muSPKI(t, f.owner)
 	f.ownerPin, f.subject = muCLIWrite(t, "owner.der", ownerDER), muCLIWrite(t, "agent.der", muSPKI(t, f.agent))
-	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1,
+	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "synthetic-mu-owner", Purpose: "grants-owner-v1", Version: 12,
 		Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone,
 		Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS},
 		Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "fixture", Host: "fixture", Tool: "fixture", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
@@ -67,7 +67,7 @@ func (f *muIssueFixture) run(kind string, spec map[string]any, subject bool) (in
 // runSigned runs mu-issue; a grant gets owner-root attestations signed by
 // attKey under attRoot (the spec issuer for every valid grant).
 func (f *muIssueFixture) runSigned(kind string, spec map[string]any, subject bool, attKey *ecdsa.PrivateKey, attRoot string) (int, string, string) {
-	args := []string{"grants", "mu-issue", "--kind", kind, "--spec", muCLIWrite(f.t, "spec.json", spec), "--owner-spki-der", f.ownerPin}
+	args := []string{"grants", "mu-issue", "--kind", kind, "--spec", muCLIWrite(f.t, "spec.json", spec), "--owner-spki-der", f.ownerPin, "--owner-key", "synthetic-mu-owner/grants-owner-v1", "--owner-key-version", "12"}
 	if subject {
 		args = append(args, "--subject-spki-der", f.subject)
 	}
@@ -230,7 +230,7 @@ func TestMUIssueRefusals(t *testing.T) {
 	t.Run("short-review", func(t *testing.T) {
 		f := newMUIssueFixture(t, nil)
 		var out bytes.Buffer
-		args := append([]string{"grants", "mu-issue", "--kind", "grant", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(f.root, f.agentID)), "--owner-spki-der", f.ownerPin},
+		args := append([]string{"grants", "mu-issue", "--kind", "grant", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(f.root, f.agentID)), "--owner-spki-der", f.ownerPin, "--owner-key", "synthetic-mu-owner/grants-owner-v1", "--owner-key-version", "12"},
 			muAttestFiles(t, f.owner, f.root, f.agent, "@meta-keeper.keeper-sirius:gr.relux.works")...)
 		// Built and admitted up to the key gate; only the failing review sink refuses.
 		if code := run(args, strings.NewReader(""), &out, muFailWriter{}); code != 1 || out.Len() != 0 || f.store.signs != 0 || f.store.factories != 1 {
@@ -256,4 +256,21 @@ func TestMUIssueRefusals(t *testing.T) {
 func (f *muIssueFixture) agentIDOther(t *testing.T) string {
 	_, id := muCLIKey(t)
 	return id
+}
+
+// Invalid or absent exact addresses fail before reading input or preparing a
+// key manager. The valid configurations exercised above use generation 12.
+func TestMUIssueRequiresConfiguredKey(t *testing.T) {
+	base := []string{"grants", "mu-issue", "--kind", "mac-agent", "--spec", "absent-spec",
+		"--owner-spki-der", "absent-pin", "--subject-spki-der", "absent-subject"}
+	for _, flags := range [][]string{
+		nil,
+		{"--owner-key", "synthetic-mu-owner/grants-owner-v1", "--owner-key-version", "0"},
+		{"--owner-key", "synthetic-mu-owner/grants-owner-v2", "--owner-key-version", "12"},
+	} {
+		code, out, err := muCLIRun(append(append([]string{}, base...), flags...)...)
+		if code != 2 || out != "" || !strings.Contains(err, "--owner-key-version") {
+			t.Fatal("explicit key gate did not refuse before input", code, err)
+		}
+	}
 }

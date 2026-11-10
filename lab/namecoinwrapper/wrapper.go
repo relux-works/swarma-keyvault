@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/relux-works/swarma-keyvault/internal/grants"
 	"io"
 	"os"
 	"os/exec"
@@ -597,7 +598,7 @@ func stableGeneration(ctx context.Context, n Node, name nameShow, tx transaction
 func (v *Verifier) Verify(ctx context.Context, n Node, p Policy, certificate, request []byte, at time.Time) (*Observation, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.closed || n == nil || len(certificate) == 0 || len(certificate) > 98304 || len(request) == 0 || len(request) > 12288 || at.IsZero() {
+	if v.closed || grants.ValidateOwnerPrincipal(p.ExpectedOwner) != nil || n == nil || len(certificate) == 0 || len(certificate) > 98304 || len(request) == 0 || len(request) > 12288 || at.IsZero() {
 		return nil, ErrRefused
 	}
 	if p.OwnerName == "" || p.RequesterName == "" || p.OwnerName == p.RequesterName || len(p.OwnerName) > 255 || len(p.RequesterName) > 255 {
@@ -852,8 +853,8 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 
 func verifyCLI(ctx context.Context, p Policy, owner, requester string, cert, req []byte, at time.Time) (*verification, error) {
 	expectedOwner := p.ExpectedOwner
-	if expectedOwner == "" {
-		expectedOwner = "@alexis:gr.relux.works"
+	if grants.ValidateOwnerPrincipal(expectedOwner) != nil {
+		return nil, ErrRefused
 	}
 	if !filepath.IsAbs(p.PrivateRoot) || filepath.Clean(p.PrivateRoot) != p.PrivateRoot || !filepath.IsAbs(p.CLI) || !digest(p.CLIHash) {
 		return nil, ErrRefused
@@ -893,9 +894,7 @@ func verifyCLI(ctx context.Context, p Policy, owner, requester string, cert, req
 		}
 	}
 	args := []string{"grants", "verify", "--config", filepath.Join(dir, "config.json"), "--certificate", filepath.Join(dir, "certificate.json"), "--request", filepath.Join(dir, "request.json"), "--at", at.UTC().Format(time.RFC3339)}
-	if p.ExpectedOwner != "" {
-		args = append(args, "--owner-mxid", expectedOwner)
-	}
+	args = append(args, "--owner-mxid", expectedOwner)
 	cmd := exec.CommandContext(ctx, p.CLI, args...)
 	cmd.Env = []string{"HOME=" + dir, "TMPDIR=" + dir, "XDG_CACHE_HOME=" + dir, "PATH=/nonexistent"}
 	cmd.Dir = dir

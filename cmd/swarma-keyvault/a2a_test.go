@@ -19,7 +19,6 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/relux-works/swarma-keyvault/internal/grantissuer"
 	"github.com/relux-works/swarma-keyvault/internal/grants"
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
@@ -54,7 +53,7 @@ func a2aCLIFixture(t *testing.T) ([]string, map[string]any, *cliIssueStore) {
 		}
 	}
 	certificate := map[string]any{"type": "grants-a2a-certificate-1", "audience": "@receiver:example.invalid", "certificate_id": "test-A",
-		"issuer":              map[string]any{"owner_mxid": grantissuer.OwnerMXID, "purpose": "grants-owner-v1", "key_id": "sha256:" + a2aCLIHash(public)},
+		"issuer":              map[string]any{"owner_mxid": fixtureOwnerPrincipal, "purpose": "grants-owner-v1", "key_id": "sha256:" + a2aCLIHash(public)},
 		"subject":             map[string]any{"account_mxid": "@requester:example.invalid", "spki_sha256": a2aCLIHash(requesterDER)},
 		"key_registry_sha256": strings.Repeat("11", 32), "not_before": "2026-11-04T14:00:00Z", "expires_at": "2026-11-04T14:30:00Z", "supersedes": []any{},
 		"entries": []any{map[string]any{"action": "repository.create", "entry_id": "create", "use_count": "1", "target": map[string]any{"organization": "relux-works", "name": grants.A2ARepository, "visibility": "private"}}}}
@@ -67,7 +66,7 @@ func a2aCLIFixture(t *testing.T) ([]string, map[string]any, *cliIssueStore) {
 		}
 		return keyvault.NewManager(store, nil, keyvault.Origin{})
 	}
-	return []string{"grants", "a2a-prepare", "--payload", "-", "--owner-spki-der", ownerFile, "--requester-spki-der", subjectFile}, certificate, store
+	return withFixtureOwnerArgs([]string{"grants", "a2a-prepare", "--payload", "-", "--owner-spki-der", ownerFile, "--requester-spki-der", subjectFile}), certificate, store
 }
 
 // Public prepare never constructs a manager; the positive issue path signs

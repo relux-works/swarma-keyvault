@@ -6,9 +6,11 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
-const ownerKeyDisplay = "alexis/grants-owner-v1 v1"
 const reasonPrefix = "mac-keyvault: "
 const digestLabel = "[ХЕШ-ПОДПИСИ "
 
@@ -121,8 +123,9 @@ func (f titleFacts) core() (string, error) {
 	return "", errDisplay
 }
 
-func renderReason(f titleFacts, digest [32]byte, resolvedKey string) (string, error) {
-	if resolvedKey != ownerKeyDisplay {
+func renderReason(f titleFacts, digest [32]byte, expected signerclient.Address, resolvedKey string) (string, error) {
+	keyDisplay, err := ownerkey.Display(expected)
+	if err != nil || resolvedKey != keyDisplay {
 		return "", errBinding
 	}
 	core, err := f.core()
@@ -178,7 +181,7 @@ func reasonAlphabet(s string) bool {
 // checkFinalReason is a pure pre-dispatch contract component. It cannot install
 // a policy in EnclaveStore or turn a callback into authorization. A future
 // internal SignReviewed handoff must bind this check to its one-use permit.
-func checkFinalReason(f titleFacts, owned [32]byte, actualDigest []byte, resolvedKey, actual string) error {
+func checkFinalReason(f titleFacts, owned [32]byte, actualDigest []byte, expected signerclient.Address, resolvedKey, actual string) error {
 	if len(actualDigest) != 32 {
 		return errBinding
 	}
@@ -187,7 +190,7 @@ func checkFinalReason(f titleFacts, owned [32]byte, actualDigest []byte, resolve
 	if got != owned {
 		return errBinding
 	}
-	want, err := renderReason(f, owned, resolvedKey)
+	want, err := renderReason(f, owned, expected, resolvedKey)
 	if err != nil {
 		return err
 	}

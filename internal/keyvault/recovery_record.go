@@ -23,6 +23,7 @@ const recoveryMaxCiphertext = 65536
 // RecoveryPurpose is public metadata. Empty public fields remain explicit in
 // canonical JSON; a purpose's immutable path and policy determine its authority.
 type RecoveryPurpose struct {
+	Service             string `json:"service,omitempty"`
 	Purpose             string `json:"purpose"`
 	Version             int    `json:"version"`
 	Path                string `json:"path"`
@@ -52,7 +53,27 @@ func (r RecoveryRecord) Account() string {
 }
 
 func (r RecoveryRecord) NostrRecord() NostrRecord {
-	return NostrRecord{Schema: "nostr-key/1", Service: r.Service, Purpose: "nostr", Version: r.Nostr.Version, Algorithm: r.Nostr.Algorithm, Storage: "enclave-wrapped-keychain", Created: r.Created, PublicKey: r.Nostr.PublicKey, NPub: r.Nostr.NPub}
+	return NostrRecord{Schema: "nostr-key/1", Service: r.purposeService(r.Nostr), Purpose: "nostr", Version: r.Nostr.Version, Algorithm: r.Nostr.Algorithm, Storage: "enclave-wrapped-keychain", Created: r.Created, PublicKey: r.Nostr.PublicKey, NPub: r.Nostr.NPub}
+}
+
+// Only the immutable v1 schema inherits its one service. V2 has no fallback.
+func (r RecoveryRecord) purposeService(p RecoveryPurpose) string {
+	if r.Schema == "keyvault-recovery/1" {
+		return r.Service
+	}
+	return p.Service
+}
+
+func (r RecoveryRecord) PurposeAccount(p RecoveryPurpose) string {
+	a, _ := nostrAddress(r.purposeService(p), p.Purpose, p.Version)
+	return a
+}
+
+func (r RecoveryRecord) ciphertextSchema() string {
+	if r.Schema == "keyvault-recovery/2" {
+		return "keyvault-recovery-ciphertext/2"
+	}
+	return "keyvault-recovery-ciphertext/1"
 }
 
 func lowerHex(s string, size int) bool {
@@ -79,14 +100,26 @@ func validateRecoveryRecord(r RecoveryRecord) error {
 		return recoveryRefuse("invalid_record")
 	}
 	created, err := time.Parse(time.RFC3339, r.Created)
-	if err != nil || created.UTC().Format(time.RFC3339) != r.Created || r.Schema != "keyvault-recovery/1" || !lowerHex(r.GroupID, 16) {
+	if err != nil || created.UTC().Format(time.RFC3339) != r.Created || !lowerHex(r.GroupID, 16) {
 		return recoveryRefuse("invalid_record")
 	}
 	n, c := r.Nostr, r.Namecoin
-	if _, err := nostrAddress(r.Service, n.Purpose, n.Version); err != nil {
+	switch r.Schema {
+	case "keyvault-recovery/1":
+		if n.Service != "" || c.Service != "" {
+			return recoveryRefuse("invalid_record")
+		}
+	case "keyvault-recovery/2":
+		if n.Service != r.Service || c.Service == "" {
+			return recoveryRefuse("invalid_record")
+		}
+	default:
 		return recoveryRefuse("invalid_record")
 	}
-	if _, err := nostrAddress(r.Service, c.Purpose, c.Version); err != nil {
+	if _, err := nostrAddress(r.purposeService(n), n.Purpose, n.Version); err != nil {
+		return recoveryRefuse("invalid_record")
+	}
+	if _, err := nostrAddress(r.purposeService(c), c.Purpose, c.Version); err != nil {
 		return recoveryRefuse("invalid_record")
 	}
 	if n.Purpose != "nostr" || n.Path != "m/44'/1237'/0'/0/0" || n.Algorithm != "secp256k1-bip340" || n.Presence != "none" || n.XPub != "" || n.Origin != "" || validateNostrRecord(r.NostrRecord()) != nil {
@@ -145,7 +178,7 @@ type recoveryCiphertext struct {
 
 func parseRecoveryCiphertext(raw []byte, r RecoveryRecord) (recoveryCiphertext, error) {
 	var c recoveryCiphertext
-	if len(raw) > recoveryMaxCiphertext || DecodeSingleJSON(raw, &c) != nil || c.Schema != "keyvault-recovery-ciphertext/1" || validateRecoveryRecord(r) != nil {
+	if len(raw) > recoveryMaxCiphertext || DecodeSingleJSON(raw, &c) != nil || c.Schema != r.ciphertextSchema() || validateRecoveryRecord(r) != nil {
 		return c, recoveryRefuse("invalid_envelope")
 	}
 	for _, v := range []struct {
@@ -170,9 +203,13 @@ func parseRecoveryCiphertext(raw []byte, r RecoveryRecord) (recoveryCiphertext, 
 func recoveryBinding(r RecoveryRecord, p RecoveryPurpose) [32]byte {
 	metadata, _ := json.Marshal(r)
 	namespace := "works.relux.mac-keyvault." + p.Purpose + "-wrap.v1"
-	logical, _ := nostrAddress(r.Service, p.Purpose, p.Version)
+	logical := r.PurposeAccount(p)
+	domain := "works.relux.mac-keyvault.recovery-envelope.v1"
+	if r.Schema == "keyvault-recovery/2" {
+		domain = "works.relux.mac-keyvault.recovery-envelope.v2"
+	}
 	h := sha256.New()
-	for _, part := range []string{"works.relux.mac-keyvault.recovery-envelope.v1", namespace, r.Account(), p.Purpose, logical} {
+	for _, part := range []string{domain, namespace, r.Account(), p.Purpose, logical} {
 		_, _ = h.Write([]byte(part))
 		_, _ = h.Write([]byte{0})
 	}
@@ -287,14 +324,14 @@ func recoveryRows(raw []byte) ([]NostrRecord, []RecoveryRecord, error) {
 			if !bytes.Equal(canonical, fields[1]) {
 				return nil, nil, recoveryRefuse("invalid_record")
 			}
-		case "keyvault-recovery/1":
+		case "keyvault-recovery/1", "keyvault-recovery/2":
 			g, err := parseRecoveryRecord(fields[1])
 			if err != nil || string(fields[0]) != g.Account() {
 				return nil, nil, recoveryRefuse("invalid_record")
 			}
 			groups = append(groups, g)
 			r = g.NostrRecord()
-			account, _ := nostrAddress(g.Service, "namecoin", g.Namecoin.Version)
+			account := g.PurposeAccount(g.Namecoin)
 			if seen[account] {
 				return nil, nil, recoveryRefuse("duplicate")
 			}

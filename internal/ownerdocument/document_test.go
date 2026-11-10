@@ -21,10 +21,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 // Public, deterministic synthetic scalar 7 and nonce 11. Never an owner key,
 // native helper, presence result or signing-service credential.
+var ownerAddress = keyvault.Address{Kind: keyvault.KindKey, Service: "synthetic-owner", Purpose: ownerkey.GrantPurpose, Version: 1}
+
 func fixturePublic(t *testing.T) []byte {
 	t.Helper()
 	x, y := elliptic.P256().ScalarBaseMult([]byte{7})
@@ -52,7 +55,7 @@ func fixtureSignature(t *testing.T, digest []byte) []byte {
 
 func prepared(t *testing.T, document string) *Prepared {
 	t.Helper()
-	p, err := Prepare([]byte(document), fixturePublic(t))
+	p, err := Prepare(ownerAddress, []byte(document), fixturePublic(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +66,7 @@ func TestExactBytesAndOwnership(t *testing.T) {
 	for _, document := range []string{"Exact English.\nТочный русский.", "Exact English.\n\nТочный русский.\n", "No terminal newline"} {
 		t.Run(document, func(t *testing.T) {
 			raw, pin := []byte(document), fixturePublic(t)
-			p, err := Prepare(raw, pin)
+			p, err := Prepare(ownerAddress, raw, pin)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,7 +95,7 @@ func TestExactBytesAndOwnership(t *testing.T) {
 			if p.Prompt(other[:]) != "" {
 				t.Fatal("prompt bound only to prefix")
 			}
-			full := "mac-keyvault: " + p.Prompt(want[:]) + " with alexis/grants-owner-v1 v1"
+			full := "mac-keyvault: " + p.Prompt(want[:]) + " with synthetic-owner/grants-owner-v1 v1"
 			if utf8.RuneCountInString(full) > 200 || strings.ContainsAny(full, "\r\n\t") {
 				t.Fatal("d154 final reason overflows/changes")
 			}
@@ -155,12 +158,12 @@ func TestRenderFailureAtEveryStage(t *testing.T) {
 func TestAdmissionRefusalsAndBounds(t *testing.T) {
 	negative := [][]byte{nil, {0xff}, []byte("\n\n"), []byte("END DOCUMENT"), []byte("BEGIN DOCUMENT"), []byte("x\r\ny"), []byte("x\ty"), []byte("x\x00y"), []byte("\x1b[2Jtext"), []byte("a\u202eb"), []byte("a\u200bb"), []byte("a\u00a0b"), []byte("e\u0301"), []byte("a\u3164b"), []byte(" leading"), []byte("trailing "), []byte("double  space"), []byte("line \nnext"), []byte(strings.Repeat("a", MaxLineScalars+1)), []byte(strings.Repeat("\n", MaxLines)), []byte(strings.Repeat("a", MaxDocumentBytes+1))}
 	for i, raw := range negative {
-		if _, err := Prepare(raw, fixturePublic(t)); err == nil {
+		if _, err := Prepare(ownerAddress, raw, fixturePublic(t)); err == nil {
 			t.Fatal("invalid/ambiguous/bounded input admitted", i)
 		}
 	}
 	for _, raw := range []string{strings.Repeat("a", MaxLineScalars), "a" + strings.Repeat("\n", MaxLines-1), "Алексис — подпись.\n\nIvan: exact bytes."} {
-		if _, err := Prepare([]byte(raw), fixturePublic(t)); err != nil {
+		if _, err := Prepare(ownerAddress, []byte(raw), fixturePublic(t)); err != nil {
 			t.Fatal("valid neighbor refused", err)
 		}
 	}
@@ -169,10 +172,10 @@ func TestAdmissionRefusalsAndBounds(t *testing.T) {
 	if len(raw) != MaxDocumentBytes {
 		t.Fatal("bad limit fixture", len(raw))
 	}
-	if _, err := Prepare([]byte(raw), fixturePublic(t)); err != nil {
+	if _, err := Prepare(ownerAddress, []byte(raw), fixturePublic(t)); err != nil {
 		t.Fatal("exact byte bound refused", err)
 	}
-	if _, err := Prepare([]byte(raw+"c"), fixturePublic(t)); err == nil {
+	if _, err := Prepare(ownerAddress, []byte(raw+"c"), fixturePublic(t)); err == nil {
 		t.Fatal("byte overflow admitted")
 	}
 }
@@ -180,7 +183,7 @@ func TestAdmissionRefusalsAndBounds(t *testing.T) {
 func TestStrictPublicAndSignature(t *testing.T) {
 	p := prepared(t, "Exact")
 	for _, pin := range [][]byte{nil, {1, 2, 3}, append(fixturePublic(t), 0), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: fixturePublic(t)})} {
-		if _, err := Prepare([]byte("Exact"), pin); err != ErrPublic {
+		if _, err := Prepare(ownerAddress, []byte("Exact"), pin); err != ErrPublic {
 			t.Fatal("non-exact DER accepted", err)
 		}
 	}
@@ -235,7 +238,7 @@ func (s *syntheticStore) Sign(label string, digest []byte) ([]byte, error) {
 
 func fixtureManager(t *testing.T, events *[]string, mutate func(*keyvault.Record)) (*keyvault.Manager, *syntheticStore) {
 	t.Helper()
-	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1, Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone, Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS}, Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "synthetic", Host: "synthetic", Tool: "synthetic", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
+	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: ownerAddress.Service, Purpose: ownerAddress.Purpose, Version: ownerAddress.Version, Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone, Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS}, Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "synthetic", Host: "synthetic", Tool: "synthetic", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
 	if mutate != nil {
 		mutate(&record)
 	}

@@ -24,6 +24,36 @@ type FileLock struct {
 	Path string
 }
 
+// LockExisting takes only an already admitted regular lock file. An absent
+// file/parent returns os.ErrNotExist without creating either prerequisite.
+func (l FileLock) LockExisting() (func(), error) {
+	file, err := os.OpenFile(l.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := admitLockFile(file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	if err := boundedwait.LockFile(context.Background(), file); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN); file.Close() }, nil
+}
+
+func admitLockFile(file *os.File) error {
+	st, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	owner, ok := st.Sys().(*syscall.Stat_t)
+	if !st.Mode().IsRegular() || st.Mode().Perm() != 0600 || st.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || !ok || owner.Uid != uint32(os.Getuid()) {
+		return fmt.Errorf("keyvault: lock file is not admitted")
+	}
+	return nil
+}
+
 // Lock acquires the exclusive lock, waiting at most boundedwait.LockWait.
 func (l FileLock) Lock() (func(), error) {
 	return l.LockContext(context.Background())
@@ -43,9 +73,13 @@ func (l FileLock) LockContext(ctx context.Context) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(l.Path), 0o700); err != nil {
 		return nil, fmt.Errorf("keyvault: lock dir: %w", err)
 	}
-	file, err := os.OpenFile(l.Path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(l.Path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("keyvault: lock file: %w", err)
+	}
+	if err := admitLockFile(file); err != nil {
+		file.Close()
+		return nil, err
 	}
 	if err := boundedwait.LockFile(ctx, file); err != nil {
 		file.Close()

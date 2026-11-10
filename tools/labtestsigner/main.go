@@ -110,9 +110,9 @@ func run(args []string, out, stderr io.Writer) int {
 	f.StringVar(&ownerFile, "owner-spki", "", "public owner DER")
 	f.StringVar(&requesterFile, "requester-spki", "", "public requester DER")
 	f.StringVar(&digest, "digest", "", "exact prepared SHA256 digest, lowercase hex")
-	expectedOwner := grants.LocalOwnerMXID
+	expectedOwner := ""
 	ownerSet := false
-	f.Func("owner-mxid", "independently expected certificate owner (default Alexis)", func(value string) error {
+	f.Func("owner-mxid", "required independently expected certificate owner", func(value string) error {
 		if ownerSet || value == "" {
 			return errors.New("one nonempty expected owner required")
 		}
@@ -138,6 +138,9 @@ func run(args []string, out, stderr io.Writer) int {
 		}
 	}
 	if err := f.Parse(args[1:]); err != nil || f.NArg() != 0 {
+		return 2
+	}
+	if args[0] == "certificate" && (!ownerSet || grants.ValidateOwnerPrincipal(expectedOwner) != nil) {
 		return 2
 	}
 	if ownerSet && args[0] != "certificate" {

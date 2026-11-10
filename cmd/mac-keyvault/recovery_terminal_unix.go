@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"os"
@@ -14,10 +15,13 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+
 	"golang.org/x/sys/unix"
 )
 
 type ownerRecoveryTerminal interface {
+	ConfirmIdentities(keyvault.RecoveryPlan) error
 	ConfirmMnemonic([][]byte) error
 	ReadMnemonic() ([]byte, error)
 	Close() error
@@ -134,6 +138,27 @@ func (t *recoveryTerminal) line(maximum int) ([]byte, error) {
 		}
 		data = append(data, b[0])
 	}
+}
+
+func (t *recoveryTerminal) ConfirmIdentities(p keyvault.RecoveryPlan) error {
+	if err := t.write([]byte(fmt.Sprintf("Nostr identity: %s\nNamecoin identity: %s\nGroup: %s\nNostr record: %s\nNamecoin record: %s\n", p.NostrIdentity, p.NamecoinIdentity, p.Group, p.NostrRecord, p.NamecoinRecord))); err != nil {
+		return err
+	}
+	for _, q := range []struct{ label, want string }{{"Nostr", p.NostrIdentity}, {"Namecoin", p.NamecoinIdentity}} {
+		if err := t.write([]byte("Retype " + q.label + " identity: ")); err != nil {
+			return err
+		}
+		got, err := t.line(128)
+		matches := err == nil && bytes.Equal(got, []byte(q.want))
+		clear(got)
+		if !matches {
+			return errors.New("identity confirmation refused")
+		}
+		if err := t.write([]byte("\n")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *recoveryTerminal) ConfirmMnemonic(words [][]byte) (err error) {

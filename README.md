@@ -141,7 +141,10 @@ NIP-19 npub export, 32-byte event-id BIP-340 signing and offline verification.
 Its random-key generator retains the explicit `storage=keychain-acl` contract.
 The separate `mac-keyvault recovery` family creates or restores one 24-word
 offline backup, deriving a NIP-06 Nostr leaf and Namecoin account 0 from fixed
-paths. Only those two authorities persist, as separately device-wrapped
+paths. Separate explicit `--nostr-identity` and `--namecoin-identity` parameters
+select the two logical records. `recovery plan` reads their public inventory
+without creating prerequisites; mutations require both identities to be retyped
+before taking a creating lock. Only those two authorities persist, as separately device-wrapped
 ciphertexts in one atomic login-Keychain item. The Namecoin wrap requires
 Touch ID without password fallback; Nostr reports
 `storage=enclave-wrapped-keychain`, `presence=false`. Uncertain mutations return
@@ -150,13 +153,16 @@ failed receipts also return failure. Both routes retain the
 sole-application Keychain ACL and refuse private export. Recoverable secp256k1
 material exists transiently in vault memory; it is not hardware non-extractable.
 Read [Nostr commands](docs/nostr.md) and [recovery, custody limits and attended
-qualification](docs/recovery.md). Namecoin spending and registration are outside
+qualification](docs/recovery.md). The release command `keyvault-seed` installs
+a pinned pair for the current macOS user and creates a pair for two explicitly
+chosen identities in an attended terminal. Namecoin spending and registration are outside
 this interface. Existing P-256 interfaces retain their contracts.
 
 The multi-use grant interop vectors live in
 [`interop/multi-use-grants/`](interop/multi-use-grants/README.md). The confined
-suite checks them (`TestMUInteropVectors`). `go run ./cmd/mu-interop-vectors -out DIR`
-writes a fresh set from the published test seeds into a new directory.
+suite checks them (`TestMUInteropVectors`). `go run ./cmd/mu-interop-vectors -out DIR -owner owner:fixture -linux-uid 1000`
+writes a fresh set from the published test seeds and explicit synthetic owner/UID
+into a new directory.
 
 Read [the KEK contract](docs/kek.md) and [SSH/new-key onboarding](docs/keyvault-ssh-new-keys.md)
 before selecting an interface. Generic signing is not typed grant or release
@@ -302,10 +308,16 @@ No document signature substitutes for a platform grant or enrolls authority.
 
 ### Issue the selected private repository certificate
 
-`grants issue --payload FILE|- --owner-spki-der FILE` signs the complete canonical
-payload using the existing `alexis/grants-owner-v1` key, explicit generation 1.
-This initial interface accepts only owner `@alexis:gr.relux.works`, one cycle,
-one private CREATE for `relux-works/matrix-grants-poc-261031` and its paired
+`grants issue` signs a complete canonical payload with an independently
+configured owner principal, exact `SERVICE/grants-owner-v1` address and generation:
+
+```sh
+swarma-keyvault grants issue --payload certificate.json --owner-spki-der owner.der \
+  --owner-mxid @owner:example.invalid --owner-key account/grants-owner-v1 --owner-key-version 1
+```
+
+The owner principal must equal the payload issuer. The supported grant scope is
+one cycle, one private CREATE for `relux-works/matrix-grants-poc-261031` and its paired
 single-use DELETE, with no superseded certificates. DELETE is signed scope;
 this interface executes no repository operation.
 
@@ -313,8 +325,8 @@ The separate public DER file must be obtained through the intended enrollment
 contract. Supplying it does not enroll an owner or make a certificate trusted by
 a consumer. Before the private call, the actual resolved key must match that
 exact public DER, semantic address and generation, Secure Enclave store,
-user-presence requirement and non-extraction policy. No generic digest or key
-selector is exposed. Complete payload validation precedes store access.
+user-presence requirement and non-extraction policy. No generic digest
+operation is exposed. Complete payload validation precedes store access.
 
 Build a separate native CLI with cgo and keep the matching Swift helper beside
 it; preserve installed binaries and existing ACL trust:
@@ -343,8 +355,8 @@ or contact a provider.
 ### Local repository request and mediation
 
 The bounded local path accepts only the first-issue private CREATE for
-`relux-works/matrix-grants-poc-261031`, under `@alexis:gr.relux.works` and one
-explicitly enrolled cycle. The paired DELETE remains signed certificate data;
+`relux-works/matrix-grants-poc-261031`, under an independently configured owner
+and one explicitly enrolled cycle. The paired DELETE remains signed certificate data;
 this executor never dispatches it. This is a local proof of concept, with no
 Matrix receiver, device authentication, revocation/reissue workflow or protected
 clock. Its subject is a custodian-declared association to a separately pinned
@@ -358,11 +370,12 @@ obtained owner and requester P-256 SPKI DER files:
 
 ```sh
 .temp/build/swarma-keyvault grants local-prepare \
-  --plan local-plan.json --owner-mxid @alexis:gr.relux.works \
+  --plan local-plan.json --owner-mxid @owner:example.invalid \
   --issuer-spki-der owner.spki.der --requester-spki-der requester.spki.der \
   > local-certificate.json
 .temp/build/swarma-keyvault grants local-issue \
   --payload local-certificate.json --owner-spki-der owner.spki.der \
+  --owner-mxid @owner:example.invalid --owner-key account/grants-owner-v1 --owner-key-version 1 \
   --requester-spki-der requester.spki.der > signed-local-certificate.json
 ```
 
@@ -418,7 +431,7 @@ It has exactly these fields (formatted here for reading; replace all placeholder
   "gh_path": "/absolute/path/to/gh",
   "name": "matrix-grants-poc-261031",
   "organization": "relux-works",
-  "owner_mxid": "@alexis:gr.relux.works",
+  "owner_mxid": "@owner:example.invalid",
   "owner_spki": "UNPADDED_BASE64URL_OF_SEPARATELY_VERIFIED_OWNER_SPKI_DER",
   "requester_spki": "UNPADDED_BASE64URL_OF_SEPARATELY_VERIFIED_DISTINCT_REQUESTER_SPKI_DER",
   "state_dir": "/absolute/path/to/private-local-state",
@@ -527,6 +540,7 @@ Prepare the exact unsigned certificate with separately admitted public pins:
 .temp/build/swarma-keyvault grants a2a-prepare \
   --payload certificate.canonical.json \
   --owner-spki-der owner.der --requester-spki-der grantee.der \
+  --owner-mxid @owner:example.invalid --owner-key account/grants-owner-v1 --owner-key-version 1 \
   > certificate.checked.json 2> certificate.review.txt
 ```
 
@@ -535,13 +549,13 @@ review. The presence reason derives from that same immutable payload: action,
 private resource, full grantee ID, 16 hexadecimal characters of its key hash,
 the exact interval in MSK, and the final 12 hexadecimal characters of the
 domain digest. Seconds and the second date are included when needed; times are
-not rounded. An invalid, control-containing or over-200-Unicode-scalar reason
-refuses preparation. Nothing is truncated. This cap matches the current helper
+not rounded. The complete reason, including the selected key address, must fit 200 Unicode
+scalars and contain no control characters or formatting controls. Nothing is truncated. This cap matches the current helper
 preprocessing; it is not evidence that macOS displays every character.
 
 The distinct `a2a-issue` command takes the same flags. It prepares the complete
 certificate and reason before constructing the signing manager, then requires
-the fixed owner key's exact generation, public pin, nonextractability and
+the configured owner key’s exact generation, public pin, nonextractability and
 Enclave/presence policy. It writes the full review before the private call and
 verifies the resulting DER low-S signature. It neither creates keys nor installs
 or activates a grant. A separate attended authorization is required to invoke

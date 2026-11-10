@@ -150,6 +150,7 @@ func freshDirection(t *testing.T, reverse bool) *fixture {
 		f.p.OwnerName, f.p.RequesterName = "d/ivan-sim", "d/alexis-agent-sim"
 		f.p.Account, f.p.Executor = "@alexis-agent-sim:example.invalid", "alexis-agent-sim"
 	}
+	f.p.ExpectedOwner = ownerMXID
 	f.p.AnchorTxID, f.p.AnchorBlock, f.p.SealTxID, f.p.SealVout = strings.Repeat("d", 64), f.block, f.seal.TxID, f.seal.Vout
 	subject := map[string]string{"account_mxid": f.p.Account, "device_id": f.p.Device}
 	audience := map[string]string{"deployment_id": f.p.Deployment, "executor_id": f.p.Executor}

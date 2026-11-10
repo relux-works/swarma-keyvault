@@ -2,9 +2,13 @@
 
 package main
 
-import "errors"
+import (
+	"errors"
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+)
 
 type ownerRecoveryTerminal interface {
+	ConfirmIdentities(keyvault.RecoveryPlan) error
 	ConfirmMnemonic([][]byte) error
 	ReadMnemonic() ([]byte, error)
 	Close() error

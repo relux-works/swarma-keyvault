@@ -2,6 +2,14 @@ package grants
 
 import "strings"
 
+// ValidateOwnerPrincipal applies the existing certificate account grammar to
+// an independently configured owner. It neither enrolls that account nor
+// derives authority from a certificate payload or display name.
+func ValidateOwnerPrincipal(value string) error {
+	_, err := parseA2AAccount(value)
+	return err
+}
+
 // These helpers consume representations only. Matrix v1.19 historical account
 // consumption differs from new registration; the new grants wire additionally
 // restricts all strings to printable ASCII. Exact enrolled account/device/key

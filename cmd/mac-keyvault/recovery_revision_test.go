@@ -19,9 +19,14 @@ func (f *recoveryReceiptOperations) Create(q keyvault.RecoveryRequest, _ keyvaul
 	f.effects++
 	return keyvault.RecoveryRecord{Service: q.Service, Version: q.Version, GroupID: strings.Repeat("1", 32)}, nil
 }
-func (f *recoveryReceiptOperations) Delete(string, int, string) error { f.effects++; return nil }
+func (f *recoveryReceiptOperations) Delete(q keyvault.RecoveryDeleteRequest, _ keyvault.RecoveryTerminal) (keyvault.RecoveryRecord, error) {
+	f.effects++
+	return keyvault.RecoveryRecord{Service: q.NostrIdentity, Version: q.Version, GroupID: q.ExpectedGroupID, Nostr: keyvault.RecoveryPurpose{Service: q.NostrIdentity, Purpose: "nostr", Version: 2}, Namecoin: keyvault.RecoveryPurpose{Service: q.NamecoinIdentity, Purpose: "namecoin", Version: 1}}, nil
+}
 
 type recoveryReceiptTerminal struct{}
+
+func (recoveryReceiptTerminal) ConfirmIdentities(keyvault.RecoveryPlan) error { return nil }
 
 func (recoveryReceiptTerminal) ConfirmMnemonic([][]byte) error { return nil }
 func (recoveryReceiptTerminal) ReadMnemonic() ([]byte, error)  { return nil, nil }
@@ -57,7 +62,7 @@ func TestRecoveryMutationReceiptWrite(t *testing.T) {
 						args = append([]string{"--json"}, args...)
 					}
 					if op == "delete" {
-						args = append(args, "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
+						args = append(args, "fixture", "--namecoin-identity", "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
 					} else {
 						args = append(args, "--service", "fixture", "--version", "1", "--nostr-version", "2", "--namecoin-version", "1")
 						if op == "restore" {
@@ -89,6 +94,7 @@ func TestRecoveryMutationReceiptWrite(t *testing.T) {
 }
 
 type recoveryUnknownOperations struct {
+	recoveryCLIOperations
 	effects int
 	record  keyvault.RecoveryRecord
 }
@@ -104,9 +110,9 @@ func (f *recoveryUnknownOperations) Create(q keyvault.RecoveryRequest, _ keyvaul
 func (f *recoveryUnknownOperations) Describe(string, int) (keyvault.RecoveryRecord, error) {
 	return keyvault.RecoveryRecord{}, errors.New("unexpected read")
 }
-func (f *recoveryUnknownOperations) Delete(string, int, string) error {
+func (f *recoveryUnknownOperations) Delete(keyvault.RecoveryDeleteRequest, keyvault.RecoveryTerminal) (keyvault.RecoveryRecord, error) {
 	f.effects++
-	return &keyvault.RecoveryOutcomeUnknown{Outcome: "unknown", Operation: "delete", Reference: f.record}
+	return f.record, &keyvault.RecoveryOutcomeUnknown{Outcome: "unknown", Operation: "delete", Reference: f.record}
 }
 
 // Unknown effects use the one explicit result+error class, retain the public
@@ -129,7 +135,7 @@ func TestRecoveryUnknownMutationReceipt(t *testing.T) {
 					args = append([]string{"--json"}, args...)
 				}
 				if op == "delete" {
-					args = append(args, "fixture", "--version", "1", "--expected-group-id", f.record.GroupID)
+					args = append(args, "fixture", "--namecoin-identity", "fixture", "--version", "1", "--expected-group-id", f.record.GroupID)
 				} else {
 					args = append(args, "--service", "fixture", "--version", "1", "--nostr-version", "2", "--namecoin-version", "1")
 					if op == "restore" {

@@ -66,11 +66,11 @@ func issueCLIFixture(t *testing.T) ([]string, []byte, *cliIssueStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsigned, err := grants.PrepareRepositoryCertificate(raw, grantissuer.OwnerMXID, public)
+	unsigned, err := grants.PrepareRepositoryCertificate(raw, fixtureOwnerPrincipal, public)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1,
+	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "fixture-owner", Purpose: "grants-owner-v1", Version: 1,
 		Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone,
 		Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS},
 		Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "fixture", Host: "fixture", Tool: "fixture", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
@@ -93,7 +93,7 @@ func issueCLIFixture(t *testing.T) ([]string, []byte, *cliIssueStore) {
 	if err := os.WriteFile(pin, public, 0600); err != nil {
 		t.Fatal(err)
 	}
-	return []string{"grants", "issue", "--payload", "-", "--owner-spki-der", pin}, unsigned.Payload, store
+	return withFixtureOwnerArgs([]string{"grants", "issue", "--payload", "-", "--owner-spki-der", pin}), unsigned.Payload, store
 }
 
 // The actual CLI dispatch reads the complete payload, signs once through a

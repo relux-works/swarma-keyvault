@@ -37,7 +37,7 @@ func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
 		}
 		texts[name] = f[name].text
 	}
-	if texts["type"] != "grants-local-enrollment-2" || texts["owner_mxid"] != LocalOwnerMXID || texts["organization"] != LocalOrganization || texts["name"] != LocalRepository {
+	if texts["type"] != "grants-local-enrollment-2" || ValidateOwnerPrincipal(texts["owner_mxid"]) != nil || texts["organization"] != LocalOrganization || texts["name"] != LocalRepository {
 		return nil, errResourceMismatch
 	}
 	public := func(value string) ([]byte, error) {

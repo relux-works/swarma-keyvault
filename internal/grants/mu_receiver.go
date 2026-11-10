@@ -93,7 +93,7 @@ type MUEffect interface {
 type MUReceiverConfig struct {
 	Binding   MUBinding
 	State     MUStateConfig
-	Owner     string          // e.g. "owner:alexis"
+	Owner     string          // configured owner principal
 	RoomScope string          // e.g. "swarma-space"
 	Modules   map[string]bool // product modules known to the product card
 	Paused    map[string]bool // grant ids under a local custodian pause (X7)

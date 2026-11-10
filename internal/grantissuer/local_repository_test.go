@@ -40,7 +40,7 @@ func localIssuerFixture(t *testing.T) (*Prepared, *fixtureStore, *keyvault.Manag
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := PrepareLocal(raw, owner, requester)
+	p, err := PrepareLocal(fixtureOwnerConfig(t), raw, owner, requester)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,14 +71,14 @@ func TestLocalTypedIssuance(t *testing.T) {
 	if !strings.Contains(review.String(), disclosure+"\n") || !strings.Contains(review.String(), "Requester SPKI SHA256: "+hex.EncodeToString(hash[:])+"\n") || !strings.HasPrefix(p.Prompt(digest[:]), "grant local repository.create ") {
 		t.Fatal("local honesty/pin/presence prompt")
 	}
-	if _, err := Prepare(raw, owner); err == nil {
+	if _, err := Prepare(fixtureOwnerConfig(t), raw, owner); err == nil {
 		t.Fatal("Matrix issuer accepted local payload")
 	}
-	if _, err := PrepareLocal(raw, owner, owner); err == nil {
+	if _, err := PrepareLocal(fixtureOwnerConfig(t), raw, owner, owner); err == nil {
 		t.Fatal("wrong independent requester accepted")
 	}
 	_, _, _, _, _, other := localIssuerFixture(t)
-	if _, err := PrepareLocal(raw, owner, other); err == nil {
+	if _, err := PrepareLocal(fixtureOwnerConfig(t), raw, owner, other); err == nil {
 		t.Fatal("different valid independent requester accepted")
 	}
 }

@@ -19,9 +19,10 @@ func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer,
 	if sign {
 		command = "a2a-issue"
 	}
-	usageText := "swarma-keyvault grants " + command + " --payload FILE|- --owner-spki-der FILE --requester-spki-der FILE"
+	usageText := "swarma-keyvault grants " + command + " --payload FILE|- --owner-spki-der FILE --requester-spki-der FILE" + ownerIdentityUsage
 	f := flag.NewFlagSet(command, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
+	configuredOwner := addOwnerFlags(f)
 	var payload, owner, requester onceString
 	f.Var(&payload, "payload", "exact closed canonical certificate payload or -")
 	f.Var(&owner, "owner-spki-der", "independent owner public P-256 DER")
@@ -35,6 +36,10 @@ func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return usage()
 	}
 	if f.NArg() != 0 || !payload.set || payload.value == "" || !owner.set || owner.value == "" || owner.value == "-" || !requester.set || requester.value == "" || requester.value == "-" {
+		return usage()
+	}
+	ownerConfig, ownerErr := configuredOwner.config()
+	if ownerErr != nil {
 		return usage()
 	}
 	raw, err := readInput(payload.value, stdin, 4096)
@@ -53,7 +58,7 @@ func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		return 1
 	}
 	if sign {
-		prepared, err := grantissuer.PrepareA2A(raw, ownerDER, requesterDER)
+		prepared, err := grantissuer.PrepareA2A(ownerConfig, raw, ownerDER, requesterDER)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -65,7 +70,7 @@ func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		}
 		return writeA2AOutput(stdout, result)
 	}
-	prepared, err := grants.PrepareA2ACertificate(raw, grantissuer.OwnerMXID, ownerDER, requesterDER)
+	prepared, err := grants.PrepareA2ACertificate(raw, ownerConfig.Principal, ownerDER, requesterDER)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

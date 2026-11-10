@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/relux-works/swarma-keyvault/internal/muinterop"
 )
@@ -22,31 +23,36 @@ func run(args []string, stderr io.Writer) int {
 	f := flag.NewFlagSet("mu-interop-vectors", flag.ContinueOnError)
 	f.SetOutput(stderr)
 	out := f.String("out", "", "directory to write (must not exist)")
-	if err := f.Parse(args); err != nil || *out == "" || f.NArg() != 0 {
-		fmt.Fprintln(stderr, "usage: mu-interop-vectors -out DIR")
+	owner := f.String("owner", "", "synthetic fixture owner (owner:NAME)")
+	uidText := f.String("linux-uid", "", "synthetic Linux UID")
+	parseErr := f.Parse(args)
+	uid, uidErr := strconv.ParseInt(*uidText, 10, 64)
+	if parseErr != nil || *out == "" || f.NArg() != 0 || muinterop.ValidateFixtureOwner(*owner) != nil ||
+		uidErr != nil || uid < 0 || uid > 4294967294 || strconv.FormatInt(uid, 10) != *uidText {
+		fmt.Fprintln(stderr, "usage: mu-interop-vectors -out DIR -owner owner:NAME -linux-uid UID")
 		return 2
 	}
-	if err := write(*out); err != nil {
+	if err := write(*out, *owner, uid); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	return 0
 }
 
-func write(dir string) error {
+func write(dir, owner string, uid int64) error {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return err
 	}
-	cases, err := muinterop.MacFamily()
+	cases, err := muinterop.MacFamily(owner)
 	if err != nil {
 		return err
 	}
-	linux, err := muinterop.LinuxFamily()
+	linux, err := muinterop.LinuxFamily(owner, uid)
 	if err != nil {
 		return err
 	}
 	cases = append(cases, linux...)
-	publisher2, err := muinterop.PublisherEd25519Family()
+	publisher2, err := muinterop.PublisherEd25519Family(owner)
 	if err != nil {
 		return err
 	}

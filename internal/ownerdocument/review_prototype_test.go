@@ -39,8 +39,8 @@ func (p *Prepared) signWithReview(ctx context.Context, manager *keyvault.Manager
 	// Give the manager its own digest buffer: callbacks cannot mutate the plan.
 	digest := p.digest
 	admitted := false
-	result, err := manager.SignIfKey(ownerAddress, digest[:], func(key keyvault.ResolvedSigningKey) error {
-		if key.Address != ownerAddress || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
+	result, err := manager.SignIfKey(p.address, digest[:], func(key keyvault.ResolvedSigningKey) error {
+		if key.Address != p.address || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
 			return ErrPublic
 		}
 		if err := check(); err != nil {

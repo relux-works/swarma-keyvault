@@ -75,7 +75,10 @@ const linuxMXID = "@linux-agent:interop.invalid"
 // LinuxFamily builds the Linux-authored family: Mac-issued grants to an
 // Ed25519 agent attested by the Keymaker service, and Ed25519-signed
 // requests the Mac receiver must judge exactly as listed.
-func LinuxFamily() ([]Case, error) {
+func LinuxFamily(owner string, uid int64) ([]Case, error) {
+	if ValidateFixtureOwner(owner) != nil || uid < 0 || uid > 4294967294 {
+		return nil, ErrFixtureIdentity
+	}
 	w, err := newWorld()
 	if err != nil {
 		return nil, err
@@ -96,7 +99,7 @@ func LinuxFamily() ([]Case, error) {
 	if err != nil {
 		return nil, err
 	}
-	gen := ActiveGeneration{UID: 1000, Generation: "generation-1", RegistrationNumber: 7, MasterEpoch: "epoch-1", Owner: "owner:alexis", Path: "agents/linux-agent"}
+	gen := ActiveGeneration{UID: uid, Generation: "generation-1", RegistrationNumber: 7, MasterEpoch: "epoch-1", Owner: owner, Path: "agents/linux-agent"}
 	attest := func(nb, ex time.Time) ([]byte, string, error) {
 		p, _, err := mugrant.BuildKeymakerAgentAttestation(service.ID, agent.Public, gen.binding(), nb, ex)
 		if err != nil {
@@ -284,7 +287,7 @@ func LinuxFamily() ([]Case, error) {
 		return nil, err
 	}
 	pins := Pins{GrantRoot: w.root.ID, Audience: audience, PublisherKey: w.publisher.ID, Room: room, ReceiverMXID: receiverMXID, SenderMXID: linuxMXID,
-		Owner: "owner:alexis", RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"}, RegistryOwners: map[string]string{},
+		Owner: owner, RoomScope: "swarma-space", Modules: []string{"swarma-keyvault"}, RegistryOwners: map[string]string{},
 		Linux: &LinuxPins{ServiceRoot: service.ID, AgentRevocationKey: agentRev.ID, AgentMXID: linuxMXID, AgentKey: agent.ID, UID: gen.UID, RegistrationNumber: gen.RegistrationNumber}}
 	records := Records{Grants: []string{B64(grant)}, PublisherAttestation: B64(publisherAtt)}
 	registry := func(served map[string][]byte, g ActiveGeneration) *Registry {

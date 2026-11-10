@@ -209,11 +209,11 @@ func TestMUInteropFresh(t *testing.T) {
 	if os.Getenv("MU_INTEROP_FRESH") == "" {
 		t.Skip("diagnostic")
 	}
-	cases, err := muinterop.MacFamily()
+	cases, err := muinterop.MacFamily("owner:fixture-owner")
 	if err != nil {
 		t.Fatal(err)
 	}
-	linux, err := muinterop.LinuxFamily()
+	linux, err := muinterop.LinuxFamily("owner:fixture-owner", 1000)
 	if err != nil {
 		t.Fatal(err)
 	}

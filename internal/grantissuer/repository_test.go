@@ -67,11 +67,11 @@ func issuerFixture(t *testing.T) (*Prepared, *fixtureStore, *keyvault.Manager, [
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := Prepare(unsigned.Payload, public)
+	prepared, err := Prepare(fixtureOwnerConfig(t), unsigned.Payload, public)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1,
+	record := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "fixture-owner", Purpose: "grants-owner-v1", Version: 1,
 		Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone,
 		Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS},
 		Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "fixture", Host: "fixture", Tool: "fixture", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}
@@ -226,7 +226,7 @@ func TestTypedIssuerFailures(t *testing.T) {
 func TestTypedIssuerOwnsInputs(t *testing.T) {
 	_, store, manager, payload, public := issuerFixture(t)
 	raw, pin := bytes.Clone(payload), bytes.Clone(public)
-	p, err := Prepare(raw, pin)
+	p, err := Prepare(fixtureOwnerConfig(t), raw, pin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestTypedIssuerPreparationRefusals(t *testing.T) {
 	_, _, _, payload, public := issuerFixture(t)
 	for _, mode := range []string{"time", "owner", "purpose", "target", "second-cycle", "supersedes", "newline", "wrong-pin"} {
 		t.Run(mode, func(t *testing.T) {
-			if _, err := Prepare(payload, public); err != nil {
+			if _, err := Prepare(fixtureOwnerConfig(t), payload, public); err != nil {
 				t.Fatal("valid neighbor", err)
 			}
 			var object map[string]any
@@ -292,7 +292,7 @@ func TestTypedIssuerPreparationRefusals(t *testing.T) {
 				_, _, _, _, pin = issuerFixture(t)
 			}
 			want := map[string]string{"time": "bad-schema", "owner": "issuer-untrusted", "purpose": "bad-schema", "target": "resource-mismatch", "second-cycle": "schedule-mismatch", "supersedes": "schedule-mismatch", "newline": "bad-encoding", "wrong-pin": "issuer-untrusted"}[mode]
-			if got, err := Prepare(bad, pin); got != nil || err == nil || err.Error() != want {
+			if got, err := Prepare(fixtureOwnerConfig(t), bad, pin); got != nil || err == nil || err.Error() != want {
 				t.Fatalf("invalid typed plan: got %v want %s", err, want)
 			}
 		})

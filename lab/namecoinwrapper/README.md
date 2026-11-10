@@ -85,17 +85,14 @@ Use an ASCII private root: the existing KeyVault configuration grammar rejects
 non-ASCII string bytes rather than repairing or normalizing them.
 
 The local profile retains its existing wire format and repository target.
-`Policy.ExpectedOwner` is independently installed identity policy. An empty
-field preserves the original Alexis owner and original verifier argv. A
-nonempty field sets both enrollment `owner_mxid` and the existing configurable
-verifier's `--owner-mxid` option to exactly that value. The verifier must support
-that option and remain pinned by `CLIHash`. A legacy verifier refuses explicit
-owner configuration. Never derive this field from a certificate, name record,
-request, or public key. For a reverse fixture use `@ivan:example.invalid`, owner name
-`d/ivan-sim`, requester name `d/alexis-agent-sim`, and independently installed
-Alexis-agent subject/audience/cycle and issuance/seal facts. Name strings alone
-do not select the owner. The existing `labcompose` JSON `Policy` object exposes
-this field without another parser or option format.
+`Policy.ExpectedOwner` is required independently installed identity policy.
+Its exact value becomes both enrollment `owner_mxid` and the verifier’s
+`--owner-mxid` option. The verifier must support that option and remain pinned
+by `CLIHash`. Supply the owner independently of the certificate, name record,
+request or public key. The existing `labcompose` JSON `Policy` object carries
+this field. The lab fixture signer likewise requires explicit `--owner-mxid`
+when issuing a certificate. The reverse-direction fixture uses independently
+installed pins, subject, audience, cycle, issuance and seal facts.
 
 Here the labels describe simulated test actors:
 Alexis-sim signs with an ephemeral software P-256 key; Ivan-agent-sim signs the

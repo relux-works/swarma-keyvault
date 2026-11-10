@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/relux-works/swarma-envelope/record"
@@ -233,3 +234,21 @@ var KeyNames = []string{"grant-root", "foreign-grant-root", "mac-agent", "strang
 func recordParse(b []byte) (any, error) { return record.Parse(b, mugrant.MaxEnvelopeBytes, 16) }
 
 func recordCanonical(v any) ([]byte, error) { return record.Canonical(v) }
+
+var ErrFixtureIdentity = errors.New("muinterop: explicit synthetic owner and valid Linux UID required")
+
+// ValidateFixtureOwner admits a narrow synthetic owner identifier for vector
+// generation. The verifier does not derive owner trust from these fixtures.
+func ValidateFixtureOwner(owner string) error {
+	name, ok := strings.CutPrefix(owner, "owner:")
+	if !ok || len(name) < 1 || len(name) > 64 {
+		return ErrFixtureIdentity
+	}
+	for i := range len(name) {
+		c := name[i]
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+			return ErrFixtureIdentity
+		}
+	}
+	return nil
+}

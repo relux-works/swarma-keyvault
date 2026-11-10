@@ -227,7 +227,21 @@ func jsonToken(arg string) (value bool, ok bool) {
 	return *mode, true
 }
 
+// Only the separately signed public-qualification asset sets this linker
+// pin. It cannot create, delete, restore or display any seed.
+var recoveryQualificationOnly string
+
+func qualificationInvocation(args []string) bool {
+	return len(args) == 8 && args[0] == "--json" && args[1] == "nostr" && args[2] == "sign" &&
+		strings.HasSuffix(args[3], "/nostr") && args[4] == "--version" && args[5] == "1" &&
+		args[6] == "--digest" && args[7] == strings.Repeat("0", 64)
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
+	if recoveryQualificationOnly != "" && (recoveryQualificationOnly != "1" || !qualificationInvocation(args)) {
+		return (output{command: "nostr", json: wantsJSON(args), stdout: stdout, stderr: stderr}).fail(usagef("public qualification executable admits only its fixed digest check"))
+	}
+
 	jsonMode := wantsJSON(args)
 	for len(args) > 0 {
 		if _, ok := jsonToken(args[0]); !ok {

@@ -84,7 +84,7 @@ func TestLocalDocking(t *testing.T) {
 			audience := map[string]any{"deployment_id": "fixture", "executor_id": "fixture"}
 			cycle := map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}
 			draft := map[string]any{"audience": audience, "subject": subject, "certificate_id": "docking", "cycles": []any{cycle}, "not_before": start, "expires_at": end, "organization": grants.LocalOrganization, "name": grants.LocalRepository}
-			unsigned, err := grants.PrepareLocalRepositoryCertificate(dockingJSON(t, draft), grants.LocalOwnerMXID, owner.item.SPKI, requester.item.SPKI)
+			unsigned, err := grants.PrepareLocalRepositoryCertificate(dockingJSON(t, draft), dockingOwnerPrincipal, owner.item.SPKI, requester.item.SPKI)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -125,7 +125,7 @@ func TestLocalDocking(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": grants.LocalOwnerMXID, "owner_spki": base64.RawURLEncoding.EncodeToString(owner.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(requester.item.SPKI), "subject": subject, "audience": audience, "cycle": cycle, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": exe}
+			config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": dockingOwnerPrincipal, "owner_spki": base64.RawURLEncoding.EncodeToString(owner.item.SPKI), "requester_spki": base64.RawURLEncoding.EncodeToString(requester.item.SPKI), "subject": subject, "audience": audience, "cycle": cycle, "organization": grants.LocalOrganization, "name": grants.LocalRepository, "state_dir": root, "gh_path": exe}
 			path := filepath.Join(root, "enrollment.json")
 			if err := os.WriteFile(path, dockingJSON(t, config), 0600); err != nil {
 				t.Fatal(err)

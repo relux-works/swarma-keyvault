@@ -170,5 +170,5 @@ Not committed, run by hand against the real code: these known-violation plants e
 - the foreign-journal-signer skips left out of pre-verification recording (the empty-journal positive control still records both pinned snapshots);
 - the consecutive interrupted-attempt bound left out of the file-lock wait (a finite sentinel after the bound exposes the extra attempt; the free-lock and interrupted-then-success controls still acquire the lock).
 
-Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR`) produces fresh
+Regenerating (`go run ./cmd/mu-interop-vectors -out NEW_DIR -owner owner:fixture -linux-uid 1000`) produces fresh
 signatures. The committed files are the contract.

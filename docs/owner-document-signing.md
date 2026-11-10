@@ -8,10 +8,9 @@ signing is authorized by these source tests.
 
 ## Existing key and signature contract
 
-The fixed address is `alexis/grants-owner-v1`, generation **1**, P-256 in Secure
-Enclave, user presence required and extraction `none`. This is intentional
-existing product configuration, not a request to create, enroll or substitute a
-key. The independent, exact SPKI DER pin must match the resolved public key.
+Supply an exact `SERVICE/grants-owner-v1` address and generation. The signing
+key must be P-256 in Secure Enclave, with user presence and extraction `none`.
+The independent exact SPKI DER pin must match the resolved public key.
 A supplied public file establishes neither registry provenance nor ownership.
 
 The signed value is SHA-256 of the **unchanged document bytes**. Output is the
@@ -25,9 +24,9 @@ platform authority and does not select a grantee or draft delegation text.
 Inert syntax for an independently accepted build and public synthetic inputs:
 
 ```text
-swarma-keyvault owner-document review --document FILE --owner-spki-der FILE
-swarma-keyvault owner-document verify --document FILE --owner-spki-der FILE --signature FILE
-swarma-keyvault owner-document sign --document FILE --owner-spki-der FILE
+swarma-keyvault owner-document review --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N
+swarma-keyvault owner-document verify --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N --signature FILE
+swarma-keyvault owner-document sign --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N
 ```
 
 `review` emits explicitly unsigned full text. `verify` is public-only and checks
@@ -73,7 +72,7 @@ store, presence policy, extraction and exact SPKI are checked at that gate.
 
 The existing sibling `mac-keyvault-enclave` helper is launched by its absolute
 path after the existing ownership, regular-file and write-permission checks.
-The complete byte buffer, full digest, fixed key label, actual public point, exact SPKI pin and
+The complete byte buffer, full digest, resolved canonical key label, actual public point, exact SPKI pin and
 exact reason travel over private stdin/stdout pipes. This internal two-stage
 exchange changes no public signature format. Each frame is bounded to 64 KiB;
 the complete interaction is capped at five minutes, without a retry.
@@ -81,7 +80,7 @@ the complete interaction is capped at five minutes, without a retry.
 The Swift helper owns one immutable `DocumentPlan` in one process:
 
 1. It independently admits the complete UTF-8 buffer, recomputes its SHA-256,
-   validates the exact fixed label/reason and checks that the blob's public point and exact DER SPKI
+   validates the canonical label and reason derived from that label and checks that the blob's public point and exact DER SPKI
    match the displayed identity. This is public inspection, with no signing
    probe or presence prompt before review.
 2. AppKit presents all admitted bytes as plain, noneditable text inside a

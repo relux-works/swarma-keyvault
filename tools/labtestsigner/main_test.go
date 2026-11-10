@@ -51,8 +51,8 @@ func TestExpectedOwnerSigner(t *testing.T) {
 		return bytes.Clone(out.Bytes())
 	}
 	for _, identity := range []struct{ owner, subject string }{
-		{grants.LocalOwnerMXID, "@ivan-agent:example.invalid"},
-		{"@ivan:example.invalid", "@alexis-agent:example.invalid"},
+		{fixtureOwnerPrincipal, "@agent-south:example.invalid"},
+		{"@owner-south:example.invalid", "@agent-north:example.invalid"},
 	} {
 		t.Run(identity.owner, func(t *testing.T) {
 			draft := map[string]any{"certificate_id": "lab-owner-control", "subject": map[string]any{"account_mxid": identity.subject, "device_id": "LAB-AGENT"}, "audience": map[string]any{"deployment_id": "lab-thin-slice", "executor_id": "lab-verify-only"}, "cycles": []any{map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}}, "not_before": "2026-11-07T14:00:00Z", "expires_at": "2026-11-09T14:00:00Z", "organization": grants.LocalOrganization, "name": grants.LocalRepository}
@@ -88,18 +88,18 @@ func TestExpectedOwnerSigner(t *testing.T) {
 				}
 			}
 			positive("explicit-owner-positive", explicit)
-			if identity.owner == grants.LocalOwnerMXID {
-				positive("omitted-Alexis-default", base)
-			} else {
-				check(t, "mirror-omission", base, 1, "issuer-untrusted")
-			}
+			check(t, "missing-explicit-owner", base, 2, "")
 			// An absent key makes reaching key loading observable in diagnostics.
 			preflight := append([]string(nil), explicit...)
 			preflight[6] = filepath.Join(custody, "ABSENT.pk8")
-			for _, value := range []string{"@other:example.invalid", "invalid", "@ivan:", "@ivan:bad host", "@ivan:example.invalid\n", strings.Repeat("x", 513)} {
+			for _, value := range []string{"@other:example.invalid", "invalid", "@owner-south:", "@owner-south:bad host", "@owner-south:example.invalid\n", strings.Repeat("x", 513)} {
 				args := append([]string(nil), preflight...)
 				args[len(args)-1] = value
-				check(t, "wrong-or-malformed-owner-before-key", args, 1, "issuer-untrusted")
+				if value == "@other:example.invalid" {
+					check(t, "wrong-owner-before-key", args, 1, "issuer-untrusted")
+				} else {
+					check(t, "malformed-owner-before-key", args, 2, "")
+				}
 			}
 			for _, option := range [][]string{{"--owner-mxid="}, {"--owner-mxid", ""}, {"--owner-mxid"}, {"--owner-mxid", identity.owner, "--owner-mxid=" + identity.owner}, {"-owner-mxid", identity.owner, "--owner-mxid", identity.owner}, {"--owner-mxid=" + identity.owner, "-owner-mxid=" + identity.owner}} {
 				check(t, "empty-missing-or-duplicate-owner", append(append([]string(nil), base...), option...), 2, "")
@@ -239,12 +239,12 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	const at = "2026-11-07T14:00:00Z"
 	const certDomain = "swarma-grants/local-certificate/1"
 	const reqDomain = "swarma-grants/local-request/2"
-	subject := map[string]any{"account_mxid": "@ivan-agent:example.invalid", "device_id": "LAB-IVAN-AGENT"}
+	subject := map[string]any{"account_mxid": "@agent-south:example.invalid", "device_id": "LAB-IVAN-AGENT"}
 	audience := map[string]any{"deployment_id": "lab-thin-slice", "executor_id": "lab-verify-only"}
 	cycle := map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}
 	draft := map[string]any{"certificate_id": "lab-alexis-to-ivan-agent", "subject": subject, "audience": audience, "cycles": []any{cycle}, "not_before": at, "expires_at": "2026-11-09T14:00:00Z", "organization": "relux-works", "name": "matrix-grants-poc-261031"}
 	request := map[string]any{"type": "grants-local-operation-1", "request_id": "lab-request-create", "certificate_id": draft["certificate_id"], "entry_id": "repo-create", "cycle_id": "codex-dm", "operation_use_id": "codex-dm/create", "subject": subject, "audience": audience, "action": "repository.create", "target": map[string]any{"organization": "relux-works", "name": "matrix-grants-poc-261031", "visibility": "private"}, "expires_at": "2026-11-08T14:00:00Z"}
-	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": "@alexis:gr.relux.works", "owner_spki": base64.RawURLEncoding.EncodeToString(ownerDER), "requester_spki": base64.RawURLEncoding.EncodeToString(requesterDER), "subject": subject, "audience": audience, "cycle": cycle, "organization": "relux-works", "name": "matrix-grants-poc-261031", "state_dir": "/inert-lab/ABSENT-STATE", "gh_path": "/inert-lab/ABSENT-PROVIDER"}
+	config := map[string]any{"type": "grants-local-enrollment-2", "owner_mxid": fixtureOwnerPrincipal, "owner_spki": base64.RawURLEncoding.EncodeToString(ownerDER), "requester_spki": base64.RawURLEncoding.EncodeToString(requesterDER), "subject": subject, "audience": audience, "cycle": cycle, "organization": "relux-works", "name": "matrix-grants-poc-261031", "state_dir": "/inert-lab/ABSENT-STATE", "gh_path": "/inert-lab/ABSENT-PROVIDER"}
 	records := []map[string]any{}
 	invoke := func(label, binary string, args []string, want int, contains string) ([]byte, []byte) {
 		t.Helper()
@@ -273,7 +273,7 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	}
 	draftPath, payloadPath, requestPayloadPath := filepath.Join(root, "draft.json"), filepath.Join(root, "prepared.json"), filepath.Join(root, "operation.json")
 	save(t, draftPath, jsonBytes(t, draft))
-	prepared, review := invoke("local-prepare", kv, []string{"grants", "local-prepare", "--plan", draftPath, "--owner-mxid", "@alexis:gr.relux.works", "--issuer-spki-der", ownerFile, "--requester-spki-der", requesterFile}, 0, "SHA256(domain + LF + exact payload)")
+	prepared, review := invoke("local-prepare", kv, []string{"grants", "local-prepare", "--plan", draftPath, "--owner-mxid", fixtureOwnerPrincipal, "--issuer-spki-der", ownerFile, "--requester-spki-der", requesterFile}, 0, "SHA256(domain + LF + exact payload)")
 	save(t, payloadPath, prepared)
 	match := regexp.MustCompile(`SHA256\(domain \+ LF \+ exact payload\): ([0-9a-f]{64})`).FindSubmatch(review)
 	if len(match) != 2 {
@@ -283,7 +283,7 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	if certDigest != digestFor(certDomain, prepared) {
 		t.Fatal("CLI exact digest disagreement")
 	}
-	certArgs := []string{"certificate", "--payload", payloadPath, "--digest", certDigest, "--key", ownerKey, "--owner-spki", ownerFile, "--requester-spki", requesterFile}
+	certArgs := []string{"certificate", "--owner-mxid", fixtureOwnerPrincipal, "--payload", payloadPath, "--digest", certDigest, "--key", ownerKey, "--owner-spki", ownerFile, "--requester-spki", requesterFile}
 	certificate, _ := invoke("sign-prepared-certificate", tool, certArgs, 0, "")
 	requestRaw := jsonBytes(t, request)
 	save(t, requestPayloadPath, requestRaw)

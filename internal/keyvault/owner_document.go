@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 // DocumentBinding travels only over private helper pipes. It is not a signature
@@ -42,8 +44,12 @@ type ownerDocumentSigner interface {
 	signOwnerDocument(context.Context, Key, []byte, []byte, func() error) ([]byte, error)
 }
 
-func documentReason(digest []byte) string {
-	return "mac-keyvault: sign exact UTF-8 document SHA256 " + hex.EncodeToString(digest) + " with alexis/grants-owner-v1 v1"
+func validateDocumentAddress(addr Address) error {
+	return ownerkey.ValidateAddress(addr)
+}
+
+func documentReason(digest []byte, keyDisplay string) string {
+	return "mac-keyvault: sign exact UTF-8 document SHA256 " + hex.EncodeToString(digest) + " with " + keyDisplay
 }
 
 func cloneDocument(a DocumentBinding) DocumentBinding {
@@ -69,8 +75,9 @@ func (s *EnclaveStore) signOwnerDocument(ctx context.Context, key Key, digest, d
 	if err := s.usable(); err != nil {
 		return nil, err
 	}
-	fixed := Address{Kind: KindKey, Service: "alexis", Purpose: "grants-owner-v1", Version: 1}
-	if key.Label != fixed.Label() || key.Record.Label() != key.Label || key.Record.Store != StoreEnclave || !key.Record.UserPresence || key.Record.Extraction != ExtractionNone || s.NonInteractive {
+	address, parsed := ParseLabel(key.Label)
+	display, displayErr := ownerkey.Display(address)
+	if !parsed || displayErr != nil || key.Label != address.Label() || key.Record.Label() != key.Label || key.Record.Store != StoreEnclave || !key.Record.UserPresence || key.Record.Extraction != ExtractionNone || s.NonInteractive {
 		return nil, errors.New("owner document: wrong key policy or noninteractive route")
 	}
 	sum := sha256.Sum256(document)
@@ -93,7 +100,7 @@ func (s *EnclaveStore) signOwnerDocument(ctx context.Context, key Key, digest, d
 	if err != nil || !bytes.Equal(public, key.SPKI) {
 		return nil, errors.New("owner document: stored public key changed")
 	}
-	binding := DocumentBinding{Document: bytes.Clone(document), Digest: bytes.Clone(digest), Point: bytes.Clone(file.Point), SPKI: bytes.Clone(public), Label: key.Label, Reason: documentReason(digest)}
+	binding := DocumentBinding{Document: bytes.Clone(document), Digest: bytes.Clone(digest), Point: bytes.Clone(file.Point), SPKI: bytes.Clone(public), Label: key.Label, Reason: documentReason(digest, display)}
 	requestBinding := cloneDocument(binding)
 	req := EnclaveRequest{Op: "review-document", Blob: bytes.Clone(file.Blob), Presence: enclavePresenceRequired, Document: &requestBinding}
 	confirmed := false
