@@ -70,7 +70,7 @@ fails; they are not optional skips.
 Run the fake-backed suite through its inherited confinement wrapper:
 
 ```sh
-MAC_KEYVAULT_SKIP_KEYCHAIN=1 scripts/keyvault-test-confined.sh -race -count=1 -timeout=30m -v ./...
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=0 scripts/keyvault-test-confined.sh -p 2 -race -count=1 -timeout=30m -v ./...
 ```
 
 The wrapper applies confinement before native startup. Real Keychain, owner
@@ -79,6 +79,23 @@ public-certificate tests can prove a trust refusal, not a native positive match.
 Required native certificate qualification and its limits are described in
 [the KEK contract](docs/kek.md). Test/build logs and scratch belong under `.temp/`.
 The native-input allowlist is a review tripwire; it does not replace confinement.
+
+The default suite skips the recovery tests that build and execute a helper or
+verify its code signature. For a macOS code-identity check, run this opt-in
+suite by itself with the cgo toolchain and the same confinement:
+
+```sh
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 scripts/keyvault-test-confined.sh -p 1 -parallel 1 -count=1 -timeout=15m -v ./internal/keyvault -run '^(TestRecoveryCodesign.*|TestRecoveryPrivateHelperFramingAndAdmission|TestRecoveryActualChildCodeBoundary)$'
+```
+
+The test process holds one host-wide lock across checkouts and refuses a second
+opt-in process before building a fixture. It builds one public helper and keeps
+the executable copies in one run directory under the system temporary directory.
+It removes that directory once after the tests finish. An interrupted run leaves
+its fixture tree for inspection. The lock file stays in place for later runs;
+do not delete it while a test may be running. The opt-in suite checks the default
+skip and the second-process refusal using the same test executable. It does not
+operate on installed keys or binaries.
 
 For the recovery interface, build the hardened ad-hoc signed vault/helper pair
 from a clean committed checkout with

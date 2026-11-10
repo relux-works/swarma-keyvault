@@ -26,6 +26,10 @@ profile publishing is outside this skill.
 
 ## Execution boundary
 
+Recovery executable and code-identity fixtures are opt-in. Use the
+[confined serial test lane](references/validation-recovery.md#recovery-code-identity-test-lane)
+only for authorized public code verification.
+
 **OWNER-SITTING:** all signing and owner-presence flows require the selected
 owner-led sitting. Explain the exact typed action, target, key generation,
 independent public pin and expected digest/presence prompt before handing off.

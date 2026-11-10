@@ -43,6 +43,23 @@ allowlist do not by themselves prove confinement from native startup. Do not
 unset a safety gate to rescue a failed run or call setup-unavailable a pass.
 No build, Go test, fixture generator or runtime probe is prescribed here.
 
+## Recovery code identity test lane
+
+The default confined suite skips tests that build/execute the recovery helper
+or check its code identity. When explicitly qualifying those public fixtures on
+macOS, select the dedicated package and keep the suite serial:
+
+```sh
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 scripts/keyvault-test-confined.sh -p 1 -parallel 1 -count=1 -timeout=15m -v ./internal/keyvault -run '^(TestRecoveryCodesign.*|TestRecoveryPrivateHelperFramingAndAdmission|TestRecoveryActualChildCodeBoundary)$'
+```
+
+Run this suite alone, with cgo and confinement. The test process takes a fixed
+host-wide lock before fixture creation. A second opt-in process refuses visibly.
+One shared fixture tree is removed after the entire run; interrupted runs leave
+the tree intact. The tests retain the hardened positive and no-runtime,
+wrong-hash and debug-entitlement refusals. They do not exercise installed
+custody, owner presence, or production signing. Record logs in ignored `.temp/`.
+
 ## Refusal and uncertainty
 
 On unavailable/denied presence, fingerprint mismatch, missing helper,

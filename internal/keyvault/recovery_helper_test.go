@@ -3,6 +3,7 @@ package keyvault
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +15,23 @@ import (
 
 func recoveryBuildPipeFixture(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "pass")
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", path, "./testdata/recovery/helper")
-	if raw, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("public fixture build failed: %v, %s", err, raw)
+	lane := requireRecoveryTestLane(t)
+	lane.buildOnce.Do(func() {
+		dir, err := os.MkdirTemp(lane.root, "base-")
+		if err != nil {
+			lane.buildErr = err
+			return
+		}
+		lane.fixture = filepath.Join(dir, "pass")
+		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", lane.fixture, "./testdata/recovery/helper")
+		if raw, err := cmd.CombinedOutput(); err != nil {
+			lane.buildErr = fmt.Errorf("public fixture build failed: %w, %s", err, raw)
+		}
+	})
+	if lane.buildErr != nil {
+		t.Fatal(lane.buildErr)
 	}
-	return path
+	return lane.fixture
 }
 
 // The exact emitted wrap object is admitted for both policies. Omitted false,
@@ -59,10 +71,11 @@ func TestRecoveryPrivateWrapResponseSchema(t *testing.T) {
 // A failed child admission occurs before the fixture receives any request.
 func TestRecoveryPrivateHelperFramingAndAdmission(t *testing.T) {
 	fixture := recoveryBuildPipeFixture(t)
+	root := recoveryFixtureDirectory(t, "framing")
 	verify := func(int, []byte) error { return nil }
 	for _, mode := range []string{"pass", "truncated", "extra", "bad-exit", "oversized", "refusal", "hang", "denied"} {
 		t.Run(mode, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), mode)
+			path := filepath.Join(root, mode)
 			data, err := os.ReadFile(fixture)
 			if err != nil {
 				t.Fatal(err)
