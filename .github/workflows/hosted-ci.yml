@@ -208,10 +208,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - name: Set up Go from go.mod
+      - name: Set up the shared diagnostic Go toolchain
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version-file: go.mod
+          go-version: '1.26.10'
           cache: false
       - name: Check out setup from the immutable workflow source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -259,6 +259,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          go version
+          test "$(go env GOVERSION)" = go1.26.10
           test "$(git -C .diagnostic-a rev-parse HEAD)" = fcaf645a6efce742a9778202873d8a7be69f172b
           test "$(git -C .diagnostic-b rev-parse HEAD)" = 82886f1d90e3136e1708699036f7990d12385cb2
           test -z "$(git -C .diagnostic-a status --porcelain)"

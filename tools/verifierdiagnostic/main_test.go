@@ -267,6 +267,16 @@ type brokenWriter struct{}
 func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("fixture output failure") }
 
 func TestMain(m *testing.M) {
+	if version := os.Getenv("VERIFIER_DIAG_GO_VERSION_FIXTURE"); version != "" {
+		if len(os.Args) != 3 || os.Args[1] != "env" || os.Args[2] != "GOVERSION" {
+			os.Exit(64)
+		}
+		if err := os.WriteFile(os.Getenv("VERIFIER_DIAG_GO_CALL_FIXTURE"), []byte("env GOVERSION\n"), 0600); err != nil {
+			os.Exit(65)
+		}
+		fmt.Fprintln(os.Stdout, version)
+		os.Exit(0)
+	}
 	if os.Getenv("VERIFIER_DIAG_SUPERVISOR_FIXTURE") == "1" {
 		args := os.Args[1:]
 		if len(args) != 5 || args[0] != "--timeout=5m" || !strings.HasPrefix(args[1], "--report=") || args[2] != "--" || args[3] != "bash" || args[4] != "scripts/verifier-latency-confined.sh" {

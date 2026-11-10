@@ -7,7 +7,8 @@ separately and apply the independently inspected instrumentation patches.
 Instrumentation does not move product work, remove durability or alter the
 40-attempt-per-path, real-clock, 100 ms fence or timing criteria.
 
-Build with Go 1.26.10:
+The hosted job explicitly selects Go 1.26.10 and checks the selected SDK before
+source preparation. Build with Go 1.26.10:
 
 ```sh
 go test -race -count=1 ./tools/verifierdiagnostic
