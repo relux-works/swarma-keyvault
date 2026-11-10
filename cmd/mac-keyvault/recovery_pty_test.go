@@ -153,9 +153,11 @@ func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
 			cmd.Stderr = &stderr
+			// Detach even the missing-TTY control from the caller's terminal.
+			cmd.SysProcAttr = recoveryPTYAttributes(false)
 			if mode != "no-tty" {
 				cmd.Stdin = slave
-				cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
+				cmd.SysProcAttr = recoveryPTYAttributes(true)
 			}
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
@@ -265,5 +267,118 @@ func TestRecoveryPTYOwnerFlowAndRefusals(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func recoveryPTYAttributes(withTTY bool) *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{Setsid: true, Setctty: withTTY, Ctty: 0}
+}
+
+// All terminals here are disposable fixtures. Detaching the no-TTY child must
+// deny /dev/tty even when its immediate parent has a controlling terminal;
+// omitting that detach must expose this specific fixture, proving the control.
+func TestRecoveryTTYIsolationRegression(t *testing.T) {
+	mode := os.Getenv("RECOVERY_TTY_ISOLATION")
+	if mode == "probe" {
+		f, err := os.OpenFile("/dev/tty", os.O_RDWR|syscall.O_NOCTTY, 0)
+		if err != nil {
+			if !errors.Is(err, syscall.ENXIO) && !errors.Is(err, syscall.ENODEV) && !errors.Is(err, syscall.ENOENT) {
+				t.Fatal("unexpected terminal-open failure")
+			}
+			fmt.Println("fixture_controlling_tty=false")
+			return
+		}
+		defer f.Close()
+		foreground, err := unix.IoctlGetInt(int(f.Fd()), unix.TIOCGPGRP)
+		if err != nil || foreground != unix.Getpgrp() {
+			t.Fatal("probe did not reach its foreground fixture")
+		}
+		fmt.Println("fixture_controlling_tty=true")
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := func(childMode string) *exec.Cmd {
+		cmd := exec.Command(exe, "-test.run=^TestRecoveryTTYIsolationRegression$", "-test.count=1")
+		cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + os.Getenv("HOME"), "MAC_KEYVAULT_SKIP_KEYCHAIN=1", "RECOVERY_TTY_ISOLATION=" + childMode}
+		return cmd
+	}
+	if mode == "" {
+		_, slave := recoveryTestPTY(t)
+		cmd := command("parent")
+		cmd.Stdin = slave
+		cmd.SysProcAttr = recoveryPTYAttributes(true)
+		if data, err := recoveryRunFixtureCommand(cmd); err != nil {
+			t.Fatalf("isolated parent failed: %v; %s", err, data)
+		} else {
+			t.Logf("isolated parent evidence:\n%s", data)
+		}
+		return
+	}
+	if mode != "parent" {
+		t.Fatal("unknown fixture mode")
+	}
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR|syscall.O_NOCTTY, 0)
+	if err != nil {
+		t.Fatal("fixture parent has no controlling terminal")
+	}
+	ttyGroup, first := unix.IoctlGetInt(int(f.Fd()), unix.TIOCGPGRP)
+	stdinGroup, second := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+	_ = f.Close()
+	if first != nil || second != nil || ttyGroup != unix.Getpgrp() || stdinGroup != ttyGroup {
+		t.Fatal("parent terminal is not its assigned disposable fixture")
+	}
+	for _, control := range []struct {
+		name       string
+		attributes *syscall.SysProcAttr
+		present    bool
+	}{
+		{"detached", recoveryPTYAttributes(false), false},
+		{"omitted-setsid-control", nil, true},
+		{"enabled-tty-sibling", recoveryPTYAttributes(true), true},
+	} {
+		t.Run(control.name, func(t *testing.T) {
+			cmd := command("probe")
+			cmd.SysProcAttr = control.attributes
+			if control.name == "enabled-tty-sibling" {
+				_, slave := recoveryTestPTY(t)
+				cmd.Stdin = slave
+			}
+			data, err := recoveryRunFixtureCommand(cmd)
+			if err != nil || !bytes.Contains(data, []byte(fmt.Sprintf("fixture_controlling_tty=%t", control.present))) {
+				t.Fatalf("wrong terminal-control outcome: %v; %s", err, data)
+			}
+		})
+	}
+	// Exercise the actual missing-TTY CLI from that same terminal-owning parent.
+	cmd := exec.Command(exe, "-test.run=^TestRecoveryPTYChild$", "-test.count=1")
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + os.Getenv("HOME"), "MAC_KEYVAULT_SKIP_KEYCHAIN=1", "RECOVERY_PTY_FIXTURE=no-tty"}
+	cmd.SysProcAttr = recoveryPTYAttributes(false)
+	data, err := recoveryRunFixtureCommand(cmd)
+	if err != nil || !bytes.Contains(data, []byte("owner foreground controlling terminal unavailable")) || !bytes.Contains(data, []byte("fixture_stores=0")) {
+		t.Fatalf("missing-TTY CLI did not refuse before storage: %v; %s", err, data)
+	}
+	if recoveryFixtureLeak(string(data)) != nil {
+		t.Fatal("missing-TTY CLI leaked a fixture word")
+	}
+}
+
+func recoveryRunFixtureCommand(cmd *exec.Cmd) ([]byte, error) {
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return output.Bytes(), err
+	case <-time.After(15 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		return output.Bytes(), errors.New("isolated fixture timeout")
 	}
 }
