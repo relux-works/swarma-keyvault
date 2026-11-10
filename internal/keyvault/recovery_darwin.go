@@ -58,14 +58,9 @@ func (*NostrSecurityStore) RecoveryStore(r RecoveryRecord, encrypted []byte) err
 	tag := C.CString(string(metadata))
 	defer C.free(unsafe.Pointer(account))
 	defer C.free(unsafe.Pointer(tag))
-	status := int(C.MacKeyVaultRecoveryCreate(account, tag, (*C.uchar)(unsafe.Pointer(&encrypted[0])), C.size_t(len(encrypted))))
-	if status == -25299 {
-		return &RecoveryNotAppliedError{Err: recoveryRefuse("duplicate")}
-	}
-	if status != 0 {
-		return &StatusError{Op: "recovery create", Status: status}
-	}
-	return nil
+	var attempted C.int
+	status := int(C.MacKeyVaultRecoveryCreate(account, tag, (*C.uchar)(unsafe.Pointer(&encrypted[0])), C.size_t(len(encrypted)), &attempted))
+	return recoveryNativeMutationError("recovery create", status, attempted != 0)
 }
 
 func recoveryNativeRead(r RecoveryRecord) (recoveryCiphertext, error) {
@@ -114,11 +109,9 @@ func recoveryNativeDelete(accountText string, metadata []byte) error {
 	tag := C.CString(string(metadata))
 	defer C.free(unsafe.Pointer(account))
 	defer C.free(unsafe.Pointer(tag))
-	status := int(C.MacKeyVaultNostrDelete(account, tag))
-	if status != 0 {
-		return &StatusError{Op: "exact item deletion", Status: status}
-	}
-	return nil
+	var attempted C.int
+	status := int(C.MacKeyVaultNostrDelete(account, tag, &attempted))
+	return recoveryNativeMutationError("exact item deletion", status, attempted != 0)
 }
 
 func (s *NostrSecurityStore) signRecovery(record NostrRecord, digest []byte) ([]byte, error) {

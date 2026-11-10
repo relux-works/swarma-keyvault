@@ -27,9 +27,9 @@ int MacKeyVaultDisableUI(void);
 int MacKeyVaultNostrCreate(const char *account, const char *metadata, const unsigned char *secret);
 int MacKeyVaultNostrList(char **out, size_t *outLen);
 int MacKeyVaultNostrRead(const char *account, const char *metadata, unsigned char *secret);
-int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *data, size_t length);
+int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *data, size_t length, int *mutationAttempted);
 int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned char **out, size_t *length);
-int MacKeyVaultNostrDelete(const char *account, const char *metadata);
+int MacKeyVaultNostrDelete(const char *account, const char *metadata, int *mutationAttempted);
 int MacKeyVaultRecoveryCode(int pid, const unsigned char *expectedHash, size_t hashLength);
 
 #endif

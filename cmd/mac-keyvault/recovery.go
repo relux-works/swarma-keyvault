@@ -7,6 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
@@ -136,6 +139,14 @@ func recoveryMutationReceipt(out output, operation string, reference keyvault.Re
 		b = append(b, '\n')
 	} else {
 		b = []byte(text)
+	}
+	// Go otherwise terminates on SIGPIPE for fd1/fd2 before returning EPIPE.
+	// Keep the handler through the fallback diagnostic, then release only our
+	// subscription. Preserve an already ignored signal or other subscribers.
+	if !signal.Ignored(syscall.SIGPIPE) {
+		broken := make(chan os.Signal, 1)
+		signal.Notify(broken, syscall.SIGPIPE)
+		defer signal.Stop(broken)
 	}
 	n, writeErr := out.stdout.Write(b)
 	if writeErr != nil || n != len(b) {

@@ -38,3 +38,20 @@ func recoveryMutationError(operation string, r RecoveryRecord, err error) error 
 	// sensitive details and cannot establish whether the mutation took effect.
 	return &RecoveryOutcomeUnknown{Outcome: "unknown", Operation: operation, Reference: r}
 }
+
+// Native phase comes from the synchronous bridge, which sets it immediately
+// before the sole add/delete call. Status alone cannot prove a failed effect.
+func recoveryNativeMutationError(op string, status int, attempted bool) error {
+	if status == 0 {
+		return nil
+	}
+	var err error = &StatusError{Op: op, Status: status}
+	duplicate := op == "recovery create" && status == -25299
+	if duplicate {
+		err = recoveryRefuse("duplicate")
+	}
+	if !attempted || duplicate {
+		return &RecoveryNotAppliedError{Err: err}
+	}
+	return err
+}

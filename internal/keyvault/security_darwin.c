@@ -600,7 +600,9 @@ int MacKeyVaultNostrCreate(const char *account, const char *metadata, const unsi
     return (int)status;
 }
 
-int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *secret, size_t length) {
+int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *secret, size_t length, int *mutationAttempted) {
+    if (mutationAttempted == NULL) return errSecParam;
+    *mutationAttempted = 0;
     if (length == 0 || length > 65536 || strlen(metadata) > 32768) return errSecParam;
     OSStatus status = MacKeyVaultRecoveryCode(0, NULL, 0);
     if (status != errSecSuccess) return (int)status;
@@ -621,6 +623,8 @@ int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const u
         CFDictionarySetValue(query, kSecAttrAccess, access);
         CFDictionarySetValue(query, kSecValueData, data);
         // SecItemAdd is atomic and never updates an existing account.
+        // All earlier failures are definite no-effect, including code admission.
+        *mutationAttempted = 1;
         status = SecItemAdd(query, NULL);
         CFRelease(accountString); CFRelease(metadataString); CFRelease(data);
         CFRelease(access);
@@ -745,7 +749,9 @@ int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned 
 
 // Exact public metadata pins removal. OS delete authorization is separate from
 // decrypt authorization; removal never retrieves the old private value.
-int MacKeyVaultNostrDelete(const char *account, const char *metadata) {
+int MacKeyVaultNostrDelete(const char *account, const char *metadata, int *mutationAttempted) {
+    if (mutationAttempted == NULL) return errSecParam;
+    *mutationAttempted = 0;
     OSStatus status = MacKeyVaultNostrSignedSelf();
     if (status != errSecSuccess) return status;
     CFMutableDictionaryRef query = NULL; SecKeychainRef keychain = NULL;
@@ -759,6 +765,7 @@ int MacKeyVaultNostrDelete(const char *account, const char *metadata) {
     status = SecItemCopyMatching(query, &item);
     CFRelease(name); CFRelease(comment); CFRelease(query); CFRelease(keychain);
     if (status != errSecSuccess) return status;
+    *mutationAttempted = 1;
     status = SecKeychainItemDelete((SecKeychainItemRef)item);
     CFRelease(item); return status;
 }

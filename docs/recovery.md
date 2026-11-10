@@ -91,8 +91,12 @@ the process returns exit 1 and `recovery_outcome_unknown` when the native
 mutation cannot be confirmed. In JSON, `ok=false` and that error accompany
 `result={outcome:"unknown",operation:"generate"|"restore"|"delete",reference:PUBLIC_RECORD}`.
 The reference is explicitly UNCONFIRMED, not proof of creation or deletion.
-Definite pre-effect and duplicate refusals remain distinct. Failed or short
+Definite pre-effect and duplicate refusals remain distinct. The native bridge
+marks the actual mutation-call boundary, so a code-policy refusal before any
+Keychain query cannot be mistaken for an uncertain write. Failed or short
 receipt writes also return exit 1 and attempt one bounded public diagnostic.
+Mutation output handles SIGPIPE so a closed stdout pipe returns EPIPE and
+reaches that diagnostic when stderr remains available.
 If either output channel is lost, retain UNKNOWN. Reconcile the public reference;
 do not automatically retry or delete. Several removals are separate
 effects, not a transaction. Retained retired keys are not an active identity.

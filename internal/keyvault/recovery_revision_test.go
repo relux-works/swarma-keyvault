@@ -302,3 +302,40 @@ func TestRecoveryAtomicAddDuplicateNoEffect(t *testing.T) {
 		t.Fatal("definite duplicate became uncertain or changed state")
 	}
 }
+
+// Native phase, not an auth-status denylist, distinguishes a definite pre-call
+// refusal from the same status after mutation invocation. Success and atomic
+// duplicate controls constrain both verdict directions without native custody.
+func TestRecoveryNativeMutationPhase(t *testing.T) {
+	for _, op := range []string{"recovery create", "exact item deletion"} {
+		for _, status := range []int{-25293, -25291} {
+			for _, attempted := range []bool{false, true} {
+				err := recoveryNativeMutationError(op, status, attempted)
+				var noEffect *RecoveryNotAppliedError
+				if errors.As(err, &noEffect) == attempted {
+					t.Fatal("native phase lost")
+				}
+				mapped := recoveryMutationError("generate", RecoveryRecord{}, err)
+				var unknown *RecoveryOutcomeUnknown
+				if errors.As(mapped, &unknown) != attempted {
+					t.Fatal("status alone changed uncertainty")
+				}
+				if !attempted {
+					c := ClassifyError(mapped)
+					if c.Status != status || c.Code == RecoveryOutcomeUnknownCode {
+						t.Fatal("pre-call refusal changed status/class")
+					}
+				}
+			}
+		}
+	}
+	if err := recoveryNativeMutationError("recovery create", 0, true); err != nil {
+		t.Fatal("successful add refused")
+	}
+	err := recoveryNativeMutationError("recovery create", -25299, true)
+	recoveryCode(t, err, "duplicate")
+	var noEffect *RecoveryNotAppliedError
+	if !errors.As(err, &noEffect) {
+		t.Fatal("atomic duplicate lost definite no-effect")
+	}
+}
