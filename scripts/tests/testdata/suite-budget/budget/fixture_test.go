@@ -3,10 +3,7 @@
 package budget
 
 import (
-	"bytes"
 	"encoding/json"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -95,10 +92,8 @@ func TestHostedDeadlineResult(t *testing.T) {
 			t.Error(err)
 		}
 		raw, err := os.ReadFile(filepath.Join(root, phase+"-result.json"))
-		var result runnerResult
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		if err != nil || decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF {
+		result, decodeErr := readResult(raw)
+		if err != nil || decodeErr != nil {
 			t.Error("missing strict actual supervisor result")
 		} else if err := validateResult(result, phase); err != nil {
 			t.Error(err)
@@ -141,59 +136,6 @@ func TestHostedDeadlineResult(t *testing.T) {
 			}
 		}
 	}
-}
-
-type runnerResult struct {
-	Reason         string   `json:"reason"`
-	Cause          string   `json:"cause"`
-	ExitCode       int      `json:"exit_code"`
-	RootExit       int      `json:"root_exit"`
-	Reaped         bool     `json:"reaped"`
-	ElapsedNS      int64    `json:"elapsed_ns"`
-	FirstSignal    string   `json:"first_signal"`
-	ObservedCauses []string `json:"observed_causes"`
-}
-
-func validateResult(r runnerResult, phase string) error {
-	seen := make(map[string]bool)
-	first := ""
-	for _, cause := range r.ObservedCauses {
-		switch cause {
-		case "success", "exit", "deadline", "canceled", "SIGINT", "SIGTERM":
-		default:
-			return errors.New("unexpected observed cause")
-		}
-		if seen[cause] {
-			return errors.New("duplicate observed cause")
-		}
-		seen[cause] = true
-		if first == "" && (cause == "SIGINT" || cause == "SIGTERM") {
-			first = cause
-		}
-	}
-	if first != r.FirstSignal || !seen[r.Cause] || !r.Reaped || r.Cause != r.Reason {
-		return errors.New("supervisor did not establish ECHILD")
-	}
-	switch phase {
-	case "positive":
-		if r.FirstSignal != "" || seen["SIGINT"] || seen["SIGTERM"] || seen["canceled"] || seen["deadline"] || seen["exit"] {
-			return errors.New("unexpected healthy trigger")
-		}
-		if r.Reason != "success" || r.ExitCode != 0 || r.RootExit != 0 || r.ElapsedNS < int64(3*work) || r.ElapsedNS >= int64(2*time.Minute) {
-			return errors.New("healthy supervisor control did not complete")
-		}
-	case "deadline":
-		if r.FirstSignal != "" || seen["SIGINT"] || seen["SIGTERM"] || r.RootExit != -1 || !seen["exit"] || r.Reason != "deadline" || r.ExitCode != 124 || r.ElapsedNS < int64(time.Minute) || r.ElapsedNS >= int64(time.Minute+5*time.Second) {
-			return errors.New("supervisor own deadline did not fire and clean within its bound")
-		}
-	case "native":
-		if (r.FirstSignal != "SIGINT" && r.FirstSignal != "SIGTERM") || !seen[r.FirstSignal] || r.RootExit != -1 || !seen["exit"] || r.Reason != "canceled" || r.ExitCode != 130 || r.ElapsedNS < int64(59*time.Second) || r.ElapsedNS >= int64(90*time.Second) {
-			return errors.New("native cancellation did not reach the supervisor")
-		}
-	default:
-		return errors.New("unknown supervisor phase")
-	}
-	return nil
 }
 
 // Correct own-deadline and native-signal results have separate causes. Generic
