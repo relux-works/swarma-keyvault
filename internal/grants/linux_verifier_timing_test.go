@@ -84,7 +84,7 @@ func TestLinuxRealVerifierP95(t *testing.T) {
 				if !dispatchDeadline.IsZero() {
 					deadlineOffset = dispatchDeadline.Sub(trace.start).Nanoseconds()
 				}
-				t.Logf("outcome=%v effect_calls=%d effect_entries=%d dispatch_timely=%t dispatch_context_error=%v dispatch_offset_ns=%d dispatch_deadline_offset_ns=%d phases=%+v", out, g.calls, effectCalls, timelyDispatch, dispatchContextErr, dispatchOffset, deadlineOffset, r.phases)
+				t.Logf("%s effect_calls=%d effect_entries=%d dispatch_timely=%t dispatch_context_error=%v dispatch_offset_ns=%d dispatch_deadline_offset_ns=%d phases=%+v", linuxVerifierOutcomeTelemetry(out), g.calls, effectCalls, timelyDispatch, dispatchContextErr, dispatchOffset, deadlineOffset, r.phases)
 			}
 		})
 		// TempDir cleanup has already run, including after fixture Fatal. Verify
