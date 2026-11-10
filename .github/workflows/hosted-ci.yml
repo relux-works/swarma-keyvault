@@ -190,3 +190,126 @@ jobs:
           for log in verifier-setup.log verifier-userns.log verifier-p95.log; do
             if [ -f "$log" ]; then cat "$log" >> "$GITHUB_STEP_SUMMARY"; fi
           done
+
+  verifier-attribution:
+    name: Verifier ABBA attribution (diagnostic only)
+    if: github.event_name == 'pull_request' && github.head_ref == 'diagnostics/t1-abba-261110'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly -p=2'
+      MAC_KEYVAULT_SKIP_KEYCHAIN: '1'
+    steps:
+      - name: Check out the exact diagnostic recipe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Check out setup from the immutable workflow source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-verifier-route
+          persist-credentials: false
+      - name: Check out exact control A
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: fcaf645a6efce742a9778202873d8a7be69f172b
+          path: .diagnostic-a
+          persist-credentials: false
+      - name: Check out exact control B
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: 82886f1d90e3136e1708699036f7990d12385cb2
+          path: .diagnostic-b
+          persist-credentials: false
+      - name: Install the exact package only on a disposable GitHub-hosted VM
+        shell: bash
+        env:
+          VS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          VS_RUNNER_OS: ${{ runner.os }}
+          VS_RUNNER_ARCH: ${{ runner.arch }}
+          VS_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          VS_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          VS_WORKFLOW_PATH: .github/workflows/hosted-ci.yml
+        run: |
+          set -euo pipefail
+          bash .ci-verifier-route/scripts/verifier-hosted-package.sh
+      - name: Permit namespaces only on the disposable GitHub-hosted Ubuntu VM
+        shell: bash
+        env:
+          VS_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          VS_RUNNER_OS: ${{ runner.os }}
+          VS_RUNNER_ARCH: ${{ runner.arch }}
+          VS_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          VS_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          VS_WORKFLOW_PATH: .github/workflows/hosted-ci.yml
+        run: |
+          set -euo pipefail
+          bash .ci-verifier-route/scripts/verifier-hosted-userns.sh
+      - name: Prepare both instrumented sources and compile without running tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C .diagnostic-a rev-parse HEAD)" = fcaf645a6efce742a9778202873d8a7be69f172b
+          test "$(git -C .diagnostic-b rev-parse HEAD)" = 82886f1d90e3136e1708699036f7990d12385cb2
+          test -z "$(git -C .diagnostic-a status --porcelain)"
+          test -z "$(git -C .diagnostic-b status --porcelain)"
+          printf '%s\n' \
+            '684b8ced06902d22ba4b2e9d4c58af5c22cefb5967ff97e81f622bbb393ca094  tools/verifierdiagnostic/patches/main.patch' \
+            '64a55c2345f6f49b16fa51c4bedc1ea332ad06de38fef5102c164319badbfc75  tools/verifierdiagnostic/patches/r8.patch' | sha256sum -c -
+          git -C .diagnostic-a rev-parse 'HEAD^{tree}'
+          git -C .diagnostic-b rev-parse 'HEAD^{tree}'
+          git -C .diagnostic-a apply --check "$GITHUB_WORKSPACE/tools/verifierdiagnostic/patches/main.patch"
+          git -C .diagnostic-b apply --check "$GITHUB_WORKSPACE/tools/verifierdiagnostic/patches/r8.patch"
+          git -C .diagnostic-a apply "$GITHUB_WORKSPACE/tools/verifierdiagnostic/patches/main.patch"
+          git -C .diagnostic-b apply "$GITHUB_WORKSPACE/tools/verifierdiagnostic/patches/r8.patch"
+          for source in .diagnostic-a .diagnostic-b; do
+            git -C "$source" diff --stat
+            (cd "$source" && sha256sum internal/grants/{linux_admission_evidence.go,linux_verifier_timing_test.go,mu_state.go,verifier_latency_harness_test.go,zz_verifier_storage_diagnostic_test.go} scripts/verifier-latency-confined.sh)
+          done
+          umask 077
+          mkdir -m 700 "$RUNNER_TEMP/verifier-diagnostic"
+          go test -race -count=1 ./tools/verifierdiagnostic
+          go build -o "$RUNNER_TEMP/verifier-diagnostic/coordinator" ./tools/verifierdiagnostic
+          go -C .diagnostic-a mod download
+          go -C .diagnostic-b mod download
+          go -C .diagnostic-a test -c -o "$RUNNER_TEMP/verifier-diagnostic/test-a" ./internal/grants
+          go -C .diagnostic-b test -c -o "$RUNNER_TEMP/verifier-diagnostic/test-b" ./internal/grants
+          go -C .diagnostic-b build -o "$RUNNER_TEMP/verifier-diagnostic/suite-runner" ./tools/suiterunner
+          go version
+          go version -m "$RUNNER_TEMP/verifier-diagnostic/coordinator" "$RUNNER_TEMP/verifier-diagnostic/suite-runner"
+          sha256sum "$RUNNER_TEMP/verifier-diagnostic/"{coordinator,suite-runner,test-a,test-b}
+      - name: Collect all four ABBA diagnostics with the original product fence
+        shell: bash
+        timeout-minutes: 26
+        run: |
+          set -euo pipefail
+          exec "$RUNNER_TEMP/verifier-diagnostic/suite-runner" \
+            --timeout=24m --report="$RUNNER_TEMP/verifier-diagnostic/outer-result.json" -- \
+            "$RUNNER_TEMP/verifier-diagnostic/coordinator" \
+            -a "$GITHUB_WORKSPACE/.diagnostic-a" -b "$GITHUB_WORKSPACE/.diagnostic-b" \
+            -out "$RUNNER_TEMP/verifier-diagnostic/collections" \
+            -supervisor "$RUNNER_TEMP/verifier-diagnostic/suite-runner"
+      - name: Retain the outer supervisor outcome after success or failure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/verifier-diagnostic/outer-result.json"
+          if [ -f "$report" ] && [ ! -L "$report" ]; then
+            test "$(stat -c %s "$report")" -le 65536
+            sha256sum "$report"
+            cat -- "$report"
+          else
+            echo 'Outer supervisor report unavailable; diagnostic completeness is unverified.' >&2
+            exit 1
+          fi

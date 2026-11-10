@@ -1,0 +1,419 @@
+diff --git a/internal/grants/linux_admission_evidence.go b/internal/grants/linux_admission_evidence.go
+--- a/internal/grants/linux_admission_evidence.go
++++ b/internal/grants/linux_admission_evidence.go
+@@ -31,6 +31,12 @@
+ type linuxAdmissionObserver interface{ begin(string) func() }
+ type linuxAdmissionObserverKey struct{}
+ 
++// Diagnostic branch only: an optional nested storage timeline, separate from
++// the established nonoverlapping admission phases and their timing points.
++type linuxAdmissionStorageObserver interface {
++	beginStorage(journalFrameKind, string) func()
++}
++
+ func linuxAdmissionPhase(ctx context.Context, name string) func() {
+ 	if ctx != nil {
+ 		if observer, ok := ctx.Value(linuxAdmissionObserverKey{}).(linuxAdmissionObserver); ok {
+diff --git a/internal/grants/linux_verifier_timing_test.go b/internal/grants/linux_verifier_timing_test.go
+--- a/internal/grants/linux_verifier_timing_test.go
++++ b/internal/grants/linux_verifier_timing_test.go
+@@ -8,6 +8,7 @@
+ 	"fmt"
+ 	"os"
+ 	"path/filepath"
++	runtimetrace "runtime/trace"
+ 	"testing"
+ 	"time"
+ )
+@@ -29,8 +30,16 @@
+ 			}
+ 			g := newLinuxCombinedRigAt(t, filepath.Join(root, "state"))
+ 			linuxContractScope(g.dock, "once")
++			diagnosticContext, task := runtimetrace.NewTask(context.Background(), fmt.Sprintf("%s/%02d", path, i))
++			defer task.End()
++			var diagnosticUsageStart, diagnosticUsageEnd linuxVerifierProcessUsage
++			defer func() {
++				t.Logf("diagnostic sample=%d path=%s usage_start=%+v usage_end=%+v", i, path, diagnosticUsageStart, diagnosticUsageEnd)
++				runtimetrace.Logf(diagnosticContext, "measurement", "sample=%d path=%s measured=%t elapsed_ns=%d qualified=%t refusal_class=%s", i, path, r.measured, r.elapsed.Nanoseconds(), r.qualified, linuxVerifierRefusalClass(r.refusal))
++			}()
+ 			if path == "construction+advisory" {
+ 				in := linuxProviderTestInput(g.dock)
++				diagnosticUsageStart = linuxVerifierUsage()
+ 				start := time.Now()
+ 				v, err := newLinuxProviderView(in)
+ 				var a LinuxAdmission
+@@ -38,6 +47,7 @@
+ 					a, err = v.advisory()
+ 				}
+ 				r.elapsed, r.measured, r.refusal = time.Since(start), true, err
++				diagnosticUsageEnd = linuxVerifierUsage()
+ 				if err == nil {
+ 					_, realClock := v.clock.(linuxRealClock)
+ 					r.qualified = realClock && len(a.Snapshots) == 2 && len(a.plan.originals) == 2
+@@ -51,11 +61,14 @@
+ 					return
+ 				}
+ 				_, realClock := d.clock.(linuxRealClock)
+-				trace := &linuxVerifierTrace{}
+-				ctx := context.WithValue(context.Background(), linuxAdmissionObserverKey{}, trace)
++				trace := &linuxVerifierTrace{storage: make([]linuxVerifierStorageEvent, 0, 64), diagnosticContext: diagnosticContext}
++				ctx := context.WithValue(diagnosticContext, linuxAdmissionObserverKey{}, trace)
++				diagnosticUsageStart = linuxVerifierUsage()
+ 				trace.start = time.Now()
+ 				out, err := d.Handle(ctx, g.dock.event)
+ 				r.elapsed, r.measured, r.refusal = time.Since(trace.start), true, err
++				diagnosticUsageEnd = linuxVerifierUsage()
++				t.Logf("diagnostic sample=%d path=%s storage=%+v", i, path, trace.storage)
+ 				r.qualified = err == nil && realClock && out != nil && out.State == "succeeded" && g.calls == 1
+ 				r.phases = trace.snapshot()
+ 				if phaseErr := validateLinuxVerifierPhases(r.phases, r.elapsed, r.qualified); phaseErr != nil {
+@@ -88,8 +101,14 @@
+ 			t.Logf("path=%s FAIL: %v", path, err)
+ 		}
+ 	}
++	// Read the executable only after all attempts/arrays, avoiding pre-collection page warming.
++	diagnosticIdentity, diagnosticIdentityErr := linuxVerifierDiagnosticIdentity()
++	t.Logf("diagnostic identity: %s error=%v", diagnosticIdentity, diagnosticIdentityErr)
+ 	if err := linuxVerifierAttemptsError(results); err != nil {
+ 		t.Errorf("real verifier gate: %v (100ms product fence unchanged)", err)
++	}
++	if diagnosticIdentityErr != nil {
++		t.Errorf("diagnostic executable identity unavailable after complete collection: %v", diagnosticIdentityErr)
+ 	}
+ }
+ 
+diff --git a/internal/grants/mu_state.go b/internal/grants/mu_state.go
+--- a/internal/grants/mu_state.go
++++ b/internal/grants/mu_state.go
+@@ -70,6 +70,7 @@
+ 	failed                                 bool              // uncertain append poisons this open handle; reopen reconciles bytes
+ 	write                                  func(*os.File, []byte) (int, error)
+ 	sync                                   func(*os.File) error
++	storageObserver                        linuxAdmissionStorageObserver
+ }
+ 
+ func muActivation(b MUBinding) []byte {
+@@ -153,6 +154,11 @@
+ 		allowances: map[[32]byte]*muReservation{}, nonces: map[[32]byte]*muReservation{}, reservations: map[uint64]*muReservation{}, revoked: map[MURevocation]bool{}, highWater: map[string]time.Time{}, unions: map[string]map[MURevocation]bool{},
+ 		write: func(f *os.File, b []byte) (int, error) { return f.Write(b) }, sync: func(f *os.File) error { return f.Sync() }}
+ 	ready := false
++	if ctx != nil {
++		if observer, ok := ctx.Value(linuxAdmissionObserverKey{}).(linuxAdmissionStorageObserver); ok {
++			s.storageObserver = observer
++		}
++	}
+ 	defer func() {
+ 		if !ready {
+ 			s.close()
+@@ -311,6 +317,8 @@
+ }
+ 
+ func (s *muState) append(kind journalFrameKind, body []byte) error {
++	endAppend := s.beginStorage(kind, "append")
++	defer endAppend()
+ 	if s.failed {
+ 		return ErrMUState
+ 	}
+@@ -326,7 +334,10 @@
+ 		s.failed = true
+ 		return ErrMUState
+ 	}
+-	if s.sync(s.file) != nil {
++	endSync := s.beginStorage(kind, "sync")
++	syncErr := s.sync(s.file)
++	endSync()
++	if syncErr != nil {
+ 		s.failed = true
+ 		return ErrMUState
+ 	}
+@@ -338,6 +349,13 @@
+ 	s.link.previous = f.digest
+ 	s.link.sequence++
+ 	return nil
++}
++
++func (s *muState) beginStorage(kind journalFrameKind, operation string) func() {
++	if s.storageObserver != nil {
++		return s.storageObserver.beginStorage(kind, operation)
++	}
++	return func() {}
+ }
+ 
+ // reserve durably records the use before any effect: the nonce always, the
+diff --git a/internal/grants/verifier_latency_harness_test.go b/internal/grants/verifier_latency_harness_test.go
+--- a/internal/grants/verifier_latency_harness_test.go
++++ b/internal/grants/verifier_latency_harness_test.go
+@@ -1,8 +1,15 @@
+ package grants
+ 
+ import (
++	"context"
++	"crypto/sha256"
+ 	"errors"
+ 	"fmt"
++	"io"
++	"os"
++	"runtime"
++	runtimetrace "runtime/trace"
++	"syscall"
+ 	"time"
+ )
+ 
+@@ -95,8 +102,49 @@
+ 	complete   bool
+ }
+ type linuxVerifierTrace struct {
+-	start  time.Time
+-	phases []*linuxVerifierPhase
++	start             time.Time
++	phases            []*linuxVerifierPhase
++	storage           []linuxVerifierStorageEvent
++	diagnosticContext context.Context
++}
++
++type linuxVerifierStorageEvent struct {
++	kind                 journalFrameKind
++	operation            string
++	start, end           time.Duration
++	complete             bool
++	usageStart, usageEnd linuxVerifierProcessUsage
++}
++
++// Process totals can bound CPU use during a span; concurrent goroutines also
++// contribute. They do not identify disk wait or host/hypervisor scheduling.
++type linuxVerifierProcessUsage struct {
++	cpuNS, voluntarySwitches, involuntarySwitches, minorFaults, majorFaults int64
++	ok                                                                      bool
++}
++
++func linuxVerifierUsage() linuxVerifierProcessUsage {
++	var u syscall.Rusage
++	if syscall.Getrusage(syscall.RUSAGE_SELF, &u) != nil {
++		return linuxVerifierProcessUsage{}
++	}
++	return linuxVerifierProcessUsage{cpuNS: (u.Utime.Sec+u.Stime.Sec)*1e9 + (int64(u.Utime.Usec)+int64(u.Stime.Usec))*1000, voluntarySwitches: int64(u.Nvcsw), involuntarySwitches: int64(u.Nivcsw), minorFaults: int64(u.Minflt), majorFaults: int64(u.Majflt), ok: true}
++}
++
++func (s *linuxVerifierTrace) beginStorage(kind journalFrameKind, operation string) func() {
++	i := len(s.storage)
++	s.storage = append(s.storage, linuxVerifierStorageEvent{kind: kind, operation: operation, start: time.Since(s.start)})
++	ctx := s.diagnosticContext
++	if ctx == nil {
++		ctx = context.Background()
++	}
++	region := runtimetrace.StartRegion(ctx, fmt.Sprintf("journal/%d/%s", kind, operation))
++	s.storage[i].usageStart = linuxVerifierUsage()
++	return func() {
++		s.storage[i].usageEnd = linuxVerifierUsage()
++		region.End()
++		s.storage[i].end, s.storage[i].complete = time.Since(s.start), true
++	}
+ }
+ 
+ func (s *linuxVerifierTrace) begin(name string) func() {
+@@ -130,3 +178,29 @@
+ 	}
+ 	return nil
+ }
++
++// Hash the actual running test executable, outside every measured interval.
++// No arguments, environment, fixture contents or journal payload are emitted.
++func linuxVerifierExecutableDigest(path string) (string, error) {
++	f, err := os.Open(path)
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	h := sha256.New()
++	if _, err := io.Copy(h, f); err != nil {
++		return "", err
++	}
++	return fmt.Sprintf("%x", h.Sum(nil)), nil
++}
++func linuxVerifierDiagnosticIdentity() (string, error) {
++	path, err := os.Executable()
++	if err != nil {
++		return "", err
++	}
++	digest, err := linuxVerifierExecutableDigest(path)
++	if err != nil {
++		return "", err
++	}
++	return fmt.Sprintf("platform=%s/%s go=%s executable_sha256=%s", runtime.GOOS, runtime.GOARCH, runtime.Version(), digest), nil
++}
+diff --git a/internal/grants/zz_verifier_storage_diagnostic_test.go b/internal/grants/zz_verifier_storage_diagnostic_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/grants/zz_verifier_storage_diagnostic_test.go
+@@ -0,0 +1,121 @@
++package grants
++
++import (
++	"context"
++	"errors"
++	"os"
++	"testing"
++	"time"
++)
++
++// These controls exercise the observer without changing the gate's attempts.
++// No performance verdict is inferred from the synthetic delay.
++func TestLinuxStorageDiagnosticControls(t *testing.T) {
++	for _, mode := range []string{"absent", "real-sync", "delayed-sync", "sync-error", "write-error"} {
++		t.Run(mode, func(t *testing.T) {
++			g := newLinuxCombinedRig(t)
++			trace := &linuxVerifierTrace{start: time.Now(), storage: make([]linuxVerifierStorageEvent, 0, 8)}
++			ctx := context.Background()
++			if mode != "absent" {
++				ctx = context.WithValue(ctx, linuxAdmissionObserverKey{}, trace)
++			}
++			s, err := openMUState(ctx, g.config.State, g.config.Binding)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer func() {
++				if s != nil {
++					s.close()
++				}
++			}()
++			writes, syncs := 0, 0
++			var entered, returned time.Duration
++			s.write = func(f *os.File, b []byte) (int, error) {
++				writes++
++				if mode == "write-error" {
++					return 0, os.ErrPermission
++				}
++				return f.Write(b)
++			}
++			s.sync = func(f *os.File) error {
++				syncs++
++				entered = time.Since(trace.start)
++				defer func() { returned = time.Since(trace.start) }()
++				if mode == "sync-error" {
++					return os.ErrPermission
++				}
++				if mode == "delayed-sync" {
++					time.Sleep(5 * time.Millisecond)
++				}
++				return f.Sync()
++			}
++			err = s.markSnapshots(map[string]time.Time{g.dock.config.PublisherKey: g.dock.now})
++			bad := mode == "sync-error" || mode == "write-error"
++			if (err != nil) != bad || writes != 1 || (mode == "write-error" && syncs != 0) || (mode != "write-error" && syncs != 1) {
++				t.Fatalf("mode=%s err=%v writes=%d syncs=%d", mode, err, writes, syncs)
++			}
++			if bad && (!errors.Is(err, ErrMUState) || !s.failed || !s.highWater[g.dock.config.PublisherKey].IsZero()) {
++				t.Fatal("error semantics changed", err, s.failed, s.highWater)
++			}
++			if mode == "absent" {
++				if s.storageObserver != nil || len(trace.storage) != 0 {
++					t.Fatal("unexpected observer")
++				}
++			} else {
++				want := 2
++				if mode == "write-error" {
++					want = 1
++				}
++				if len(trace.storage) != want {
++					t.Fatal(trace.storage)
++				}
++				for _, e := range trace.storage {
++					if !e.complete || e.end < e.start || e.kind != journalSnapshotMark {
++						t.Fatal(e)
++					}
++				}
++				if syncs == 1 {
++					e := trace.storage[1]
++					if e.operation != "sync" || e.start > entered || e.end < returned || trace.storage[0].start > e.start || trace.storage[0].end < e.end {
++						t.Fatal("sync moved outside its bracket", trace.storage, entered, returned)
++					}
++				}
++			}
++			if !bad {
++				s.close()
++				s = nil
++				reopened, err := openMUState(context.Background(), g.config.State, g.config.Binding)
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer reopened.close()
++				if !reopened.highWater[g.dock.config.PublisherKey].Equal(g.dock.now) {
++					t.Fatal("mark lost on reopen")
++				}
++			}
++		})
++	}
++}
++
++func TestLinuxDiagnosticIdentityControls(t *testing.T) {
++	dir := t.TempDir()
++	path := dir + "/public-diagnostic-fixture"
++	if err := os.WriteFile(path, []byte("abc"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	digest, err := linuxVerifierExecutableDigest(path)
++	if err != nil || digest != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {
++		t.Fatal(digest, err)
++	}
++	if _, err := linuxVerifierExecutableDigest(dir + "/absent"); err == nil {
++		t.Fatal("missing executable accepted")
++	}
++	if _, err := linuxVerifierExecutableDigest(dir); err == nil {
++		t.Fatal("unreadable executable accepted")
++	}
++	identity, err := linuxVerifierDiagnosticIdentity()
++	if err != nil || identity == "" {
++		t.Fatal(identity, err)
++	}
++	t.Log(identity)
++}
+diff --git a/scripts/verifier-latency-confined.sh b/scripts/verifier-latency-confined.sh
+--- a/scripts/verifier-latency-confined.sh
++++ b/scripts/verifier-latency-confined.sh
+@@ -31,6 +31,7 @@
+     echo "verifier cleanup failed (exit $cleanup_status; primary exit $primary); invocation scratch may remain" >&2
+     if [ "$primary" -eq 0 ]; then primary=74; fi
+   fi
++  printf "diagnostic cleanup primary_exit=%s cleanup_exit=%s\n" "$primary" "$cleanup_status"
+   exit "$primary"
+ }
+ trap finish EXIT
+@@ -40,6 +41,18 @@
+ trap 'exit 141' PIPE
+ for directory in home tmp cache build dependencies; do
+   mkdir -m 700 "$state/$directory"
++done
++# Diagnostic context only, outside collection; unavailable fields stay explicit.
++for diagnostic_context in uname cpu filesystem pressure; do
++  case "$diagnostic_context" in
++    uname) diagnostic_command=(uname -a) ;;
++    cpu) diagnostic_command=(lscpu) ;;
++    filesystem) diagnostic_command=(findmnt -T "$state" -o TARGET,SOURCE,FSTYPE,OPTIONS) ;;
++    pressure) diagnostic_command=(cat /proc/pressure/cpu /proc/pressure/io /proc/pressure/memory) ;;
++  esac
++  diagnostic_status=0
++  "${diagnostic_command[@]}" || diagnostic_status=$?
++  printf 'diagnostic context=%s exit=%s\n' "$diagnostic_context" "$diagnostic_status"
+ done
+ # Provision public go.sum-pinned dependencies in this job's own empty cache.
+ # Clear ambient Go/auth configuration; no shared HOME, cache or credentials.
+@@ -119,5 +132,18 @@
+   go mod verify
+ # Fixture signing is outside timing. Exactly 40/path; one run, zero retries.
+ # Nearest-rank p95 is rank 38 of 40; require p95 <=80ms AND max <100ms.
+-"${sandbox[@]}" go test -count=1 -v ./internal/grants \
++# Diagnostic branch only: tracing is evidence, never replacement qualification.
++set +e
++"${sandbox[@]}" go test -count=1 -v -trace=/private/tmp/verifier-attribution.trace ./internal/grants \
+   -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion|TestLinuxVerifierAttemptControls|TestLinuxVerifierRefusalAndQualificationControls|TestLinuxAdmissionDeadlineCompatibility|TestLinuxAdmissionDeadlineCauseControls|TestLinuxAdmissionPhaseEvidence|TestLinuxAdmissionLateStateIsNotDeadline|TestLinuxAdmissionLockCauseControls)$'
++measurement_status=$?
++set -e
++if [ -f "$state/tmp/verifier-attribution.trace" ]; then
++  copy_status=0
++  cp -- "$state/tmp/verifier-attribution.trace" "$RUNNER_TEMP/verifier-attribution.trace" || copy_status=$?
++  if [ "$copy_status" -ne 0 ]; then
++    echo "diagnostic trace preservation failed (exit $copy_status; measurement exit $measurement_status)" >&2
++    if [ "$measurement_status" -eq 0 ]; then measurement_status=74; fi
++  fi
++fi
++exit "$measurement_status"
