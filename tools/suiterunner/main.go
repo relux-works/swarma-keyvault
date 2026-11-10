@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -22,12 +20,23 @@ type options struct {
 }
 
 type result struct {
-	Reason    string `json:"reason"`
-	Cause     string `json:"cause"`
-	ExitCode  int    `json:"exit_code"`
-	RootExit  int    `json:"root_exit"`
-	Reaped    bool   `json:"reaped"`
-	ElapsedNS int64  `json:"elapsed_ns"`
+	Reason         string   `json:"reason"`
+	Cause          string   `json:"cause"`
+	ExitCode       int      `json:"exit_code"`
+	RootExit       int      `json:"root_exit"`
+	Reaped         bool     `json:"reaped"`
+	ElapsedNS      int64    `json:"elapsed_ns"`
+	FirstSignal    string   `json:"first_signal"`
+	ObservedCauses []string `json:"observed_causes"`
+}
+
+func (r *result) observe(cause string) {
+	for _, seen := range r.ObservedCauses {
+		if seen == cause {
+			return
+		}
+	}
+	r.ObservedCauses = append(r.ObservedCauses, cause)
 }
 
 func parse(args []string) (options, error) {
@@ -86,7 +95,7 @@ func execute(args []string, in, out, diagnostic *os.File) int {
 		}
 		defer report.Close()
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := signalContext(context.Background())
 	defer stop()
 	r := run(ctx, o.timeout, o.command, in, out, diagnostic)
 	if report != nil {

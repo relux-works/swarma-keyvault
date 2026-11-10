@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,9 +39,13 @@ func TestArguments(t *testing.T) {
 }
 
 // Report creation fails before dispatch for existing files and public parents;
-// the existing bytes are retained. This does not execute a native command.
+// the existing bytes are retained. A fresh private report reaches the actual
+// missing-command/unsupported result instead of the argument rejection.
 func TestReportRefusals(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	report := filepath.Join(dir, "result.json")
 	if err := os.WriteFile(report, []byte("retained"), 0600); err != nil {
 		t.Fatal(err)
@@ -50,6 +55,14 @@ func TestReportRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer devnull.Close()
+	validReport := filepath.Join(dir, "new-result.json")
+	code := execute([]string{"--report=" + validReport, "--", "missing-fixture-command"}, devnull, devnull, devnull)
+	var valid result
+	created, readErr := os.ReadFile(validReport)
+	if (code != 125 && code != 127) || readErr != nil || json.Unmarshal(created, &valid) != nil || valid.ExitCode != code {
+		t.Fatal("private report positive neighbor did not reach execution/refusal classification")
+	}
+
 	if code := execute([]string{"--report=" + report, "--", "missing-fixture-command"}, devnull, devnull, devnull); code != 64 {
 		t.Fatal("existing report did not refuse before command dispatch")
 	}

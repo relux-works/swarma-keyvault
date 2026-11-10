@@ -71,6 +71,13 @@ test "$(git -C "$fixture_source" rev-parse HEAD^{tree})" = b129a24428cdf5f2cc56f
 # Populate and verify the module cache before entering macOS confinement.
 go mod download
 go mod verify
+# Retained upstream tests run as separate Go modules.
+go -C third_party/btcec mod download
+go -C third_party/btcec mod verify
+go -C third_party/secp256k1 mod download
+go -C third_party/secp256k1 mod verify
+go -C third_party/chainhash mod download
+go -C third_party/chainhash mod verify
 go build -o "$fixture_bin/labcompose" ./tools/labcompose
 go build -o "$fixture_bin/labownnode" ./tools/labownnode
 # Avoid a race-runtime exit sleep for every one-shot fake CLI call.

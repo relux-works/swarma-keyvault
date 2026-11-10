@@ -34,6 +34,55 @@ func TestRunnerFixture(t *testing.T) {
 			os.Exit(99)
 		}
 		os.Exit(execute(args, os.Stdin, os.Stdout, os.Stderr))
+	case "late-signal-helper":
+		var args []string
+		if json.Unmarshal([]byte(os.Getenv("SUITE_RUNNER_ARGUMENTS")), &args) != nil {
+			os.Exit(99)
+		}
+		o, err := parse(args)
+		if err != nil {
+			os.Exit(99)
+		}
+		ctx, stop := signalContext(context.Background())
+		defer stop()
+		r := supervise(ctx, o.timeout, o.command, os.Stdin, os.Stdout, os.Stderr, func(until time.Time) error {
+			if os.WriteFile(filepath.Join(dir, "cleanup-ready"), []byte("ready"), 0600) != nil {
+				return syscall.EIO
+			}
+			limit := time.Now().Add(2 * time.Second)
+			for time.Now().Before(limit) && time.Now().Before(until) {
+				var observed result
+				observed.observeSignals(ctx)
+				if hasObservation(observed, "SIGTERM") {
+					return drain(until)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return context.DeadlineExceeded
+		})
+		raw, _ := json.Marshal(r)
+		if os.WriteFile(o.report, raw, 0600) != nil {
+			os.Exit(99)
+		}
+		os.Exit(r.ExitCode)
+	case "omitted-live-reaper-helper":
+		var args []string
+		if json.Unmarshal([]byte(os.Getenv("SUITE_RUNNER_ARGUMENTS")), &args) != nil {
+			os.Exit(99)
+		}
+		o, err := parse(args)
+		if err != nil {
+			os.Exit(99)
+		}
+		// Known violation: omit only active reaping, retaining real custody
+		// setup and final draining so the nested group's assertion must fail.
+		r := superviseWithMaintenance(context.Background(), o.timeout, o.command, os.Stdin, os.Stdout, os.Stderr,
+			func() error { return unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) }, drain, func(context.Context, int) error { return nil })
+		raw, _ := json.Marshal(r)
+		if os.WriteFile(o.report, raw, 0600) != nil {
+			os.Exit(99)
+		}
+		os.Exit(r.ExitCode)
 	case "omitted-cleanup-helper", "omitted-subreaper-helper":
 		// Test-only known violation: claim cleanup without draining a real leaf.
 		args := []string{os.Args[0], "-test.run=^TestRunnerFixture$", "-test.timeout=15s", "fixture-root"}
@@ -67,7 +116,13 @@ func TestRunnerFixture(t *testing.T) {
 			os.Exit(99)
 		}
 		os.Exit(0) // The detached leaf is adopted before the root itself exits.
+	case "fixture-nested-parent":
+		nestedParentFixture(dir)
 	case "fixture-root":
+		if strings.HasPrefix(os.Getenv("SUITE_FIXTURE_MODE"), "nested-") {
+			nestedRootFixture(dir)
+			return
+		}
 		if os.Getenv("SUITE_FIXTURE_MODE") == "serial" {
 			for i := 0; i < 3; i++ {
 				child := exec.Command(os.Args[0], "-test.run=^TestRunnerFixture$", "-test.timeout=1s", "fixture-work")
@@ -129,10 +184,19 @@ func TestRunnerFixture(t *testing.T) {
 
 func runnerCommand(t *testing.T, dir, mode, timeout string) *exec.Cmd {
 	t.Helper()
+	return runnerCommandMode(t, dir, "runner-helper", mode, timeout)
+}
+
+func runnerCommandMode(t *testing.T, dir, helper, mode, timeout string) *exec.Cmd {
+	t.Helper()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal("prepare owned private fixture directory", err)
+	}
 	args := []string{"--timeout=" + timeout, "--report=" + filepath.Join(dir, "result.json"), "--", os.Args[0], "-test.run=^TestRunnerFixture$", "-test.timeout=15s", "fixture-root"}
 	raw, _ := json.Marshal(args)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerFixture$", "-test.timeout=20s", "runner-helper")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunnerFixture$", "-test.timeout=20s", helper)
 	cmd.Env = append(os.Environ(), "SUITE_RUNNER_ARGUMENTS="+string(raw), "SUITE_FIXTURE_DIRECTORY="+dir, "SUITE_FIXTURE_MODE="+mode, "GORACE=atexit_sleep_ms=0")
+	cmd.Stderr = os.Stderr
 	return cmd
 }
 
@@ -221,7 +285,14 @@ func TestOwnedTreeCustody(t *testing.T) {
 				}
 			}
 			r := readResult(t, dir)
-			if r.Reason != tc.reason || r.Cause != tc.reason || r.ExitCode != tc.code || !r.Reaped {
+			root := -1
+			if tc.mode == "success" {
+				root = 0
+			}
+			if tc.mode == "exit" {
+				root = 7
+			}
+			if r.Reason != tc.reason || r.Cause != tc.reason || r.RootExit != root || r.ExitCode != tc.code || !r.Reaped {
 				t.Fatal("wrong actual result", r)
 			}
 			assertTreeGone(t, dir)
@@ -288,7 +359,7 @@ func testRunnerSignal(t *testing.T, sig syscall.Signal) {
 		t.Fatal("signal cleanup exceeded its bound")
 	}
 	r := readResult(t, dir)
-	if r.Reason != "canceled" || r.Cause != "canceled" || !r.Reaped {
+	if r.Reason != "canceled" || r.Cause != "canceled" || r.RootExit != -1 || r.FirstSignal != map[syscall.Signal]string{syscall.SIGINT: "SIGINT", syscall.SIGTERM: "SIGTERM"}[sig] || !hasObservation(r, r.FirstSignal) || !hasObservation(r, "exit") || !r.Reaped {
 		t.Fatal("signal cancellation not recorded")
 	}
 	assertTreeGone(t, dir)

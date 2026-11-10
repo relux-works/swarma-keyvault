@@ -144,29 +144,50 @@ func TestHostedDeadlineResult(t *testing.T) {
 }
 
 type runnerResult struct {
-	Reason    string `json:"reason"`
-	Cause     string `json:"cause"`
-	ExitCode  int    `json:"exit_code"`
-	RootExit  int    `json:"root_exit"`
-	Reaped    bool   `json:"reaped"`
-	ElapsedNS int64  `json:"elapsed_ns"`
+	Reason         string   `json:"reason"`
+	Cause          string   `json:"cause"`
+	ExitCode       int      `json:"exit_code"`
+	RootExit       int      `json:"root_exit"`
+	Reaped         bool     `json:"reaped"`
+	ElapsedNS      int64    `json:"elapsed_ns"`
+	FirstSignal    string   `json:"first_signal"`
+	ObservedCauses []string `json:"observed_causes"`
 }
 
 func validateResult(r runnerResult, phase string) error {
-	if !r.Reaped || r.Cause != r.Reason {
+	seen := make(map[string]bool)
+	first := ""
+	for _, cause := range r.ObservedCauses {
+		switch cause {
+		case "success", "exit", "deadline", "canceled", "SIGINT", "SIGTERM":
+		default:
+			return errors.New("unexpected observed cause")
+		}
+		if seen[cause] {
+			return errors.New("duplicate observed cause")
+		}
+		seen[cause] = true
+		if first == "" && (cause == "SIGINT" || cause == "SIGTERM") {
+			first = cause
+		}
+	}
+	if first != r.FirstSignal || !seen[r.Cause] || !r.Reaped || r.Cause != r.Reason {
 		return errors.New("supervisor did not establish ECHILD")
 	}
 	switch phase {
 	case "positive":
+		if r.FirstSignal != "" || seen["SIGINT"] || seen["SIGTERM"] || seen["canceled"] || seen["deadline"] || seen["exit"] {
+			return errors.New("unexpected healthy trigger")
+		}
 		if r.Reason != "success" || r.ExitCode != 0 || r.RootExit != 0 || r.ElapsedNS < int64(3*work) || r.ElapsedNS >= int64(2*time.Minute) {
 			return errors.New("healthy supervisor control did not complete")
 		}
 	case "deadline":
-		if r.Reason != "deadline" || r.ExitCode != 124 || r.ElapsedNS < int64(time.Minute) || r.ElapsedNS >= int64(time.Minute+5*time.Second) {
+		if r.FirstSignal != "" || seen["SIGINT"] || seen["SIGTERM"] || r.RootExit != -1 || !seen["exit"] || r.Reason != "deadline" || r.ExitCode != 124 || r.ElapsedNS < int64(time.Minute) || r.ElapsedNS >= int64(time.Minute+5*time.Second) {
 			return errors.New("supervisor own deadline did not fire and clean within its bound")
 		}
 	case "native":
-		if r.Reason != "canceled" || r.ExitCode != 130 || r.ElapsedNS < int64(59*time.Second) || r.ElapsedNS >= int64(90*time.Second) {
+		if (r.FirstSignal != "SIGINT" && r.FirstSignal != "SIGTERM") || !seen[r.FirstSignal] || r.RootExit != -1 || !seen["exit"] || r.Reason != "canceled" || r.ExitCode != 130 || r.ElapsedNS < int64(59*time.Second) || r.ElapsedNS >= int64(90*time.Second) {
 			return errors.New("native cancellation did not reach the supervisor")
 		}
 	default:
@@ -179,25 +200,35 @@ func validateResult(r runnerResult, phase string) error {
 // exit, setup/cleanup refusal, late cleanup and false success cannot substitute.
 func TestRunnerResultContract(t *testing.T) {
 	valid := map[string]runnerResult{
-		"positive": {"success", "success", 0, 0, true, int64(3 * work)},
-		"deadline": {"deadline", "deadline", 124, -1, true, int64(time.Minute)},
-		"native":   {"canceled", "canceled", 130, -1, true, int64(time.Minute)},
+		"positive": {Reason: "success", Cause: "success", ExitCode: 0, RootExit: 0, Reaped: true, ElapsedNS: int64(3 * work), ObservedCauses: []string{"success"}},
+		"deadline": {Reason: "deadline", Cause: "deadline", ExitCode: 124, RootExit: -1, Reaped: true, ElapsedNS: int64(time.Minute), ObservedCauses: []string{"deadline", "exit"}},
+		"native":   {Reason: "canceled", Cause: "canceled", ExitCode: 130, RootExit: -1, Reaped: true, ElapsedNS: int64(time.Minute), FirstSignal: "SIGINT", ObservedCauses: []string{"canceled", "SIGINT", "exit"}},
 	}
 	for phase, r := range valid {
 		if err := validateResult(r, phase); err != nil {
 			t.Fatal(err)
 		}
-		for _, bad := range []runnerResult{
-			{r.Reason, r.Cause, r.ExitCode, r.RootExit, false, r.ElapsedNS},
-			{"exit", "exit", 1, 1, true, r.ElapsedNS},
-			{"cleanup-refused", r.Cause, 125, -1, false, r.ElapsedNS},
-			{r.Reason, r.Cause, r.ExitCode, r.RootExit, true, 0},
-			{r.Reason, r.Cause, r.ExitCode, r.RootExit, true, int64(3 * time.Minute)},
-		} {
+		mutations := []func(*runnerResult){
+			func(b *runnerResult) { b.Reaped = false }, func(b *runnerResult) { b.Reason = "exit" },
+			func(b *runnerResult) { b.Reason = "cleanup-refused"; b.ExitCode = 125 },
+			func(b *runnerResult) { b.ElapsedNS = 0 }, func(b *runnerResult) { b.ElapsedNS = int64(3 * time.Minute) },
+			func(b *runnerResult) { b.RootExit = -2 }, func(b *runnerResult) { b.RootExit = 7 },
+			func(b *runnerResult) { b.FirstSignal = "SIGKILL" },
+			func(b *runnerResult) {
+				b.FirstSignal = "SIGTERM"
+				b.ObservedCauses = []string{b.Cause, "SIGINT", "SIGTERM", "exit"}
+			}, func(b *runnerResult) { b.ObservedCauses = nil },
+			func(b *runnerResult) { b.ObservedCauses = append(append([]string{}, b.ObservedCauses...), b.Cause) },
+			func(b *runnerResult) { b.ObservedCauses = append(append([]string{}, b.ObservedCauses...), "invented") },
+		}
+		for _, mutate := range mutations {
+			bad := r
+			mutate(&bad)
 			if validateResult(bad, phase) == nil {
-				t.Fatal("unrelated result accepted")
+				t.Fatalf("corrupt %s result accepted: %+v", phase, bad)
 			}
 		}
+
 	}
 	if validateResult(valid["native"], "deadline") == nil || validateResult(valid["deadline"], "native") == nil {
 		t.Fatal("own deadline and native cancellation were conflated")
