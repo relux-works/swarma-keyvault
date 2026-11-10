@@ -43,22 +43,34 @@ allowlist do not by themselves prove confinement from native startup. Do not
 unset a safety gate to rescue a failed run or call setup-unavailable a pass.
 No build, Go test, fixture generator or runtime probe is prescribed here.
 
-## Recovery code identity test lane
+## Recovery and KEK code identity test lane
 
-The default confined suite skips tests that build/execute the recovery helper
-or check its code identity. When explicitly qualifying those public fixtures on
-macOS, select the dedicated package and keep the suite serial:
+The default confined suite skips recovery and KEK code-identity fixtures. For
+authorized macOS qualification, run the cgo fixture runner from the repository
+root by itself. Keep logs in ignored `.temp/`.
 
 ```sh
-MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 scripts/keyvault-test-confined.sh -p 1 -parallel 1 -count=1 -timeout=15m -v ./internal/keyvault -run '^(TestRecoveryCodesign.*|TestRecoveryPrivateHelperFramingAndAdmission|TestRecoveryActualChildCodeBoundary)$'
+CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
-Run this suite alone, with cgo and confinement. The test process takes a fixed
-host-wide lock before fixture creation. A second opt-in process refuses visibly.
-One shared fixture tree is removed after the entire run; interrupted runs leave
-the tree intact. The tests retain the hardened positive and no-runtime,
-wrong-hash and debug-entitlement refusals. They do not exercise installed
-custody, owner presence, or production signing. Record logs in ignored `.temp/`.
+The runner shares a private per-account lock across checkouts and retains one
+tree under `~/.swarma-keyvault-codesign-tests/` with up to 24 executables from
+the fixed fixture matrix. It verifies the default skips using the same test
+binaries. The opt-in lane preserves the hardened recovery positive, no-runtime,
+wrong-hash and debug-entitlement refusals, and the real KEK inspection cases.
+The separately gated public certificate positive is documented in
+`docs/kek.md`. These fixtures exercise public code and do not use installed
+custody, owner presence or production signing.
+
+The next opt-in run or `.temp/keyvault-codesigntest cleanup RUN_ID` removes the
+exact eligible routine tree under the lock. It checks the recorded process group,
+the ten-minute retention period and absence of `host-degraded` in the state
+directory. A changed boot establishes process exit. Same-boot interrupted runs
+without a finish record and other unknown state remain retained. Keep the lock
+file. For a supervised operation select `run-observed`, then use
+`.temp/keyvault-codesigntest cleanup-observed RUN_ID` only after the sysadmin
+confirms assessment-service health and all owned children have exited.
 
 ## Refusal and uncertainty
 

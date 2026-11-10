@@ -9,27 +9,23 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// Inside the scheduled opt-in run, the same executable in default mode
-// actually skips both guarded tests without creating another fixture tree.
-func TestRecoveryCodesignDefaultProcessControl(t *testing.T) {
-	output, err := recoveryCodesignControlProcess(t, "", "^(TestRecoveryPrivateHelperFramingAndAdmission|TestRecoveryActualChildCodeBoundary)$")
-	if err != nil || !strings.Contains(string(output), "--- SKIP: TestRecoveryPrivateHelperFramingAndAdmission") ||
-		!strings.Contains(string(output), "--- SKIP: TestRecoveryActualChildCodeBoundary") {
-		t.Fatalf("default executable fixtures did not skip: %v %s", err, output)
-	}
-}
+	"github.com/relux-works/swarma-keyvault/internal/codesigntest"
+)
 
 // A real running public fixture with an ad-hoc hardened signature is admitted.
 // Same code without runtime, a wrong hash and get-task-allow are rejected before
 // receiving a request. These tests inspect code identity only, never Keychain.
 func TestRecoveryActualChildCodeBoundary(t *testing.T) {
-	fixture := recoveryBuildPipeFixture(t)
-	root := recoveryFixtureDirectory(t, "identity")
+	run := codesigntest.Require(t, codesigntest.RecoverySelection)
+	fixture := recoveryBuildPipeFixture(t, run)
+	root := codesigntest.FixtureDir(t, run, "identity")
 	for _, mode := range []string{"hardened", "no-runtime", "wrong-hash", "debug-entitlement"} {
 		t.Run(mode, func(t *testing.T) {
-			dir := recoveryFixtureModeDirectory(t, root, mode)
+			dir := filepath.Join(root, mode)
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
 			path := filepath.Join(dir, "pass")
 			raw, err := os.ReadFile(fixture)
 			if err != nil {

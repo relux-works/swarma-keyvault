@@ -14,10 +14,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/relux-works/swarma-keyvault/internal/codesigntest"
 	"github.com/relux-works/swarma-keyvault/internal/keyvault/keychaingate"
 	"github.com/relux-works/swarma-keyvault/pkg/kekclient"
 )
@@ -61,25 +63,40 @@ const getTaskAllow = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>
 `
 
-// buildSigned builds the fixture client once per test and signs a copy per
-// variant with codesign's ad-hoc identity (no Keychain is used).
-func buildSigned(t *testing.T, dir, name string, signArgs ...string) string {
+var kekClientBuild codesigntest.BuildOnce
+
+// buildSigned builds the fixture client once per run and ad-hoc signs a copy per variant.
+func buildSigned(t *testing.T, run, dir, name string, signArgs ...string) string {
 	t.Helper()
-	src := filepath.Join(dir, "src")
-	if _, err := os.Stat(filepath.Join(src, "client")); os.IsNotExist(err) {
-		os.MkdirAll(src, 0o700)
-		os.WriteFile(filepath.Join(src, "main.go"), []byte(fixtureClient), 0o600)
-		os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fixture\n\ngo 1.25\n"), 0o600)
-		cmd := exec.Command("go", "build", "-o", "client", ".")
-		cmd.Dir = src
-		cmd.Env = append(os.Environ(), "GOWORK=off", "GOFLAGS=")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("build fixture: %v\n%s", err, out)
+	client, err := kekClientBuild.Get(func() (string, error) {
+		src, err := os.MkdirTemp(run, "kek-base-")
+		if err != nil {
+			return "", err
 		}
+		if err := os.WriteFile(filepath.Join(src, "main.go"), []byte(fixtureClient), 0600); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fixture\n\ngo 1.25\n"), 0600); err != nil {
+			return "", err
+		}
+		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", "client", ".")
+		cmd.Dir = src
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("build fixture: %w\n%s", err, out)
+		}
+		return filepath.Join(src, "client"), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(client)
+	if err != nil {
+		t.Fatal(err)
 	}
 	path := filepath.Join(dir, name)
-	data, _ := os.ReadFile(filepath.Join(src, "client"))
-	os.WriteFile(path, data, 0o700)
+	if err := os.WriteFile(path, data, 0700); err != nil {
+		t.Fatal(err)
+	}
 	args := append([]string{"--force", "--sign", "-", "--identifier", "works.relux.kek-fixture." + name}, signArgs...)
 	if out, err := exec.Command("/usr/bin/codesign", append(args, path)...).CombinedOutput(); err != nil {
 		t.Fatalf("codesign %s: %v\n%s", name, err, out)
@@ -97,6 +114,7 @@ func buildSigned(t *testing.T, dir, name string, signArgs ...string) string {
 // Both lanes are required; the wrapper refusal is not certificate coverage.
 // This is a file fixture, not a signed-proxy socket or release-key test.
 func TestCodeInspectorPublicCertificate(t *testing.T) {
+	run := codesigntest.Require(t, codesigntest.KEKSelection, codesigntest.CertificateSelection)
 	const path = "/usr/bin/true"
 	t.Logf("native fixture gate: Applied=%v Confined=%v", keychaingate.Applied(), keychaingate.Confined())
 	id, err := (CodeInspector{}).File(path)
@@ -110,7 +128,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 	if err != nil || !id.Valid || id.CertificateSHA1 == "" || id.Identifier == "" {
 		t.Fatalf("public code identity = %+v, %v", id, err)
 	}
-	dir := privateTemp(t)
+	dir := codesigntest.FixtureDir(t, run, "certificate")
 	prefix := filepath.Join(dir, "cert")
 	out, err := exec.Command("/usr/bin/codesign", "--display", "--extract-certificates="+prefix, "--verbose=4", path).CombinedOutput()
 	if err != nil {
@@ -205,10 +223,11 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 // changed code; the server's paired fake-observation tests prove its refusal.
 // This does not prevent an exec after the final observation.
 func TestCodeInspectorPeerExec(t *testing.T) {
-	dir := privateTemp(t)
-	first := buildSigned(t, dir, "before-exec", "--options", "runtime,library")
-	second := buildSigned(t, dir, "after-exec", "--options", "runtime,library")
-	sock := filepath.Join(dir, "exec.sock")
+	run := codesigntest.Require(t, codesigntest.KEKSelection)
+	dir := codesigntest.FixtureDir(t, run, "kek-exec")
+	first := buildSigned(t, run, dir, "before-exec", "--options", "runtime,library")
+	second := buildSigned(t, run, dir, "after-exec", "--options", "runtime,library")
+	sock := filepath.Join(privateTemp(t), "exec.sock")
 	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
@@ -273,16 +292,18 @@ func codesignCDHash(t *testing.T, path string) string {
 
 // peerOf runs the binary as a client of a fresh socket and identifies it
 // from the server side by audit token.
-func peerOf(t *testing.T, dir, binary string) (CodeIdentity, error) {
+func peerOf(t *testing.T, binary string) (CodeIdentity, error) {
 	t.Helper()
-	sock := filepath.Join(dir, "p.sock")
-	os.Remove(sock)
+	sock := filepath.Join(privateTemp(t), "p.sock")
 	l, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
-	cmd := exec.Command(binary, sock)
+	l.SetDeadline(time.Now().Add(10 * time.Second))
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, sock)
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -301,9 +322,12 @@ func peerOf(t *testing.T, dir, binary string) (CodeIdentity, error) {
 // one byte changed after signing is not valid. The runtime,library variant
 // without the entitlement is the positive control.
 func TestCodeInspectorReadsSignatures(t *testing.T) {
-	dir := privateTemp(t)
+	run := codesigntest.Require(t, codesigntest.KEKSelection)
+	dir := codesigntest.FixtureDir(t, run, "kek-signatures")
 	ents := filepath.Join(dir, "gta.plist")
-	os.WriteFile(ents, []byte(getTaskAllow), 0o600)
+	if err := os.WriteFile(ents, []byte(getTaskAllow), 0600); err != nil {
+		t.Fatal(err)
+	}
 	variants := []struct {
 		name  string
 		args  []string
@@ -317,7 +341,7 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 	}
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
-			path := buildSigned(t, dir, v.name, v.args...)
+			path := buildSigned(t, run, dir, v.name, v.args...)
 			v.want.CDHash = codesignCDHash(t, path)
 			v.want.Identifier = "works.relux.kek-fixture." + v.name
 			file, err := CodeInspector{}.File(path)
@@ -327,17 +351,22 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 			if (file.Problem() == "") != v.bound {
 				t.Fatalf("problem %q for %s", file.Problem(), v.name)
 			}
-			peer, err := peerOf(t, dir, path)
+			peer, err := peerOf(t, path)
 			if err != nil || peer != v.want {
 				t.Fatalf("peer = %+v, %v; want %+v", peer, err, v.want)
 			}
 		})
 	}
 	t.Run("changed after signing", func(t *testing.T) {
-		path := buildSigned(t, dir, "changed", "--options", "runtime,library")
-		data, _ := os.ReadFile(path)
+		path := buildSigned(t, run, dir, "changed", "--options", "runtime,library")
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			t.Fatalf("read signed fixture: %v", err)
+		}
 		data[len(data)/2] ^= 1
-		os.WriteFile(path, data, 0o700)
+		if err := os.WriteFile(path, data, 0700); err != nil {
+			t.Fatal(err)
+		}
 		file, err := CodeInspector{}.File(path)
 		if err == nil && file.Valid {
 			t.Fatalf("a changed binary is valid: %+v", file)
@@ -347,7 +376,7 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 		}
 	})
 	t.Run("symlink", func(t *testing.T) {
-		path := buildSigned(t, dir, "target", "--options", "runtime,library")
+		path := buildSigned(t, run, dir, "target", "--options", "runtime,library")
 		link := filepath.Join(dir, "link")
 		os.Symlink(path, link)
 		if id, err := (CodeInspector{}).File(link); err == nil {

@@ -80,22 +80,44 @@ Required native certificate qualification and its limits are described in
 [the KEK contract](docs/kek.md). Test/build logs and scratch belong under `.temp/`.
 The native-input allowlist is a review tripwire; it does not replace confinement.
 
-The default suite skips the recovery tests that build and execute a helper or
-verify its code signature. For a macOS code-identity check, run this opt-in
-suite by itself with the cgo toolchain and the same confinement:
+The default suite skips the recovery helper framing and code-identity fixtures
+and the three native KEK code-inspector fixtures. Run those fixtures on macOS
+with cgo, by themselves, from the repository root:
 
 ```sh
-MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 scripts/keyvault-test-confined.sh -p 1 -parallel 1 -count=1 -timeout=15m -v ./internal/keyvault -run '^(TestRecoveryCodesign.*|TestRecoveryPrivateHelperFramingAndAdmission|TestRecoveryActualChildCodeBoundary)$'
+CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
-The test process holds one host-wide lock across checkouts and refuses a second
-opt-in process before building a fixture. It builds one public helper and keeps
-the executable copies in one run directory under the system temporary directory.
-It removes that directory once after the tests finish. An interrupted run leaves
-its fixture tree for inspection. The lock file stays in place for later runs;
-do not delete it while a test may be running. The opt-in suite checks the default
-skip and the second-process refusal using the same test executable. It does not
-operate on installed keys or binaries.
+The runner uses the account's registered home and holds one exclusive lock
+across its checkouts. It serially compiles and runs the two test packages under
+exec-level Keychain confinement. It checks that the same test executables skip
+the fixtures with opt-in disabled, then builds each public helper once and
+retains the copies. It exercises public test code and uses no installed keys.
+
+The runner prints the retained run path and process group. The private directory
+`~/.swarma-keyvault-codesign-tests/` holds at most one run tree at a time, with
+up to 24 executable files from the fixed fixture matrix plus small public fixture
+and state files. Go's ordinary build cache is separate. The next opt-in run or
+the explicit command below removes an eligible earlier routine tree under the
+same lock. Cleanup requires at least ten minutes since recorded completion and
+the prior process group to be gone. After a reboot, the old group is gone and
+an interrupted run without a finish record ages from its start. Unknown state
+keeps the tree interlocked.
+
+```sh
+.temp/keyvault-codesigntest cleanup run-REPLACE_WITH_REPORTED_ID
+```
+
+The presence of `~/.swarma-keyvault-codesign-tests/host-degraded` stops new runs
+and cleanup. When investigating host degradation, the operator can set that
+flag and clear it after confirming recovery. Keep the persistent lock file.
+For a sysadmin-observed run, replace `run` with `run-observed`. After the
+sysadmin confirms no new assessment-service crashes or increases in its launch
+count and all owned children have exited, run
+`.temp/keyvault-codesigntest cleanup-observed run-REPLACE_WITH_REPORTED_ID`.
+That command checks the process group and health flag under the lock and removes
+the exact tree. Observed trees remain interlocked until explicit cleanup.
 
 For the recovery interface, build the hardened ad-hoc signed vault/helper pair
 from a clean committed checkout with

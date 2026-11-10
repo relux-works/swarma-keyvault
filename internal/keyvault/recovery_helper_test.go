@@ -11,27 +11,30 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/codesigntest"
 )
 
-func recoveryBuildPipeFixture(t *testing.T) string {
+var recoveryPipeBuild codesigntest.BuildOnce
+
+func recoveryBuildPipeFixture(t *testing.T, run string) string {
 	t.Helper()
-	lane := requireRecoveryTestLane(t)
-	lane.buildOnce.Do(func() {
-		dir, err := os.MkdirTemp(lane.root, "base-")
+	fixture, err := recoveryPipeBuild.Get(func() (string, error) {
+		dir, err := os.MkdirTemp(run, "recovery-base-")
 		if err != nil {
-			lane.buildErr = err
-			return
+			return "", err
 		}
-		lane.fixture = filepath.Join(dir, "pass")
-		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", lane.fixture, "./testdata/recovery/helper")
+		path := filepath.Join(dir, "pass")
+		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", path, "./testdata/recovery/helper")
 		if raw, err := cmd.CombinedOutput(); err != nil {
-			lane.buildErr = fmt.Errorf("public fixture build failed: %w, %s", err, raw)
+			return "", fmt.Errorf("public fixture build failed: %w, %s", err, raw)
 		}
+		return path, nil
 	})
-	if lane.buildErr != nil {
-		t.Fatal(lane.buildErr)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return lane.fixture
+	return fixture
 }
 
 // The exact emitted wrap object is admitted for both policies. Omitted false,
@@ -70,8 +73,9 @@ func TestRecoveryPrivateWrapResponseSchema(t *testing.T) {
 // bytes, wrong exit, declared excess, refusal and timeout are distinct rejects.
 // A failed child admission occurs before the fixture receives any request.
 func TestRecoveryPrivateHelperFramingAndAdmission(t *testing.T) {
-	fixture := recoveryBuildPipeFixture(t)
-	root := recoveryFixtureDirectory(t, "framing")
+	run := codesigntest.Require(t, codesigntest.RecoverySelection)
+	fixture := recoveryBuildPipeFixture(t, run)
+	root := codesigntest.FixtureDir(t, run, "framing")
 	verify := func(int, []byte) error { return nil }
 	for _, mode := range []string{"pass", "truncated", "extra", "bad-exit", "oversized", "refusal", "hang", "denied"} {
 		t.Run(mode, func(t *testing.T) {

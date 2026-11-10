@@ -26,9 +26,19 @@ profile publishing is outside this skill.
 
 ## Execution boundary
 
-Recovery executable and code-identity fixtures are opt-in. Use the
-[confined serial test lane](references/validation-recovery.md#recovery-code-identity-test-lane)
-only for authorized public code verification.
+For authorized macOS recovery and KEK public code-identity fixtures, run from
+the repository root with the cgo toolchain:
+
+```sh
+CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
+MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
+```
+
+Run this serial fixture lane alone. It retains at most one run tree under
+`~/.swarma-keyvault-codesign-tests/`, with up to 24 executables and their public
+fixture and state files. See [validation and recovery](references/validation-recovery.md#recovery-and-kek-code-identity-test-lane)
+for the ten-minute cleanup policy, degraded-host interlock and observed-run
+command.
 
 **OWNER-SITTING:** all signing and owner-presence flows require the selected
 owner-led sitting. Explain the exact typed action, target, key generation,

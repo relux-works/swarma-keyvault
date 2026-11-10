@@ -206,24 +206,26 @@ explicit service provisioning procedure.
   audit failure with no KEK. These use an in-memory vault. Native public-code
   certificate fixtures and an owned exec-on-preserved-socket fixture qualify
   signature facts separately; neither substitutes for installed service-pair
-  acceptance. Run the full keyvault suite through
-  `scripts/keyvault-test-confined.sh`. That wrapper also denies trustd, so its
-  public-certificate case verifies the specific trust refusal and absence of
-  attested facts. It does not qualify certificate matching. Additionally run
-  the following required read-only native lane, in order, with
-  `MAC_KEYVAULT_SKIP_KEYCHAIN=1` and a short task-scoped `TMPDIR`:
+  acceptance. Run the fake-backed suite through
+  `scripts/keyvault-test-confined.sh` and the opt-in
+  [code-identity runner](../README.md#tools-and-local-build) separately. The runner's `run`
+  mode applies the exec-level wrapper. Its public-certificate case verifies the
+  specific trust refusal and absence of attested facts because that wrapper
+  denies trustd. For the required read-only certificate positive, run from the
+  repository root:
 
-  ```bash
-  go test -tags=keyvault_gate_regression -run '^TestSandboxCanary$' ./internal/keyvault/keychaingate -v -count=1
-  go test -run '^TestCodeInspectorPublicCertificate$' ./internal/keyvault/kek -v -count=1
+  ```sh
+  CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
+  MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest public-certificate
   ```
 
-  Start the second command only after the canary reports `Applied=true` and
-  the intended read-only nonexistent-item refusal. This uses the existing
-  init-level Keychain gate, which permits trustd. It covers Go init onward,
-  unlike exec-level confinement; review native startup inputs separately.
-  The public-code case must report validated certificate/identifier and both
-  mismatches, not a trust refusal. Neither command creates or accesses a real
-  key, signs code or changes trust. Preserve a verdict per lane; unavailable
-  native positive coverage blocks certificate acceptance.
+  The runner executes the tagged `TestSandboxCanary` first and checks that the
+  init-level gate applied and the read-only nonexistent-item lookup was
+  refused. That gate permits trustd and covers Go init onward. Review native
+  startup inputs separately. The certificate case then verifies the public
+  certificate and identifier, their binding, and both mismatch refusals. This
+  mode uses public files and an owned Unix socket. It performs no Keychain
+  write, signing or trust change. The shared lock and retained-tree cleanup
+  apply to both modes. Preserve a verdict per lane. Unavailable native positive
+  coverage blocks certificate acceptance.
 - `TestSecurityStoreDecryptOpensGoEnvelope` opens a Go-sealed envelope with a real non-extractable Keychain key and refuses tampered ones. Like every real-Keychain test, it runs only in an attended sitting.
