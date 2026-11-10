@@ -90,34 +90,37 @@ MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesignte
 ```
 
 The runner uses the account's registered home and holds one exclusive lock
-across its checkouts. It serially compiles and runs the two test packages under
+across that account's checkouts. Run the lane under one designated account on
+a Mac. Other macOS accounts use independent lanes. It serially compiles and runs the two test packages under
 exec-level Keychain confinement. It checks that the same test executables skip
 the fixtures with opt-in disabled, then builds each public helper once and
-retains the copies. It exercises public test code and uses no installed keys.
+retains the copies. The combined lane compiles two distinct fixture families,
+the recovery pipe helper and the KEK socket client. It exercises public test code and uses no installed keys.
 
 The runner prints the retained run path and process group. The private directory
-`~/.swarma-keyvault-codesign-tests/` holds at most one run tree at a time, with
-up to 24 executable files from the fixed fixture matrix plus small public fixture
+`~/Library/Application Support/swarma-keyvault-codesigntest/test-lane/` holds
+at most one run tree at a time, with up to 24 executable files from the fixed fixture matrix plus small public fixture
 and state files. Go's ordinary build cache is separate. The next opt-in run or
 the explicit command below removes an eligible earlier routine tree under the
-same lock. Cleanup requires at least ten minutes since recorded completion and
-the prior process group to be gone. After a reboot, the old group is gone and
-an interrupted run without a finish record ages from its start. Unknown state
-keeps the tree interlocked.
+same lock. Cleanup requires at least ten minutes since the prior process group's exit
+was verified. A reboot establishes exit for a previous boot, and the runner
+starts the retention period when it first records that boundary. Unknown state
+keeps the tree interlocked. Cleanup records the authorized directory identity
+outside the tree so a retry can resume an interrupted removal.
 
 ```sh
 .temp/keyvault-codesigntest cleanup run-REPLACE_WITH_REPORTED_ID
 ```
 
-The presence of `~/.swarma-keyvault-codesign-tests/host-degraded` stops new runs
+The presence of `host-degraded` in the lane directory stops new runs
 and cleanup. When investigating host degradation, the operator can set that
 flag and clear it after confirming recovery. Keep the persistent lock file.
 For a sysadmin-observed run, replace `run` with `run-observed`. After the
 sysadmin confirms no new assessment-service crashes or increases in its launch
 count and all owned children have exited, run
 `.temp/keyvault-codesigntest cleanup-observed run-REPLACE_WITH_REPORTED_ID`.
-That command checks the process group and health flag under the lock and removes
-the exact tree. Observed trees remain interlocked until explicit cleanup.
+That command checks the recorded observed mode, process group and health flag
+under the lock and removes the exact tree. Observed trees remain interlocked until explicit cleanup.
 
 For the recovery interface, build the hardened ad-hoc signed vault/helper pair
 from a clean committed checkout with

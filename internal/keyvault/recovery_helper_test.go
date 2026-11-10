@@ -26,6 +26,7 @@ func recoveryBuildPipeFixture(t *testing.T, run string) string {
 		}
 		path := filepath.Join(dir, "pass")
 		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", path, "./testdata/recovery/helper")
+		codesigntest.NativeAttempt(t, "build recovery helper")
 		if raw, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("public fixture build failed: %w, %s", err, raw)
 		}
@@ -99,6 +100,7 @@ func TestRecoveryPrivateHelperFramingAndAdmission(t *testing.T) {
 					return nil
 				}
 			}
+			codesigntest.NativeAttempt(t, "execute recovery pipe fixture")
 			result, err := h.call(struct {
 				Op string `json:"op"`
 			}{"fixture"}, 68)

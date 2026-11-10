@@ -81,6 +81,7 @@ func buildSigned(t *testing.T, run, dir, name string, signArgs ...string) string
 		}
 		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", "client", ".")
 		cmd.Dir = src
+		codesigntest.NativeAttempt(t, "build KEK socket client")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return "", fmt.Errorf("build fixture: %w\n%s", err, out)
 		}
@@ -98,6 +99,7 @@ func buildSigned(t *testing.T, run, dir, name string, signArgs ...string) string
 		t.Fatal(err)
 	}
 	args := append([]string{"--force", "--sign", "-", "--identifier", "works.relux.kek-fixture." + name}, signArgs...)
+	codesigntest.NativeAttempt(t, "sign KEK socket client")
 	if out, err := exec.Command("/usr/bin/codesign", append(args, path)...).CombinedOutput(); err != nil {
 		t.Fatalf("codesign %s: %v\n%s", name, err, out)
 	}
@@ -117,6 +119,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 	run := codesigntest.Require(t, codesigntest.KEKSelection, codesigntest.CertificateSelection)
 	const path = "/usr/bin/true"
 	t.Logf("native fixture gate: Applied=%v Confined=%v", keychaingate.Applied(), keychaingate.Confined())
+	codesigntest.NativeAttempt(t, "inspect public certificate")
 	id, err := (CodeInspector{}).File(path)
 	if err != nil && keychaingate.Confined() && err.Error() == "code identity of /usr/bin/true: OSStatus -2147409622" {
 		if id != (CodeIdentity{}) {
@@ -130,6 +133,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 	}
 	dir := codesigntest.FixtureDir(t, run, "certificate")
 	prefix := filepath.Join(dir, "cert")
+	codesigntest.NativeAttempt(t, "extract public certificate")
 	out, err := exec.Command("/usr/bin/codesign", "--display", "--extract-certificates="+prefix, "--verbose=4", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("extract public signature: %v\n%s", err, out)
@@ -183,6 +187,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 		cmd := exec.CommandContext(ctx, binary, "--disable", "--silent", "--show-error", "--max-time", "5", "--noproxy", "*", "--proxy", "", "--unix-socket", sock, "http://localhost/")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
+		codesigntest.NativeAttempt(t, "execute public curl socket client")
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -239,6 +244,7 @@ func TestCodeInspectorPeerExec(t *testing.T) {
 	cmd := exec.CommandContext(ctx, first, sock, second)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	codesigntest.NativeAttempt(t, "execute KEK socket client")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -282,6 +288,7 @@ var cdhashLine = regexp.MustCompile(`(?m)^CDHash=([0-9a-f]{40})$`)
 
 func codesignCDHash(t *testing.T, path string) string {
 	t.Helper()
+	codesigntest.NativeAttempt(t, "inspect KEK code signature")
 	out, _ := exec.Command("/usr/bin/codesign", "-dvvv", path).CombinedOutput()
 	m := cdhashLine.FindSubmatch(out)
 	if m == nil {
@@ -304,6 +311,7 @@ func peerOf(t *testing.T, binary string) (CodeIdentity, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, sock)
+	codesigntest.NativeAttempt(t, "execute KEK socket client")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

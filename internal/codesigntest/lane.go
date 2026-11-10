@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,9 +24,33 @@ const (
 
 var ErrBusy = errors.New("codesign test lane is busy")
 
-// StateDir resolves the account's registered home rather than the caller's HOME
-// or TMPDIR, so checkouts and test environments share one private directory.
-func StateDir() (string, error) {
+// StateDir resolves a fixed location in the real account home and verifies
+// its parents without following Library or Application Support symlinks.
+func StateDir(prepare bool) (string, error) {
+	home, err := AccountHome()
+	if err != nil {
+		return "", err
+	}
+	library := filepath.Join(home, "Library")
+	support := filepath.Join(library, "Application Support")
+	for _, parent := range []string{library, support} {
+		if err := ownedDir(parent, false); err != nil {
+			return "", err
+		}
+	}
+	tool := filepath.Join(support, "swarma-keyvault-codesigntest")
+	if prepare {
+		if err := os.Mkdir(tool, 0700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+	}
+	if err := ownedDir(tool, true); err != nil {
+		return "", err
+	}
+	return filepath.Join(tool, "test-lane"), nil
+}
+
+func AccountHome() (string, error) {
 	account, err := user.LookupId(strconv.Itoa(os.Getuid()))
 	if err != nil {
 		return "", err
@@ -39,7 +65,22 @@ func StateDir() (string, error) {
 	if err := ownedDir(home, false); err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".swarma-keyvault-codesign-tests"), nil
+	return home, nil
+}
+
+func BootID() (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", errors.New("native code-signing fixtures require macOS")
+	}
+	out, err := exec.Command("/usr/sbin/sysctl", "-n", "kern.bootsessionuuid").Output()
+	if err != nil {
+		return "", fmt.Errorf("read macOS boot identity: %w", err)
+	}
+	boot := strings.TrimSpace(string(out))
+	if boot == "" {
+		return "", errors.New("missing macOS boot identity")
+	}
+	return boot, nil
 }
 
 func ownedDir(path string, private bool) error {

@@ -14,14 +14,15 @@ import (
 const (
 	DegradedFile     = "host-degraded"
 	minimumRetention = 10 * time.Minute
-	cleanupPrefix    = "reap-"
+	cleanupPrefix    = "cleanup-"
 )
 
 type runRecord struct {
-	Boot     string
-	Group    int
-	Started  time.Time
-	Observed bool
+	Boot        string
+	Group       int
+	Started     time.Time
+	Observed    bool
+	Certificate bool
 }
 
 type Lane struct {
@@ -49,8 +50,8 @@ func (l *Lane) ChildLock() *os.File {
 	return l.lock
 }
 
-func (l *Lane) healthy() error {
-	if _, err := os.Lstat(filepath.Join(l.dir, DegradedFile)); !os.IsNotExist(err) {
+func healthy(dir string) error {
+	if _, err := os.Lstat(filepath.Join(dir, DegradedFile)); !os.IsNotExist(err) {
 		if err != nil {
 			return fmt.Errorf("cannot read host-health flag: %w", err)
 		}
@@ -61,20 +62,36 @@ func (l *Lane) healthy() error {
 
 // Begin cleans up a completed, eligible earlier routine run under the same
 // lock, or refuses to start a second run while any retained state is uncertain.
-func (l *Lane) Begin(group int, observed bool, now time.Time) (string, error) {
-	if err := l.healthy(); err != nil {
+func (l *Lane) Begin(group int, observed, certificate bool, now time.Time) (string, error) {
+	if err := healthy(l.dir); err != nil {
 		return "", err
 	}
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
 		return "", err
 	}
+	pending := make(map[string]bool)
 	for _, entry := range entries {
-		name := strings.TrimPrefix(entry.Name(), cleanupPrefix)
-		if runName(name) {
-			if err := l.Cleanup(name, false, now); err != nil {
-				return "", err
+		name := entry.Name()
+		switch {
+		case runName(name):
+			pending[name] = true
+		case strings.HasPrefix(name, cleanupPrefix) && strings.HasSuffix(name, ".json"):
+			name = strings.TrimSuffix(strings.TrimPrefix(name, cleanupPrefix), ".json")
+			if !runName(name) {
+				return "", errors.New("unknown cleanup state")
 			}
+			pending[name] = true
+		case strings.HasPrefix(name, "reap-") || strings.HasPrefix(name, cleanupPrefix):
+			return "", fmt.Errorf("unknown cleanup state: %s", name)
+		}
+	}
+	if len(pending) > 1 {
+		return "", errors.New("multiple retained fixture runs")
+	}
+	for name := range pending {
+		if err := l.Cleanup(name, false, now); err != nil {
+			return "", err
 		}
 	}
 	if group <= 1 {
@@ -84,7 +101,7 @@ func (l *Lane) Begin(group int, observed bool, now time.Time) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(runRecord{Boot: l.boot, Group: group, Started: now.UTC(), Observed: observed})
+	raw, err := json.Marshal(runRecord{Boot: l.boot, Group: group, Started: now.UTC(), Observed: observed, Certificate: certificate})
 	if err != nil {
 		return "", err
 	}
@@ -95,68 +112,69 @@ func (l *Lane) Finish(run string, now time.Time) error {
 	return os.WriteFile(filepath.Join(run, "finished"), []byte(now.UTC().Format(time.RFC3339Nano)), 0600)
 }
 
-func (l *Lane) Cleanup(name string, observed bool, now time.Time) error {
-	return l.cleanup(name, observed, now, groupGone, os.RemoveAll)
+// ObserveExit records the earliest proven quiet boundary after the worker
+// exits. If the lock is still held by a descendant, the next cleanup can
+// establish the boundary once that process group is gone.
+func (l *Lane) ObserveExit(group int, now time.Time) error {
+	entries, err := os.ReadDir(l.dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !runName(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(l.dir, entry.Name())
+		if err := ownedDir(path, true); err != nil {
+			return err
+		}
+		record, err := readRun(path)
+		if err != nil {
+			return err
+		}
+		if record.Group == group && record.Boot == l.boot && !record.Observed {
+			_, err := l.exitBoundary(path, record, now, groupGone)
+			return err
+		}
+	}
+	return nil
 }
 
-func (l *Lane) cleanup(name string, observed bool, now time.Time, gone func(int) (bool, error), remove func(string) error) error {
-	if !runName(name) {
-		return errors.New("expected the exact retained run name")
-	}
-	if err := l.healthy(); err != nil {
-		return err
-	}
-	path := filepath.Join(l.dir, name)
-	reap := filepath.Join(l.dir, cleanupPrefix+name)
-	if err := ownedDir(reap, true); err == nil {
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			return fmt.Errorf("retained codesign run %s has conflicting cleanup state", name)
+func (l *Lane) exitBoundary(path string, record runRecord, now time.Time, gone func(int) (bool, error)) (time.Time, error) {
+	raw, err := readState(path, "exited")
+	if err == nil {
+		exited, err := time.Parse(time.RFC3339Nano, string(raw))
+		if err != nil || exited.Before(record.Started) || exited.After(now) {
+			return time.Time{}, errors.New("invalid process exit record")
 		}
-		return remove(reap)
-	} else if !os.IsNotExist(err) {
-		return err
+		return exited, nil
 	}
-	if err := ownedDir(path, true); err != nil {
-		return err
+	if !os.IsNotExist(err) {
+		return time.Time{}, err
 	}
-	record, err := readRun(path)
-	if err != nil || record.Started.After(now) {
-		return fmt.Errorf("retained codesign run %s has unknown state", name)
-	}
-	if record.Observed && !observed {
-		return fmt.Errorf("retained codesign run %s requires observed cleanup", name)
-	}
+	// A previous boot cannot leave live processes in this boot.
 	if record.Boot == l.boot {
-		exited, err := gone(record.Group)
-		if err != nil || !exited {
-			return fmt.Errorf("retained codesign run %s has a live or unknown process group", name)
+		if err := requireGroupGone(record.Group, gone); err != nil {
+			return time.Time{}, err
 		}
-	}
-	if !observed {
-		ageFrom := record.Started
 		raw, err := readState(path, "finished")
-		switch {
-		case err == nil:
-			ageFrom, err = time.Parse(time.RFC3339Nano, string(raw))
-			if err != nil || ageFrom.Before(record.Started) {
-				return fmt.Errorf("retained codesign run %s has an invalid finish record", name)
-			}
-		case !os.IsNotExist(err) || record.Boot == l.boot:
-			return fmt.Errorf("retained codesign run %s has no known finish", name)
+		if err != nil {
+			return time.Time{}, errors.New("no known finish")
 		}
-		if now.Sub(ageFrom) < minimumRetention {
-			return fmt.Errorf("retained codesign run %s is still within its 10-minute retention period", name)
+		finished, err := time.Parse(time.RFC3339Nano, string(raw))
+		if err != nil || finished.Before(record.Started) || finished.After(now) {
+			return time.Time{}, errors.New("invalid finish record")
 		}
 	}
-	if err := l.healthy(); err != nil {
-		return err
+	return now, writeState(filepath.Join(path, "exited"), []byte(now.UTC().Format(time.RFC3339Nano)))
+}
+
+func requireGroupGone(group int, gone func(int) (bool, error)) error {
+	exited, err := gone(group)
+	if err != nil || !exited {
+		return errors.New("live or unknown process group")
 	}
-	// Record that the checks passed before deletion. If RemoveAll is
-	// interrupted after removing metadata, the next cleanup can still finish.
-	if err := os.Rename(path, reap); err != nil {
-		return err
-	}
-	return remove(reap)
+	return nil
 }
 
 func readRun(path string) (runRecord, error) {
@@ -185,6 +203,18 @@ func readState(dir, name string) ([]byte, error) {
 		return nil, errors.New("invalid codesign lane state file")
 	}
 	return os.ReadFile(path)
+}
+
+func writeState(path string, raw []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		return err
+	}
+	return errors.Join(f.Sync(), f.Close())
 }
 
 func groupGone(group int) (bool, error) {

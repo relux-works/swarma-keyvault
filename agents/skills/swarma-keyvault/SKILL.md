@@ -35,8 +35,8 @@ MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesignte
 ```
 
 Run this serial fixture lane alone. It retains at most one run tree under
-`~/.swarma-keyvault-codesign-tests/`, with up to 24 executables and their public
-fixture and state files. See [validation and recovery](references/validation-recovery.md#recovery-and-kek-code-identity-test-lane)
+`~/Library/Application Support/swarma-keyvault-codesigntest/test-lane/`,
+with up to 24 executables and their public fixture and state files. See [validation and recovery](references/validation-recovery.md#recovery-and-kek-code-identity-test-lane)
 for the ten-minute cleanup policy, degraded-host interlock and observed-run
 command.
 

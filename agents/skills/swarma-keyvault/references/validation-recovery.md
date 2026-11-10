@@ -54,9 +54,11 @@ CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
 MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
-The runner shares a private per-account lock across checkouts and retains one
-tree under `~/.swarma-keyvault-codesign-tests/` with up to 24 executables from
-the fixed fixture matrix. It verifies the default skips using the same test
+The runner shares a private lock across checkouts of one macOS account.
+Other accounts' lanes are independent. It compiles the recovery helper and KEK
+socket client once each and retains one tree under
+`~/Library/Application Support/swarma-keyvault-codesigntest/test-lane/`
+with up to 24 executables from the fixed fixture matrix. It verifies the default skips using the same test
 binaries. The opt-in lane preserves the hardened recovery positive, no-runtime,
 wrong-hash and debug-entitlement refusals, and the real KEK inspection cases.
 The separately gated public certificate positive is documented in
@@ -65,8 +67,9 @@ custody, owner presence or production signing.
 
 The next opt-in run or `.temp/keyvault-codesigntest cleanup RUN_ID` removes the
 exact eligible routine tree under the lock. It checks the recorded process group,
-the ten-minute retention period and absence of `host-degraded` in the state
-directory. A changed boot establishes process exit. Same-boot interrupted runs
+the ten-minute retention period after verified group exit and absence of
+`host-degraded` in the state directory. A changed boot establishes process
+exit when observed. Cleanup approval records the exact directory identity. Same-boot interrupted runs
 without a finish record and other unknown state remain retained. Keep the lock
 file. For a supervised operation select `run-observed`, then use
 `.temp/keyvault-codesigntest cleanup-observed RUN_ID` only after the sysadmin

@@ -185,23 +185,33 @@ func TestRetainedCleanup(t *testing.T) {
 		{name: "live", finish: true, age: time.Hour, want: "live or unknown"},
 		{name: "unknown group", finish: true, age: time.Hour, probeErr: syscall.EPERM, want: "live or unknown"},
 		{name: "interrupted", gone: true, age: time.Hour, want: "no known finish"},
-		{name: "observed pending", observedRun: true, finish: true, gone: true, age: time.Hour, want: "observed cleanup"},
+		{name: "observed pending", observedRun: true, finish: true, gone: true, age: time.Hour, want: "cleanup mode"},
+		{name: "routine through observed", observedCleanup: true, finish: true, gone: true, want: "cleanup mode"},
 		{name: "observed live", observedRun: true, observedCleanup: true, want: "live or unknown"},
 		{name: "degraded", finish: true, degraded: true, gone: true, age: time.Hour, want: "host-degraded"},
 		{name: "observed degraded", observedRun: true, observedCleanup: true, degraded: true, gone: true, want: "host-degraded"},
 		{name: "eligible routine", finish: true, gone: true, age: minimumRetention},
 		{name: "eligible observed", observedRun: true, observedCleanup: true, gone: true},
-		{name: "interrupted previous boot", currentBoot: "next-boot", age: time.Hour},
+		{name: "interrupted previous boot", currentBoot: "next-boot", age: time.Hour, want: "10-minute"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "state")
 			lane := openTestLane(t, dir, "boot")
-			run, err := lane.Begin(os.Getpid(), tc.observedRun, now.Add(-tc.age-time.Second))
+			run, err := lane.Begin(os.Getpid(), tc.observedRun, false, now.Add(-tc.age-time.Second))
 			if err != nil {
 				t.Fatal(err)
 			}
 			if tc.finish {
 				if err := lane.Finish(run, now.Add(-tc.age)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.name == "eligible routine" {
+				record, err := readRun(run)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := lane.exitBoundary(run, record, now.Add(-tc.age), func(int) (bool, error) { return true, nil }); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -226,7 +236,7 @@ func TestRetainedCleanup(t *testing.T) {
 				return tc.gone, tc.probeErr
 			}, func(path string) error {
 				calls++
-				if path != filepath.Join(dir, cleanupPrefix+filepath.Base(run)) {
+				if path != run {
 					t.Fatalf("cleanup target = %s", path)
 				}
 				second, err := Lock(dir)
@@ -256,13 +266,13 @@ func TestRetainedInterlock(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	lane := openTestLane(t, dir, "boot")
 	now := time.Now()
-	run, err := lane.Begin(os.Getpid(), false, now)
+	run, err := lane.Begin(syscall.Getpgrp(), false, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	lane.Close()
 	lane = openTestLane(t, dir, "boot")
-	if _, err := lane.Begin(os.Getpid(), false, now); err == nil || !strings.Contains(err.Error(), "process group") {
+	if _, err := lane.Begin(syscall.Getpgrp(), false, false, now); err == nil || !strings.Contains(err.Error(), "process group") {
 		t.Fatalf("second Begin = %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(run, "run.json"), []byte("bad state"), 0600); err != nil {
@@ -284,7 +294,7 @@ func TestCleanupResumes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	lane := openTestLane(t, dir, "boot")
 	now := time.Now()
-	run, err := lane.Begin(os.Getpid(), true, now)
+	run, err := lane.Begin(os.Getpid(), true, false, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,8 +316,176 @@ func TestCleanupResumes(t *testing.T) {
 	if err := lane.Cleanup(name, false, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, cleanupPrefix+name)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, cleanupPrefix+name+".json")); !os.IsNotExist(err) {
 		t.Fatalf("cleanup state remains: %v", err)
+	}
+}
+
+// A completed direct command does not age the fixture while a descendant
+// lives. The full window starts when group exit is first verified.
+func TestRetentionStartsAfterGroupExit(t *testing.T) {
+	now := time.Now()
+	dir := filepath.Join(t.TempDir(), "state")
+	lane := openTestLane(t, dir, "boot")
+	run, err := lane.Begin(os.Getpid(), false, false, now.Add(-2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lane.Finish(run, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(run)
+	removeCalls := 0
+	remove := func(path string) error {
+		removeCalls++
+		return os.RemoveAll(path)
+	}
+	gone := false
+	probe := func(int) (bool, error) { return gone, nil }
+	if err := lane.cleanup(name, false, now, probe, remove); err == nil || !strings.Contains(err.Error(), "live or unknown") || removeCalls != 0 {
+		t.Fatalf("live descendant = %v, removals=%d", err, removeCalls)
+	}
+	gone = true
+	if err := lane.cleanup(name, false, now, probe, remove); err == nil || !strings.Contains(err.Error(), "10-minute") || removeCalls != 0 {
+		t.Fatalf("newly exited group = %v, removals=%d", err, removeCalls)
+	}
+	if err := lane.cleanup(name, false, now.Add(minimumRetention), probe, remove); err != nil || removeCalls != 1 {
+		t.Fatalf("quiet group = %v, removals=%d", err, removeCalls)
+	}
+}
+
+// An unrecognized reap directory remains intact. A new directory at the
+// original path also cannot inherit a real interrupted cleanup authorization.
+func TestCleanupRefusesUnrecognizedIdentity(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	lane := openTestLane(t, dir, "boot")
+	unknown := filepath.Join(dir, "reap-run-example")
+	if err := os.Mkdir(unknown, 0700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := lane.Begin(os.Getpid(), false, false, now); err == nil || !strings.Contains(err.Error(), "unknown cleanup state") {
+		t.Fatalf("unknown cleanup directory = %v", err)
+	}
+	if _, err := os.Stat(unknown); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(unknown); err != nil {
+		t.Fatal(err)
+	}
+	run, err := lane.Begin(os.Getpid(), true, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Base(run)
+	interrupted := errors.New("interrupted")
+	if err := lane.cleanup(name, true, now, func(int) (bool, error) { return true, nil }, func(string) error { return interrupted }); !errors.Is(err, interrupted) {
+		t.Fatalf("prepare cleanup = %v", err)
+	}
+	if err := os.Rename(run, run+".original"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(run, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := lane.Cleanup(name, true, now); err == nil || !strings.Contains(err.Error(), "identity changed") {
+		t.Fatalf("replacement directory = %v", err)
+	}
+	if _, err := os.Stat(run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Admission distinguishes the inherited held description from a free lock
+// or an independent descriptor on the same inode.
+func TestAdmissionRequiresHeldLock(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	lane := openTestLane(t, dir, "boot")
+	if err := lane.Close(); err != nil {
+		t.Fatal(err)
+	}
+	independent, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer independent.Close()
+	if err := checkHeldLock(dir, int(independent.Fd())); err == nil || !strings.Contains(err.Error(), "parent did not hold") {
+		t.Fatalf("unlocked descriptor = %v", err)
+	}
+	lane = openTestLane(t, dir, "boot")
+	if err := checkHeldLock(dir, int(lane.ChildLock().Fd())); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHeldLock(dir, int(independent.Fd())); err == nil || !strings.Contains(err.Error(), "did not inherit") {
+		t.Fatalf("independent descriptor = %v", err)
+	}
+}
+
+// A correct-looking active run refuses a degraded lane, a symlink and
+// any competing retained or cleanup state.
+func TestAdmissionChecksActiveState(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	lane := openTestLane(t, dir, "boot")
+	run, err := lane.Begin(os.Getpid(), false, false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := checkActiveRun(dir, run); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "run-link")
+	if err := os.Symlink(run, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkActiveRun(dir, link); err == nil || !strings.Contains(err.Error(), "unsafe codesign directory") {
+		t.Fatalf("symlink admission = %v", err)
+	}
+	if err := checkActiveRun(dir, run); err == nil || !strings.Contains(err.Error(), "outstanding state") {
+		t.Fatalf("competing run admission = %v", err)
+	}
+	flag := filepath.Join(dir, DegradedFile)
+	if err := os.WriteFile(flag, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkActiveRun(dir, run); err == nil || !strings.Contains(err.Error(), "host-degraded") {
+		t.Fatalf("degraded admission = %v", err)
+	}
+}
+
+// A runner-shaped process still needs the expected actual sandbox evidence.
+// The separate certificate lane accepts only the applied init-level gate.
+func TestAdmissionRequiresConfinement(t *testing.T) {
+	for _, tc := range []struct {
+		name, skip                    string
+		cert, applied, confined, want bool
+	}{
+		{"unconfined", "1", false, false, false, false},
+		{"init only", "1", false, true, false, false},
+		{"opt out", "", false, false, true, false},
+		{"exec-level", "1", false, false, true, true},
+		{"certificate without gate", "1", true, false, false, false},
+		{"certificate exec-level", "1", true, false, true, false},
+		{"certificate init-level", "1", true, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := requireConfinement(tc.cert, tc.skip, tc.applied, tc.confined)
+			if (err == nil) != tc.want {
+				t.Fatalf("confinement = %v", err)
+			}
+		})
+	}
+}
+
+// The default transcript rejects a transient native attempt even when the
+// test subsequently skips and leaves no fixture on disk.
+func TestDefaultControlRejectsTransientAction(t *testing.T) {
+	skipped := "--- SKIP: TestFixture (0.00s)\n"
+	if err := CheckDefaultOutput([]byte(skipped), "TestFixture"); err != nil {
+		t.Fatal(err)
+	}
+	plant := "fixture_test.go:1: " + NativeAttemptPrefix + "build\n" + skipped
+	if err := CheckDefaultOutput([]byte(plant), "TestFixture"); err == nil || !strings.Contains(err.Error(), "attempted a native fixture action") {
+		t.Fatalf("transient attempt = %v", err)
 	}
 }
 

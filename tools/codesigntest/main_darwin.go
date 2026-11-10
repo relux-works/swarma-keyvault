@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -71,7 +70,7 @@ func fixtureMode(mode string) bool {
 	return mode == runMode || mode == observedMode || mode == certificateMode
 }
 
-func supervise(mode string) error {
+func supervise(mode string) (result error) {
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -88,24 +87,34 @@ func supervise(mode string) error {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
-	case err := <-done:
-		return err
+	case result = <-done:
 	case sig := <-signals:
 		_ = cmd.Process.Signal(sig)
-		return errors.Join(fmt.Errorf("fixture run interrupted by %s", sig), <-done)
+		result = errors.Join(fmt.Errorf("fixture run interrupted by %s", sig), <-done)
 	}
+	// A surviving owned child can hold the inherited lock. A later
+	// invocation can establish the quiet boundary once it has exited.
+	lane, _, err := openLane()
+	if errors.Is(err, codesigntest.ErrBusy) {
+		return result
+	}
+	if err != nil {
+		return errors.Join(result, err)
+	}
+	defer lane.Close()
+	return errors.Join(result, lane.ObserveExit(cmd.Process.Pid, time.Now()))
 }
 
 func openLane() (*codesigntest.Lane, string, error) {
-	dir, err := codesigntest.StateDir()
+	dir, err := codesigntest.StateDir(true)
 	if err != nil {
 		return nil, "", err
 	}
-	out, err := exec.Command("/usr/sbin/sysctl", "-n", "kern.bootsessionuuid").Output()
+	boot, err := codesigntest.BootID()
 	if err != nil {
-		return nil, "", fmt.Errorf("read macOS boot identity: %w", err)
+		return nil, "", err
 	}
-	lane, err := codesigntest.Open(dir, strings.TrimSpace(string(out)))
+	lane, err := codesigntest.Open(dir, boot)
 	return lane, dir, err
 }
 
@@ -125,7 +134,7 @@ func worker(mode string) (result error) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	lane, state, err := openLane()
+	lane, _, err := openLane()
 	if err != nil {
 		return err
 	}
@@ -133,7 +142,11 @@ func worker(mode string) (result error) {
 	if err := checkContention(ctx); err != nil {
 		return err
 	}
-	path, err := lane.Begin(os.Getpid(), mode == observedMode, time.Now())
+	home, err := codesigntest.AccountHome()
+	if err != nil {
+		return err
+	}
+	path, err := lane.Begin(os.Getpid(), mode == observedMode, mode == certificateMode, time.Now())
 	if err != nil {
 		return err
 	}
@@ -143,9 +156,9 @@ func worker(mode string) (result error) {
 	}()
 	// Finish only after the chosen commands return. A crash before this
 	// record requires observed cleanup or a later boot.
-	r := runner{ctx: ctx, repo: root, path: path, home: filepath.Dir(state), lock: lane.ChildLock()}
+	r := runner{ctx: ctx, repo: root, path: path, home: home, lock: lane.ChildLock()}
 	if mode == certificateMode {
-		result = r.publicCertificate()
+		result = r.publicCertificate(lane)
 	} else {
 		recovery := r.confined("recovery", "internal/keyvault", codesigntest.RecoverySelection,
 			"TestRecoveryPrivateHelperFramingAndAdmission", "TestRecoveryActualChildCodeBoundary")
@@ -176,6 +189,7 @@ type runner struct {
 
 func (r runner) command(dir, optIn, binary string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(r.ctx, binary, args...)
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(),
 		"HOME="+r.home, "GOFLAGS=", "GOWORK=off", "CGO_ENABLED=1", "GOTOOLCHAIN=local",
@@ -233,10 +247,8 @@ func (r runner) confined(name, pkg, selection string, tests ...string) error {
 	if err != nil {
 		return fmt.Errorf("%s default control: %w", name, err)
 	}
-	for _, test := range tests {
-		if !bytes.Contains(out, []byte("--- SKIP: "+test+" (")) {
-			return fmt.Errorf("%s default control did not skip %s", name, test)
-		}
+	if err := codesigntest.CheckDefaultOutput(out, tests...); err != nil {
+		return fmt.Errorf("%s: %w", name, err)
 	}
 	after, err := os.ReadDir(r.path)
 	if err != nil {
@@ -259,6 +271,13 @@ func (r runner) confined(name, pkg, selection string, tests ...string) error {
 			return fmt.Errorf("%s opt-in did not pass %s", name, test)
 		}
 	}
+	if name == "recovery" {
+		for _, mode := range []string{"hardened", "no-runtime", "wrong-hash", "debug-entitlement"} {
+			if !bytes.Contains(out, []byte("--- PASS: TestRecoveryActualChildCodeBoundary/"+mode+" (")) {
+				return fmt.Errorf("recovery native identity mode %s did not pass", mode)
+			}
+		}
+	}
 	if name == "kek" && !bytes.Contains(out, []byte("exact trust refusal and zero attested facts verified")) {
 		return errors.New("confined KEK case did not verify its trust refusal")
 	}
@@ -269,7 +288,7 @@ func (r runner) confined(name, pkg, selection string, tests ...string) error {
 	return nil
 }
 
-func (r runner) publicCertificate() error {
+func (r runner) publicCertificate(lane *codesigntest.Lane) error {
 	const gatePkg = "internal/keyvault/keychaingate"
 	path, err := r.build("canary", gatePkg, "-tags=keyvault_gate_regression")
 	if err != nil {
@@ -281,6 +300,9 @@ func (r runner) publicCertificate() error {
 	}
 	if !bytes.Contains(out, []byte("keychaingate.Applied()=true")) || !bytes.Contains(out, []byte("--- PASS: TestSandboxCanary (")) {
 		return errors.New("Keychain canary did not confirm init-level confinement")
+	}
+	if err := lane.RecordCertificateCanary(r.path); err != nil {
+		return err
 	}
 	const kekPkg = "internal/keyvault/kek"
 	path, err = r.build("kek-certificate", kekPkg)

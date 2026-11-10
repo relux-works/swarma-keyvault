@@ -46,9 +46,11 @@ func TestRecoveryActualChildCodeBoundary(t *testing.T) {
 				args = append(args, "--entitlements", ent)
 			}
 			args = append(args, path)
+			codesigntest.NativeAttempt(t, "sign recovery code fixture")
 			if out, err := exec.Command("/usr/bin/codesign", args...).CombinedOutput(); err != nil {
 				t.Fatalf("fixture signing failed: %v %s", err, out)
 			}
+			codesigntest.NativeAttempt(t, "inspect recovery code signature")
 			info, err := exec.Command("/usr/bin/codesign", "-d", "--verbose=4", path).CombinedOutput()
 			if err != nil {
 				t.Fatal(err)
@@ -78,6 +80,7 @@ func TestRecoveryActualChildCodeBoundary(t *testing.T) {
 				}
 				return err
 			}}
+			codesigntest.NativeAttempt(t, "execute recovery identity fixture")
 			data, err := h.call(struct {
 				Op string `json:"op"`
 			}{"fixture"}, 68)
