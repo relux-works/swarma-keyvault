@@ -13,6 +13,8 @@ type linuxVerifierAttemptResult struct {
 	measured, qualified bool
 	refusal, cleanupErr error
 	phases              []linuxVerifierPhase
+	completionVerified  bool
+	completionErr       error
 }
 
 // No retry, short circuit, filtering or replacement. Each invocation owns its
@@ -31,6 +33,7 @@ type linuxVerifierAttemptSummary struct {
 	observed                                                       []time.Duration
 	stats                                                          linuxVerifierTimingStats
 	qualified, deadline, state, other, incomplete, cleanupFailures int
+	safeDeadlines, lateCompletions, invalidCompletions             int
 }
 
 func linuxVerifierRefusalClass(err error) string {
@@ -46,7 +49,7 @@ func linuxVerifierRefusalClass(err error) string {
 	}
 }
 
-func evaluateLinuxVerifierAttempts(results []linuxVerifierAttemptResult) (linuxVerifierAttemptSummary, error) {
+func summarizeLinuxVerifierAttempts(results []linuxVerifierAttemptResult) linuxVerifierAttemptSummary {
 	var s linuxVerifierAttemptSummary
 	for _, r := range results {
 		if r.measured {
@@ -69,6 +72,11 @@ func evaluateLinuxVerifierAttempts(results []linuxVerifierAttemptResult) (linuxV
 			s.other++
 		}
 	}
+	return s
+}
+
+func evaluateLinuxVerifierAttempts(results []linuxVerifierAttemptResult) (linuxVerifierAttemptSummary, error) {
+	s := summarizeLinuxVerifierAttempts(results)
 	var timingErr error
 	s.stats, timingErr = classifyLinuxVerifierTiming(s.observed)
 	if len(results) != linuxVerifierSampleCount || s.qualified != linuxVerifierSampleCount || timingErr != nil {
@@ -77,10 +85,57 @@ func evaluateLinuxVerifierAttempts(results []linuxVerifierAttemptResult) (linuxV
 	return s, nil
 }
 
+// A deadline completion must come from an actual private fence. A joined
+// storage/cancellation/phase error must never inherit acceptance from one tag.
+func linuxGenuineDeadlineCompletion(err error) bool {
+	for err != nil {
+		if _, joined := err.(interface{ Unwrap() []error }); joined {
+			return false
+		}
+		if d, ok := err.(*linuxDeadlineError); ok {
+			if d.refusal == ErrMUState || d.refusal == ErrMUUnknown {
+				return true
+			}
+			p, ok := d.refusal.(*ErrMUPlatform)
+			return ok && p.Code == "time_unavailable"
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
+}
+
+func evaluateLinuxVerifierPath(path string, results []linuxVerifierAttemptResult) (linuxVerifierAttemptSummary, error) {
+	if path == "construction+advisory" {
+		return evaluateLinuxVerifierAttempts(results)
+	}
+	if path != "final-admission" {
+		return linuxVerifierAttemptSummary{}, fmt.Errorf("unknown verifier path %q", path)
+	}
+	// Reuse the original accounting, but final latency is descriptive only.
+	s := summarizeLinuxVerifierAttempts(results)
+	for _, r := range results {
+		if r.measured && r.elapsed >= linuxVerifierMaxExclusive {
+			s.lateCompletions++
+		}
+		valid := r.measured && r.cleanupErr == nil && r.completionVerified && r.completionErr == nil
+		if valid && !r.qualified && linuxGenuineDeadlineCompletion(r.refusal) {
+			s.safeDeadlines++
+		} else if !valid || !r.qualified || r.refusal != nil {
+			s.invalidCompletions++
+		}
+	}
+	var err error
+	s.stats, err = summarizeLinuxVerifierTiming(s.observed)
+	if len(results) != linuxVerifierSampleCount || s.qualified < 1 || s.invalidCompletions != 0 || s.qualified+s.safeDeadlines != linuxVerifierSampleCount || err != nil {
+		return s, fmt.Errorf("attempts=%d success=%d safe_deadline=%d invalid_completion=%d incomplete=%d cleanup_failures=%d statistics=%v", len(results), s.qualified, s.safeDeadlines, s.invalidCompletions, s.incomplete, s.cleanupFailures, err)
+	}
+	return s, nil
+}
+
 func linuxVerifierAttemptsError(results map[string][]linuxVerifierAttemptResult) error {
 	var failures []error
 	for _, path := range linuxVerifierPaths {
-		if _, err := evaluateLinuxVerifierAttempts(results[path]); err != nil {
+		if _, err := evaluateLinuxVerifierPath(path, results[path]); err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", path, err))
 		}
 	}

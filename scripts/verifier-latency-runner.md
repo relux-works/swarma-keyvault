@@ -3,15 +3,22 @@
 The measurement runs once, with zero retries or warmup exclusions. It prepares
 an independent fixture for every attempt on each path, records all 40 attempts
 per path even after a refusal, and confirms fixture cleanup after every attempt.
-Each path must have 40 successful qualified samples, nearest-rank p95 <=80ms,
-and every sample <100ms. Any refusal, incomplete attempt or cleanup failure
-fails the aggregate. The product's 100ms final-admission fence is unchanged.
+Construction/advisory requires all 40 qualified successes, nearest-rank p95
+<=80ms and every sample <100ms. Final Handle completion requires a proven durable
+success or a genuine no-effect deadline refusal for each attempt, with at least
+one actual success among the 40. Final p95/max and late completion counts are
+reported metrics; they have no full-return latency threshold. Incomplete attempts,
+state/storage/cancellation errors, missing durable/dispatch proof and cleanup
+failures still fail. The original absolute 100ms admission/dispatch fence remains.
+Persistence stays synchronous, including after expiry; a timely effect may report
+truthful success after its durable outcome completes late.
 
 Logs separate observed elapsed distributions (including refused measurements)
 from successful qualification counts and refusal classes. A deadline class comes
 only from an actual deadline fence, never from elapsed time or the generic
 state-unavailable sentinel. It does not establish environmental noise or grant
-a passing qualification. Other state and storage refusals remain failures.
+a successful effect. A safe deadline completion additionally needs actual no-effect
+and reopened-journal proof. Other state and storage refusals remain failures.
 Deadline errors retain their existing text, `errors.Is` sentinel chain and
 `errors.As` platform refusal code. Private test observers provide monotonic
 start/end offsets for domain locking, lock/open, journal replay, real verification,
@@ -20,9 +27,10 @@ phases remain absent; incomplete brackets fail evidence validation. The observer
 are installed only by same-package tests and supply no authority or clock.
 
 The confined invocation also runs deterministic injected-result controls: early
-refusals must leave both paths' remaining attempts intact and fail the aggregate;
+refusals must leave both paths' remaining attempts intact; unproven refusals fail;
 deadline/state refusals must stay distinct at equal elapsed values; in-budget
-successes pass; invalid counts, incomplete samples and cleanup errors refuse.
+successes and proven late completions pass; all-refused final series, invalid counts,
+incomplete samples, joined errors and missing proof or cleanup errors refuse.
 These controls run on Darwin and Linux, including race builds. They prove gate
 logic and fence behavior, not hosted timing or namespace qualification.
 
@@ -138,8 +146,9 @@ outer refusal fragment's diagnostic/status preservation. It does not qualify
 a sandbox or latency. The namespace-closure shell fixture uses a clearly
 labelled utility shim and does not claim real toolchain qualification.
 
-The product's 100ms fence and one measurement with exactly 40 samples per path,
-nearest-rank p95 <=80ms and maximum <100ms, with zero retries, are unchanged.
+The product's 100ms admission/dispatch fence, exactly 40 attempts per path and
+zero retries remain. Only construction/advisory has p95 <=80ms and max <100ms
+latency thresholds; final synchronous completion has the correctness gate above.
 
 Official platform references:
 

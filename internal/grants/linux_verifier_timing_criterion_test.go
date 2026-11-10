@@ -19,11 +19,11 @@ type linuxVerifierTimingStats struct {
 	p95, max    time.Duration
 }
 
-// classifyLinuxVerifierTiming consumes every raw duration once. Durations are
+// summarizeLinuxVerifierTiming consumes every raw duration once. Durations are
 // integer nanoseconds: NaN and infinity cannot be represented by this API.
 // Missing/extra or negative samples refuse. Unsorted input is sorted on a copy.
 // Nearest-rank p95 = sorted[ceil(95*N/100)-1], exactly rank 38 for N=40.
-func classifyLinuxVerifierTiming(values []time.Duration) (linuxVerifierTimingStats, error) {
+func summarizeLinuxVerifierTiming(values []time.Duration) (linuxVerifierTimingStats, error) {
 	s := linuxVerifierTimingStats{count: len(values)}
 	if s.count != linuxVerifierSampleCount {
 		return s, fmt.Errorf("actual samples %d, require exactly %d", s.count, linuxVerifierSampleCount)
@@ -37,6 +37,16 @@ func classifyLinuxVerifierTiming(values []time.Duration) (linuxVerifierTimingSta
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
 	s.rank = (95*s.count + 99) / 100
 	s.p95, s.max = ordered[s.rank-1], ordered[s.count-1]
+	return s, nil
+}
+
+// Construction/advisory retains both latency thresholds; final completion uses
+// the same complete raw-array statistics without a full-return latency SLA.
+func classifyLinuxVerifierTiming(values []time.Duration) (linuxVerifierTimingStats, error) {
+	s, err := summarizeLinuxVerifierTiming(values)
+	if err != nil {
+		return s, err
+	}
 	if s.p95 > linuxVerifierP95Limit || s.max >= linuxVerifierMaxExclusive {
 		return s, fmt.Errorf("p95 %s must be <= %s and max %s must be < %s", s.p95, linuxVerifierP95Limit, s.max, linuxVerifierMaxExclusive)
 	}

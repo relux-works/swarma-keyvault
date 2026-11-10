@@ -35,6 +35,14 @@ Hosted Linux CI (`.github/workflows/hosted-ci.yml`) uses the Go toolchain pinned
 
 Build it on Linux with `go build -o .temp/suite-runner ./tools/suiterunner`; run `MAC_KEYVAULT_SKIP_KEYCHAIN=1 .temp/suite-runner --timeout=30m -- go test -race -count=1 -timeout=30m -v ./...`. Run portable argument/refusal tests with `go test -race ./tools/suiterunner`; actual tree/subreaper tests require Linux. The isolated [suite-budget fixture](scripts/tests/testdata/suite-budget/README.md) supplies separate real own-deadline and native-cancellation controls, strict PID absence and a surviving outsider heartbeat. Local fixture record tests use `go -C scripts/tests/testdata/suite-budget test -race ./budget`; hosted witnesses/reports stay in private runner scratch. CI requires at least 72 committed interop vectors and cancels superseded PR runs only.
 
+The non-race [verifier runner](scripts/verifier-latency-runner.md) records 40 fresh
+attempts per path with zero retries: construction/advisory retains p95 <=80ms
+and max <100ms; final admission checks timely dispatch and durable synchronous
+completion, reporting full-return latency separately. Run the confined Linux
+measurement with `bash scripts/verifier-latency-confined.sh`; it writes raw
+attempts, phases, completion proofs and aggregate statistics to its test output.
+Preserve local output under `.temp/`.
+
 The initial custody target is macOS with Go 1.26.10 or later (go.mod selects
 go1.26.10; older installs download it or need it preinstalled), cgo and
 the Apple Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired

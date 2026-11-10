@@ -115,6 +115,7 @@ env -i PATH="$toolchain/bin:/usr/bin:/bin" HOME="$state/home" TMPDIR="$state/tmp
   GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
   go mod verify
 # Fixture signing is outside timing. Exactly 40/path; one run, zero retries.
-# Nearest-rank p95 is rank 38 of 40; require p95 <=80ms AND max <100ms.
+# Construction: rank-38 p95 <=80ms AND max <100ms. Final: durable completion
+# and timely dispatch proofs; all raw completion latencies remain reported.
 "${sandbox[@]}" go test -count=1 -v ./internal/grants \
-  -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion|TestLinuxVerifierAttemptControls|TestLinuxVerifierRefusalAndQualificationControls|TestLinuxAdmissionDeadlineCompatibility|TestLinuxAdmissionDeadlineCauseControls|TestLinuxAdmissionPhaseEvidence|TestLinuxAdmissionLateStateIsNotDeadline|TestLinuxAdmissionLockCauseControls)$'
+  -run '^(TestLinuxRealVerifierP95|TestLinuxVerifierTimingCriterion|TestLinuxVerifierCompletionControls|TestLinuxVerifierCompletionProofControls|TestLinuxAdmissionSynchronousCompletion|TestLinuxAdmissionWaitsForLateObservationDurability|TestLinuxVerifierAttemptControls|TestLinuxVerifierRefusalAndQualificationControls|TestLinuxAdmissionDeadlineCompatibility|TestLinuxAdmissionDeadlineCauseControls|TestLinuxAdmissionPhaseEvidence|TestLinuxAdmissionLateStateIsNotDeadline|TestLinuxAdmissionLockCauseControls)$'

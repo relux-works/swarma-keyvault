@@ -211,7 +211,7 @@ jobs:
           KEYVAULT_SUITE_JOB_LOG="$RUNNER_TEMP/suite-budget-control.log" GOTOOLCHAIN=local GOWORK=off GOPROXY=off go -C scripts/tests/testdata/suite-budget test -count=1 -v ./budget -run 'TestHostedDeadlineAnnotation|TestAnnotationContract'
 
   verifier-latency:
-    name: Real verifier non-race (40/path, p95 <=80ms, max <100ms)
+    name: Real verifier non-race (40/path, advisory timing and final completion)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -274,7 +274,7 @@ jobs:
             exit "${pipeline_status[0]}"
           fi
           exit "${pipeline_status[1]}"
-      - name: Measure once, 40 per path, p95 <=80ms and max <100ms, zero retries
+      - name: Measure once, 40 per path, advisory timing and final completion, zero retries
         shell: bash
         run: |
           set -euo pipefail

@@ -21,9 +21,10 @@ func TestLinuxVerifierAttemptControls(t *testing.T) {
 			got := collectLinuxVerifierAttempts(func(path string, i int) linuxVerifierAttemptResult {
 				calls[path] = append(calls[path], i)
 				defer func() { cleanups[path] = append(cleanups[path], i) }()
-				r := linuxVerifierAttemptResult{elapsed: time.Duration(20+i) * time.Millisecond, measured: true, qualified: true}
+				r := linuxVerifierAttemptResult{elapsed: time.Duration(20+i) * time.Millisecond, measured: true, qualified: true, completionVerified: true}
 				if path == plantedPath && i == 1 {
 					r.elapsed, r.qualified, r.refusal = 154*time.Millisecond, false, linuxDeadlineRefusal(ErrMUState)
+					r.completionVerified = false // A deadline tag alone supplies no durable proof.
 				}
 				want[path] = append(want[path], r)
 				return r
@@ -68,7 +69,7 @@ func TestLinuxVerifierRefusalAndQualificationControls(t *testing.T) {
 			t.Run(tc.name+elapsed.String(), func(t *testing.T) {
 				results := make([]linuxVerifierAttemptResult, 40)
 				for i := range results {
-					results[i] = linuxVerifierAttemptResult{elapsed: time.Millisecond, measured: true, qualified: true}
+					results[i] = linuxVerifierAttemptResult{elapsed: time.Millisecond, measured: true, qualified: true, completionVerified: true}
 				}
 				results[0] = linuxVerifierAttemptResult{elapsed: elapsed, measured: true, refusal: tc.err}
 				s, err := evaluateLinuxVerifierAttempts(results)
@@ -85,7 +86,7 @@ func TestLinuxVerifierRefusalAndQualificationControls(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			r := make([]linuxVerifierAttemptResult, 40)
 			for i := range r {
-				r[i] = linuxVerifierAttemptResult{elapsed: time.Millisecond, measured: true, qualified: true}
+				r[i] = linuxVerifierAttemptResult{elapsed: time.Millisecond, measured: true, qualified: true, completionVerified: true}
 			}
 			switch mode {
 			case "incomplete":

@@ -59,13 +59,13 @@ and history while refusing before dispatch. Unknown outcomes and fresh-nonce
 attempts cannot release a once hold. Existing snapshot marks and revocation
 unions remain in the same MU journal.
 
-This does **not** complete final admission. No exclusion mechanism yet spans
-all authoritative registry, revocation, generation, time, history and restore
-updates through final use. An immutable old view cannot establish currentness.
-The view's receiver port therefore retains independently verified observations
-but always refuses an effect candidate. The helper is not wired into production
-dispatch. Its own 100 ms reservation fence and the advisory 100 ms fence are
-separate; a single complete final-admission budget is still unfinished.
+The standalone view does **not** establish final-admission currentness. Its
+receiver port retains independently verified observations but refuses an effect
+candidate. The separate `LinuxAdmissionDomain` owns exclusion from authoritative
+replacement/invalidation through Handle, real re-verification and effect entry,
+using one original 100 ms admission deadline before contention and journal open.
+This in-process exclusion supplies no protected-source identity or independent
+restore fence and does not install a production effect executor.
 Synchronous filesystem writes/fsync cannot be forcibly bounded or cancelled by
 the existing port. Late-result refusal prevents an effect but establishes no
 100 ms storage-return guarantee. No timed-out operation is left running.
@@ -94,27 +94,55 @@ ordering. Synthetic elapsed time does not authenticate evidence or qualify any
 provider, storage, clock, restore or native custody premise.
 
 Hosted CI also runs `TestLinuxRealVerifierP95` without race instrumentation.
-It records all 40 fresh samples for each path: provider copy/construction plus
+It records all 40 fresh attempts for each path: provider copy/construction plus
 real advisory verification, and staged-domain final admission through actual
 journal reservation, intent, fixture effect and outcome. Ephemeral key/signature
 and fixture setup occur outside timing; verifier construction remains inside
-advisory timing. Each sample records UTC start/end and monotonic duration.
-Nearest-rank p95 is `sorted[ceil(95*N/100)-1]` (one-based rank 38
-of exactly 40). The hosted non-race gate requires **p95 <= 80 ms AND
-maximum < 100 ms**, independently for each path. Exactly 40 actual samples per
-path are required and logged, with one run and zero retries. No warmup or slow
-sample is discarded. The test-only classifier accepts unsorted input by sorting
-a copy, leaves raw samples unchanged, and rejects missing, extra or negative
-durations. Integer nanosecond durations cannot represent NaN or infinity.
-The 80 ms percentile boundary is inclusive; the 100 ms maximum is exclusive.
-Synthetic statistics test these boundaries without remeasuring real latency.
+advisory timing. Every attempt retains its raw monotonic duration, phases,
+refusal class and cleanup result. One run, zero retries, no warmup or replacement
+samples are permitted, including after an early refusal.
 
-The production real-monotonic 100 ms fence and private deterministic race-test
-clock are unchanged. The earlier strict 60 ms margin gate failed; those original
-receipts and raw measurements remain failures under their original criterion.
-Applying this new criterion to retained samples is analytical evidence only.
-A miss is a failed gate, not permission to retry or widen a budget. Successful
-race logic tests alone do not establish real-time performance or clear hosted CI.
-After fresh whole-candidate review, a new custodian marker and publication through
-the custodian's authorized client, the exact candidate needs its own one-shot
-hosted race plus non-race p95 result. Cost reduction is separate work.
+Construction/advisory still requires all 40 qualified successes, nearest-rank
+**p95 <= 80 ms AND maximum < 100 ms**. Final admission instead checks synchronous
+completion correctness: each attempt must either succeed with exactly one
+fixture effect entered before its original context deadline, or return a genuine
+private-tagged deadline refusal with no effect. After the timed Handle returns,
+the test reopens the actual journal and checks both signed snapshot observations,
+their monotonic unions, and any committed verification originals, nonce, once-use
+reservation, dispatch intent and outcome. An unknown result retains its use and
+intent. A storage/state/cancellation error, missing proof, malformed phase or
+cleanup failure still fails. At least one actual final success is required;
+refusing every attempt cannot qualify the path. Refusals remain refusals in logs.
+
+Final Handle completion latency is reported separately: p95, maximum, all 40
+ordered raw values, successful completions, safe deadline completions and the
+number completing at or after 100 ms. These completion statistics have no latency
+threshold. The original absolute 100 ms admission/dispatch fence remains in
+place before contention and journal open. Persistence is synchronous: an expired
+request waits for its in-flight journal operation to finish before returning,
+and no effect may start after the fence. An effect admitted in time can finish
+its durable outcome later and still return truthful success. No asynchronous
+pending operation, detached persistence, retry or refund is introduced.
+
+`LinuxDomainPrerequisites` retains its existing Clock, Continuity and
+StorageReturnBound fields and admission predicates, including a positive declared
+storage bound no greater than 100 ms. A caller declaration is not a measured
+filesystem guarantee or a full Handle-return SLA. A passing fixture run neither
+qualifies an unmeasured storage target nor supplies either clock or continuity.
+
+
+Nearest-rank p95 is `sorted[ceil(95*N/100)-1]`, rank 38 of exactly 40.
+Statistics sort a copy, preserve ordered raw measurements and reject missing,
+extra or negative durations. Integer nanoseconds cannot represent NaN or infinity.
+Construction's 80 ms boundary is inclusive and its 100 ms maximum exclusive.
+Deterministic controls exercise late snapshot, reservation, intent and outcome
+persistence, lost acknowledgments and cancellation; a held Sync cannot yield an
+early terminal result. Gate controls pair valid late completions with forbidden
+late dispatch, missing durability proof, joined storage failures and all-refused
+series. They prove the exercised ordering and gate logic, not hardware power-loss
+safety or performance of an unmeasured deployment.
+
+The earlier latency-gate receipts remain failures under their original criterion;
+they are not retroactively accepted. A new exact candidate requires its own fresh
+review and hosted race plus non-race completion/construction result. Race logic
+success alone does not establish real-time performance or qualify a deployment.
