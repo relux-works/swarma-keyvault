@@ -12,7 +12,7 @@ import (
 
 var newNostrBackend = func() keyvault.NostrBackend { return keyvault.NewNostrSecurityStore() }
 
-const nostrUsage = "mac-keyvault [--json] nostr generate --service S --purpose P [--version N] | nostr list | nostr describe|pub|sign SERVICE/PURPOSE [--version N] [pub: --format x-only-hex|npub] [sign: --digest HEX] | nostr verify --pub HEX --digest HEX --sig HEX"
+const nostrUsage = "mac-keyvault [--json] nostr generate --service S --purpose P [--version N] | nostr list | nostr describe|pub|sign SERVICE/PURPOSE [--version N] [pub: --format x-only-hex|npub] [sign: --digest HEX] | nostr verify --pub HEX --digest HEX --sig HEX | nostr delete SERVICE/PURPOSE --version N --expected-npub NPUB"
 
 func runNostr(args []string, out output) int {
 	if len(args) == 0 {
@@ -21,22 +21,29 @@ func runNostr(args []string, out output) int {
 	op := args[0]
 	// Closed command/flag vocabulary, before constructing or contacting a store.
 	switch op {
-	case "generate", "list", "describe", "pub", "sign", "verify":
+	case "generate", "list", "describe", "pub", "sign", "verify", "delete":
 	default:
 		return out.fail(usagef("unsupported Nostr operation; private import and export are refused"))
 	}
 	fs := flag.NewFlagSet("nostr "+op, flag.ContinueOnError)
-	var service, purpose, digestText, format, publicText, signatureText string
+	var service, purpose, digestText, format, publicText, signatureText, expectedNPub string
 	version := 1
 	if op == "generate" {
 		fs.StringVar(&service, "service", "", "service")
 		fs.StringVar(&purpose, "purpose", "", "purpose")
 	}
 	if op != "list" && op != "verify" {
-		fs.IntVar(&version, "version", 1, "explicit generation (default 1)")
+		defaultVersion := 1
+		if op == "delete" {
+			defaultVersion = 0
+		}
+		fs.IntVar(&version, "version", defaultVersion, "generation; delete requires an explicit version")
 	}
 	if op == "sign" || op == "verify" {
 		fs.StringVar(&digestText, "digest", "", "32-byte NIP-01 event id, hexadecimal")
+	}
+	if op == "delete" {
+		fs.StringVar(&expectedNPub, "expected-npub", "", "exact public Nostr pin")
 	}
 	if op == "pub" {
 		fs.StringVar(&format, "format", "x-only-hex", "x-only-hex or npub")
@@ -49,7 +56,7 @@ func runNostr(args []string, out output) int {
 	if err != nil {
 		return out.fail(usagef("invalid Nostr arguments; see help"))
 	}
-	if op == "describe" || op == "pub" || op == "sign" {
+	if op == "describe" || op == "pub" || op == "sign" || op == "delete" {
 		if len(positional) != 1 {
 			return out.fail(usagef("one SERVICE/PURPOSE address is required"))
 		}
@@ -68,6 +75,9 @@ func runNostr(args []string, out output) int {
 	}
 	if op == "pub" && format != "x-only-hex" && format != "npub" {
 		return out.fail(usagef("public format must be x-only-hex or npub; private export is refused"))
+	}
+	if op == "delete" && expectedNPub == "" {
+		return out.fail(usagef("exact public Nostr pin required"))
 	}
 	var digest []byte
 	if op == "sign" || op == "verify" {
@@ -95,6 +105,15 @@ func runNostr(args []string, out output) int {
 		return out.fail(err)
 	}
 	m := keyvault.NewNostrManager(newNostrBackend(), keyvault.FileLock{Path: path})
+	if op == "delete" {
+		if expectedNPub == "" {
+			return out.fail(usagef("exact public Nostr pin required"))
+		}
+		if err := m.Delete(service, purpose, version, expectedNPub); err != nil {
+			return out.fail(err)
+		}
+		return out.success(map[string]bool{"deleted": true}, func(w io.Writer) { fmt.Fprintln(w, "deleted: true") })
+	}
 	if op == "list" {
 		records, err := m.List()
 		if err != nil {
@@ -102,7 +121,7 @@ func runNostr(args []string, out output) int {
 		}
 		return out.success(records, func(w io.Writer) {
 			for _, r := range records {
-				fmt.Fprintf(w, "%s\t%s\t%s\tkeychain-acl\tpresence=false\n", r.Account(), r.PublicKey, r.NPub)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\tpresence=false\n", r.Account(), r.PublicKey, r.NPub, r.Storage)
 			}
 		})
 	}

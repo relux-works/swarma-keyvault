@@ -80,17 +80,32 @@ Required native certificate qualification and its limits are described in
 [the KEK contract](docs/kek.md). Test/build logs and scratch belong under `.temp/`.
 The native-input allowlist is a review tripwire; it does not replace confinement.
 
+For the recovery interface, build the hardened ad-hoc signed vault/helper pair
+from a clean committed checkout with
+`go run ./tools/recoverybuild --out /absolute/new/ignored/build-directory`.
+The new directory receives both artifacts, their public manifest and `build.log`;
+the tool performs no installation or key operation. The isolated unmodified
+reference module runs with `go -C tools/recoveryreference test -race ./...`;
+`go -C tools/recoveryreference run .` emits only its fixed public fixtures.
+See [reference regeneration](tools/recoveryreference/README.md) and
+[recovery qualification](docs/recovery.md).
+
 ## Nostr keys
 
-`mac-keyvault nostr` adds dedicated secp256k1 generation, list/describe, public
-x-only hex or NIP-19 npub export, 32-byte event-id BIP-340 signing and offline
-verification. Private keys stay in a signed-binary-only login-Keychain item at
-rest and transiently in the vault process for signing; no private export/import,
-Secure Enclave custody or Touch ID is claimed. Records explicitly report
-`storage=keychain-acl`, `presence=false`. Read [the Nostr interface and custody
-contract](docs/nostr.md) for exact commands, test lanes, limits and the planned
-attended installation/key-creation boundary. Existing P-256 interfaces retain
-their contracts.
+`mac-keyvault nostr` provides secp256k1 list/describe, public x-only hex or
+NIP-19 npub export, 32-byte event-id BIP-340 signing and offline verification.
+Its random-key generator retains the explicit `storage=keychain-acl` contract.
+The separate `mac-keyvault recovery` family creates or restores one 24-word
+offline backup, deriving a NIP-06 Nostr leaf and Namecoin account 0 from fixed
+paths. Only those two authorities persist, as separately device-wrapped
+ciphertexts in one atomic login-Keychain item. The Namecoin wrap requires
+Touch ID without password fallback; Nostr reports
+`storage=enclave-wrapped-keychain`, `presence=false`. Both routes retain the
+sole-application Keychain ACL and refuse private export. Recoverable secp256k1
+material exists transiently in vault memory; it is not hardware non-extractable.
+Read [Nostr commands](docs/nostr.md) and [recovery, custody limits and attended
+qualification](docs/recovery.md). Namecoin spending and registration are outside
+this interface. Existing P-256 interfaces retain their contracts.
 
 The multi-use grant interop vectors live in
 [`interop/multi-use-grants/`](interop/multi-use-grants/README.md). The confined

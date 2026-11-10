@@ -4,7 +4,13 @@
 signatures for 32-byte NIP-01 event ids. It does not change P-256 records,
 signer contract 1, SSH-agent signing or the KEK interfaces.
 
-## Custody
+## Legacy random-key custody
+
+This section describes `nostr generate` and its `storage=keychain-acl` records.
+The separate [recovery interface](recovery.md) derives the NIP-06 leaf from a
+24-word offline backup and reports `storage=enclave-wrapped-keychain`. The
+shared list/describe/pub/sign commands accept both explicit record forms;
+neither is silently converted into the other.
 
 Generation samples a nonzero scalar below the secp256k1 group order from the
 OS cryptographic random source. The scalar is stored as the encrypted value of
@@ -33,7 +39,9 @@ precise limits are documented in [third_party/README.md](../third_party/README.m
 The retained algorithms have variable-time aspects; no constant-time or local
 side-channel resistance is claimed. Protect the Mac and its login account.
 
-No command imports or exports private scalars, seeds or `nsec`. There is no
+The `nostr` family never imports or exports private scalars, seeds or `nsec`.
+The separate recovery family displays/reads its mnemonic only on the selected
+human terminal, with confirmation/public-pin checks before storage. There is no
 private-key getter in the backend interface. Public queries request attributes
 only, without fetching the encrypted secret value. Public metadata is not an
 independent attestation: retain the public key obtained at attended creation
@@ -50,7 +58,8 @@ derived public key to that record and verifies the signature before output.
 These are syntax examples for an authorized sitting, not requests to create or
 use a live key. `example` is a placeholder service. Generation defaults to
 version 1; public/private operations select version 1 unless `--version N` is
-explicit. There is no implicit newest-generation selection, rotation or deletion.
+explicit. There is no implicit newest-generation selection or rotation.
+Deletion requires an explicit version and retained public pin.
 
 ```sh
 mac-keyvault --json nostr generate --service example --purpose nostr --version 1
@@ -60,6 +69,7 @@ mac-keyvault nostr pub example/nostr --version 1 --format x-only-hex
 mac-keyvault nostr pub example/nostr --version 1 --format npub
 mac-keyvault nostr sign example/nostr --version 1 --digest HEX_EVENT_ID
 mac-keyvault nostr verify --pub HEX_PUBLIC_KEY --digest HEX_EVENT_ID --sig HEX_SIGNATURE
+mac-keyvault nostr delete example/nostr --version 1 --expected-npub RETAINED_NPUB
 ```
 
 The x-only public encoding is 32 bytes as 64 lowercase hex characters. `npub`
@@ -70,6 +80,10 @@ the 64-byte BIP-340 signature as 128 lowercase hex characters and uses fresh
 serialization: the caller must compute the correct event id. No `--stdin`,
 `--data-file`, `--out`, import, export, private format or store selector is
 accepted by this command family. Offline `nostr verify` accesses no vault.
+Exact deletion removes only a legacy single-key item; a recovery projection
+cannot be deleted separately from its paired group. Use the separately pinned
+`recovery delete` operation for that group. Wrong pins and OS refusal preserve
+the selected item; no deletion occurs during creation or restoration.
 
 `--json` retains the existing `{ok, command, result|error}` envelope and exit
 classes: 0 success, 1 operational failure, 2 invalid CLI arguments, 3 policy
@@ -108,9 +122,10 @@ Installation or a changed executable signature requires a planned custody
 adoption; never replace a trusted executable or broaden an ACL to repair a
 refusal automatically. Generate the owner's actual identity only after the
 candidate is accepted and the sitting admits installation/qualification. Share
-only its x-only public key and `npub`. Secure Enclave wrapping with presence
-would require a separate key-agreement/helper contract; it is not an alternate
-backend or fallback in this implementation.
+only its x-only public key and `npub`. Recovery records have their own
+[device-wrapping/helper contract](recovery.md), including the Namecoin account,
+Touch ID policy and same-Mac residual. They are not a denial fallback for legacy
+records.
 
 References: [BIP-340](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki),
 [NIP-01](https://github.com/nostr-protocol/nips/blob/master/01.md),

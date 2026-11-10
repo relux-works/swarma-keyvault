@@ -600,6 +600,36 @@ int MacKeyVaultNostrCreate(const char *account, const char *metadata, const unsi
     return (int)status;
 }
 
+int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *secret, size_t length) {
+    if (length == 0 || length > 65536 || strlen(metadata) > 32768) return errSecParam;
+    OSStatus status = MacKeyVaultRecoveryCode(0, NULL, 0);
+    if (status != errSecSuccess) return (int)status;
+    CFMutableDictionaryRef query = NULL;
+    SecKeychainRef keychain = NULL;
+    status = MacKeyVaultNostrQuery(&query, &keychain, 1);
+    if (status != errSecSuccess) return (int)status;
+    SecAccessRef access = NULL;
+    status = MacKeyVaultCreateAccess(&access);
+    if (status == errSecSuccess) {
+        CFStringRef accountString = MacKeyVaultString(account);
+        CFStringRef metadataString = MacKeyVaultString(metadata);
+        // No-copy input: Go owns and clears this buffer after the synchronous call.
+        CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, secret, (CFIndex)length, kCFAllocatorNull);
+        CFDictionarySetValue(query, kSecAttrAccount, accountString);
+        CFDictionarySetValue(query, kSecAttrLabel, accountString);
+        CFDictionarySetValue(query, kSecAttrComment, metadataString);
+        CFDictionarySetValue(query, kSecAttrAccess, access);
+        CFDictionarySetValue(query, kSecValueData, data);
+        // SecItemAdd is atomic and never updates an existing account.
+        status = SecItemAdd(query, NULL);
+        CFRelease(accountString); CFRelease(metadataString); CFRelease(data);
+        CFRelease(access);
+    }
+    CFRelease(query); CFRelease(keychain);
+    return (int)status;
+}
+
+
 int MacKeyVaultNostrList(char **out, size_t *outLen) {
     CFMutableDictionaryRef query = NULL;
     SecKeychainRef keychain = NULL;
@@ -619,7 +649,7 @@ int MacKeyVaultNostrList(char **out, size_t *outLen) {
         if (CFGetTypeID(row) != CFDictionaryGetTypeID()) { status = errSecDecode; break; }
         CFStringRef fields[] = { CFDictionaryGetValue(row, kSecAttrAccount), CFDictionaryGetValue(row, kSecAttrComment) };
         for (int f = 0; f < 2; f++) {
-            if (fields[f] == NULL || CFGetTypeID(fields[f]) != CFStringGetTypeID() || CFStringGetLength(fields[f]) > 4096) { status = errSecDecode; break; }
+            if (fields[f] == NULL || CFGetTypeID(fields[f]) != CFStringGetTypeID() || CFStringGetLength(fields[f]) > 32768) { status = errSecDecode; break; }
             CFDataRef text = CFStringCreateExternalRepresentation(NULL, fields[f], kCFStringEncodingUTF8, 0);
             if (text == NULL) { status = errSecDecode; break; }
             CFDataAppendBytes(buffer, CFDataGetBytePtr(text), CFDataGetLength(text));
@@ -674,4 +704,95 @@ int MacKeyVaultNostrRead(const char *account, const char *metadata, unsigned cha
     if (attributes || data) SecKeychainItemFreeAttributesAndData(attributes, data);
     CFRelease(item);
     return (int)status;
+}
+
+// Recovery values are ciphertext only. As for legacy Nostr scalars, check the
+// sole-app decrypt ACL before asking Security.framework for the value.
+int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned char **out, size_t *outLength) {
+    *out = NULL; *outLength = 0;
+    OSStatus status = MacKeyVaultRecoveryCode(0, NULL, 0);
+    if (status != errSecSuccess) return status;
+    CFMutableDictionaryRef query = NULL; SecKeychainRef keychain = NULL;
+    status = MacKeyVaultNostrQuery(&query, &keychain, 0);
+    if (status != errSecSuccess) return status;
+    CFStringRef name = MacKeyVaultString(account);
+    CFDictionarySetValue(query, kSecAttrAccount, name);
+    CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+    CFTypeRef item = NULL;
+    status = SecItemCopyMatching(query, &item);
+    CFRelease(name); CFRelease(query); CFRelease(keychain);
+    if (status != errSecSuccess) return status;
+    status = MacKeyVaultNostrCheckAccess((SecKeychainItemRef)item);
+    UInt32 tag = kSecCommentItemAttr, format = CSSM_DB_ATTRIBUTE_FORMAT_BLOB;
+    SecKeychainAttributeInfo info = {1, &tag, &format};
+    SecKeychainAttributeList *attributes = NULL; UInt32 length = 0; void *data = NULL;
+    if (status == errSecSuccess) status = SecKeychainItemCopyAttributesAndData((SecKeychainItemRef)item, &info, NULL, &attributes, &length, &data);
+    if (status == errSecSuccess) {
+        size_t metadataLen = strlen(metadata);
+        if (length == 0 || length > 65536 || attributes == NULL || attributes->count != 1 ||
+            attributes->attr[0].tag != kSecCommentItemAttr || attributes->attr[0].length != metadataLen ||
+            memcmp(attributes->attr[0].data, metadata, metadataLen) != 0) status = errSecDecode;
+        else {
+            *out = malloc(length);
+            if (*out == NULL) status = errSecAllocate;
+            else { memcpy(*out, data, length); *outLength = length; }
+        }
+    }
+    if (data) memset_s(data, length, 0, length);
+    if (attributes || data) SecKeychainItemFreeAttributesAndData(attributes, data);
+    CFRelease(item); return status;
+}
+
+// Exact public metadata pins removal. OS delete authorization is separate from
+// decrypt authorization; removal never retrieves the old private value.
+int MacKeyVaultNostrDelete(const char *account, const char *metadata) {
+    OSStatus status = MacKeyVaultNostrSignedSelf();
+    if (status != errSecSuccess) return status;
+    CFMutableDictionaryRef query = NULL; SecKeychainRef keychain = NULL;
+    status = MacKeyVaultNostrQuery(&query, &keychain, 0);
+    if (status != errSecSuccess) return status;
+    CFStringRef name = MacKeyVaultString(account), comment = MacKeyVaultString(metadata);
+    CFDictionarySetValue(query, kSecAttrAccount, name);
+    CFDictionarySetValue(query, kSecAttrComment, comment);
+    CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+    CFTypeRef item = NULL;
+    status = SecItemCopyMatching(query, &item);
+    CFRelease(name); CFRelease(comment); CFRelease(query); CFRelease(keychain);
+    if (status != errSecSuccess) return status;
+    status = SecKeychainItemDelete((SecKeychainItemRef)item);
+    CFRelease(item); return status;
+}
+
+// Verify the actual running process, not merely a path that could change after
+// launch. Strict signature validity, runtime and no entitlement exceptions form
+// the positive admission boundary for the recovery/helper custody seam.
+int MacKeyVaultRecoveryCode(int pid, const unsigned char *expectedHash, size_t hashLength) {
+    SecCodeRef code = NULL;
+    OSStatus status;
+    if (pid == 0) status = SecCodeCopySelf(kSecCSDefaultFlags, &code);
+    else {
+        CFMutableDictionaryRef attrs = MacKeyVaultDictionary();
+        CFNumberRef number = CFNumberCreate(NULL, kCFNumberIntType, &pid);
+        CFDictionarySetValue(attrs, kSecGuestAttributePid, number); CFRelease(number);
+        status = SecCodeCopyGuestWithAttributes(NULL, attrs, kSecCSDefaultFlags, &code);
+        CFRelease(attrs);
+    }
+    if (status != errSecSuccess) return status;
+    status = SecCodeCheckValidity(code, kSecCSStrictValidate, NULL);
+    CFDictionaryRef info = NULL;
+    if (status == errSecSuccess) status = SecCodeCopySigningInformation(code, kSecCSSigningInformation | kSecCSDynamicInformation, &info);
+    if (status == errSecSuccess) {
+        CFTypeRef flags = CFDictionaryGetValue(info, kSecCodeInfoFlags);
+        CFTypeRef dynamic = CFDictionaryGetValue(info, kSecCodeInfoStatus);
+        CFTypeRef hash = CFDictionaryGetValue(info, kSecCodeInfoUnique);
+        CFTypeRef entitlements = CFDictionaryGetValue(info, kSecCodeInfoEntitlementsDict);
+        uint32_t f = 0, d = 0;
+        if (flags == NULL || CFGetTypeID(flags) != CFNumberGetTypeID() || !CFNumberGetValue(flags, kCFNumberSInt32Type, &f) ||
+            dynamic == NULL || CFGetTypeID(dynamic) != CFNumberGetTypeID() || !CFNumberGetValue(dynamic, kCFNumberSInt32Type, &d) ||
+            f != 0x10002 || !(d & 0x10000) || !(d & 1) || (d & 0x10000000) ||
+            (entitlements != NULL && (CFGetTypeID(entitlements) != CFDictionaryGetTypeID() || CFDictionaryGetCount(entitlements) != 0))) status = errSecAuthFailed;
+        if (status == errSecSuccess && hashLength != 0 && (hash == NULL || CFGetTypeID(hash) != CFDataGetTypeID() ||
+            (size_t)CFDataGetLength(hash) != hashLength || memcmp(CFDataGetBytePtr(hash), expectedHash, hashLength) != 0)) status = errSecAuthFailed;
+    }
+    if (info) CFRelease(info); CFRelease(code); return status;
 }

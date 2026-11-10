@@ -526,6 +526,205 @@ func reviewDocument(_ request: [String: Any]) throws -> [String: Any] {
     return ["der": signature.derRepresentation.base64EncodedString(), "point": plan.point.base64EncodedString()]
 }
 
+
+// Recovery mode has a separate bounded binary protocol. It is never dispatched
+// from the existing public JSON operations and waits for the verified parent.
+func recoveryWrite(_ status: UInt8, _ payload: Data) {
+    var length = UInt32(payload.count).bigEndian
+    var frame = Data([status])
+    withUnsafeBytes(of: &length) { frame.append(contentsOf: $0) }
+    frame.append(payload)
+    FileHandle.standardOutput.write(frame)
+    frame.resetBytes(in: 0..<frame.count)
+}
+
+func recoveryRead(_ count: Int) throws -> Data {
+    var output = Data()
+    while output.count < count {
+        let part = FileHandle.standardInput.readData(ofLength: count - output.count)
+        guard !part.isEmpty else { throw HelperError(code: "bad_request", status: errSecParam, message: "incomplete private frame") }
+        output.append(part)
+    }
+    return output
+}
+
+func recoveryRequest() throws -> [String: String] {
+    let sizeBytes = try recoveryRead(4)
+    let count = sizeBytes.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+    guard count > 0 && count <= 32768 else { throw HelperError(code: "bad_request", status: errSecParam, message: "private frame too large") }
+    let raw = try recoveryRead(Int(count))
+    guard FileHandle.standardInput.readData(ofLength: 1).isEmpty,
+          let values = try JSONSerialization.jsonObject(with: raw) as? [String: String],
+          let op = values["op"] else { throw HelperError(code: "bad_request", status: errSecParam, message: "invalid private request") }
+    let fields: [String]
+    switch op {
+    case "create-wrap": fields = ["op", "purpose"]
+    case "unwrap-nostr": fields = ["op", "blob", "point", "ciphertext"]
+    case "qualify-wrap": fields = ["op", "purpose", "blob", "point"]
+    default: throw HelperError(code: "bad_request", status: errSecParam, message: "unknown private operation")
+    }
+    guard Set(values.keys) == Set(fields) else { throw HelperError(code: "bad_request", status: errSecParam, message: "private request fields") }
+    // Exact parent encoding rejects duplicate/escaped keys, trailing data and
+    // alternate encodings before any hardware operation. Values are ASCII
+    // operation/purpose identifiers or canonical standard base64.
+    var parts = [String]()
+    for field in fields {
+        guard let value = values[field], value.utf8.allSatisfy({ byte in
+            (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57) || [43,47,61,45].contains(byte)
+        }) else { throw HelperError(code: "bad_request", status: errSecParam, message: "private request encoding") }
+        parts.append("\"" + field + "\":\"" + value + "\"")
+    }
+    guard raw == Data(("{" + parts.joined(separator: ",") + "}").utf8) else { throw HelperError(code: "bad_request", status: errSecParam, message: "noncanonical private request") }
+    return values
+}
+
+func recoveryData(_ text: String?, _ maximum: Int, _ exact: Int? = nil) throws -> Data {
+    guard let text = text, text.count <= ((maximum + 2) / 3) * 4,
+          let data = Data(base64Encoded: text), data.count > 0, data.count <= maximum,
+          data.base64EncodedString() == text, exact == nil || data.count == exact else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "invalid private field")
+    }
+    return data
+}
+
+func recoveryAccessControl(_ purpose: String) throws -> SecAccessControl {
+    let flags: SecAccessControlCreateFlags
+    switch purpose {
+    case "nostr": flags = [.privateKeyUsage]
+    case "namecoin": flags = [.privateKeyUsage, .biometryAny]
+    default: throw HelperError(code: "bad_request", status: errSecParam, message: "invalid purpose")
+    }
+    // Positive policy allowlist: userPresence would admit password fallback;
+    // biometryCurrentSet would invalidate backup access after enrollment changes.
+    let expected: SecAccessControlCreateFlags = purpose == "namecoin" ? [.privateKeyUsage, .biometryAny] : [.privateKeyUsage]
+    guard flags == expected else { throw HelperError(code: "policy_refused", status: errSecAuthFailed, message: "wrapping policy") }
+    var error: Unmanaged<CFError>?
+    guard let control = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &error) else {
+        throw HelperError(code: "policy_refused", status: errSecAuthFailed, message: "wrapping access control")
+    }
+    return control
+}
+
+func recoveryLoad(_ blob: Data, _ context: LAContext) throws -> SecureEnclave.P256.KeyAgreement.PrivateKey {
+    guard SecureEnclave.isAvailable else { throw HelperError(code: "enclave_unavailable", status: errSecNotAvailable, message: "hardware unavailable") }
+    return try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: blob, authenticationContext: context)
+}
+
+func recoveryFixtureKey() throws -> P256.KeyAgreement.PrivateKey {
+    // Public disposable fixture scalar 1. This is not owner key material.
+    var bytes = Data(repeating: 0, count: 32); bytes[31] = 1
+    defer { bytes.resetBytes(in: 0..<bytes.count) }
+    return try P256.KeyAgreement.PrivateKey(rawRepresentation: bytes)
+}
+
+func recoverySilentPolicy(_ blob: Data, _ purpose: String) throws -> Bool {
+    let context = silentContext()
+    defer { context.invalidate() }
+    let key = try recoveryLoad(blob, context)
+    let peer = try recoveryFixtureKey()
+    do {
+        _ = try key.sharedSecretFromKeyAgreement(with: peer.publicKey)
+        guard purpose == "nostr" else { throw HelperError(code: "policy_refused", status: errSecAuthFailed, message: "presence key used silently") }
+        return false
+    } catch let error as HelperError { throw error }
+    catch {
+        let mapped = translate(error, "recovery presence probe")
+        guard purpose == "namecoin" && (mapped.code == "presence_required" || mapped.status == errSecInteractionNotAllowed) else { throw mapped }
+        return true
+    }
+}
+
+func recoveryFixtureQualification(_ blob: Data, _ point: Data, _ purpose: String) throws {
+    _ = try recoverySilentPolicy(blob, purpose)
+    let context = LAContext()
+    context.localizedFallbackTitle = ""
+    context.localizedReason = "Qualify the Namecoin account wrapping key with a public fixture; no transaction is signed"
+    defer { context.invalidate() }
+    let key = try recoveryLoad(blob, context)
+    guard key.publicKey.x963Representation == point else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "wrapping point mismatch") }
+    let peer = try recoveryFixtureKey()
+    let shared = try key.sharedSecretFromKeyAgreement(with: peer.publicKey)
+    let expected = try peer.sharedSecretFromKeyAgreement(with: key.publicKey)
+    // Compare derived public-fixture check values; never export hardware private
+    // keys or introduce a general Namecoin plaintext-returning endpoint.
+    let a = shared.x963DerivedSymmetricKey(using: SHA256.self, sharedInfo: Data("recovery-qualification/1".utf8), outputByteCount: 32)
+    let b = expected.x963DerivedSymmetricKey(using: SHA256.self, sharedInfo: Data("recovery-qualification/1".utf8), outputByteCount: 32)
+    guard a == b else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "fixture ECDH mismatch") }
+}
+
+func recoveryPrivate() -> Int32 {
+    do {
+        var inputInfo = stat(), outputInfo = stat()
+        guard fstat(STDIN_FILENO, &inputInfo) == 0, fstat(STDOUT_FILENO, &outputInfo) == 0,
+              inputInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFIFO),
+              outputInfo.st_mode & mode_t(S_IFMT) == mode_t(S_IFIFO) else {
+            throw HelperError(code: "bad_request", status: errSecParam, message: "private anonymous pipes required")
+        }
+        let request = try recoveryRequest()
+        switch request["op"] {
+        case "create-wrap":
+            guard let purpose = request["purpose"], SecureEnclave.isAvailable else { throw HelperError(code: "enclave_unavailable", status: errSecNotAvailable, message: "hardware unavailable") }
+            let context = silentContext()
+            defer { context.invalidate() }
+            let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(accessControl: recoveryAccessControl(purpose), authenticationContext: context)
+            let blob = key.dataRepresentation, point = key.publicKey.x963Representation
+            guard !blob.isEmpty && blob.count <= 16384 && point.count == 65 else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "invalid hardware representation") }
+            let refused = try recoverySilentPolicy(blob, purpose)
+            if purpose == "namecoin" { try recoveryFixtureQualification(blob, point, purpose) }
+            let fingerprint = SHA256.hash(data: point).map { String(format: "%02x", $0) }.joined()
+            let result: [String: Any] = ["blob": blob.base64EncodedString(), "point": point.base64EncodedString(), "fingerprint": fingerprint, "policy": purpose == "namecoin" ? "biometry-any" : "none", "silent_refused": refused]
+            recoveryWrite(0, try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys, .withoutEscapingSlashes]))
+            return 0
+        case "unwrap-nostr":
+            let blob = try recoveryData(request["blob"], 16384)
+            let point = try recoveryData(request["point"], 65, 65)
+            let ciphertext = try recoveryData(request["ciphertext"], 149, 149)
+            let context = silentContext()
+            defer { context.invalidate() }
+            let key = try recoveryLoad(blob, context)
+            guard key.publicKey.x963Representation == point else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "wrapping point mismatch") }
+            let ephemeral = try P256.KeyAgreement.PublicKey(x963Representation: ciphertext.prefix(65))
+            let secret = try key.sharedSecretFromKeyAgreement(with: ephemeral)
+            let derived = secret.x963DerivedSymmetricKey(using: SHA256.self, sharedInfo: ciphertext.prefix(65), outputByteCount: 32)
+            var material = derived.withUnsafeBytes { Data($0) }
+            defer { material.resetBytes(in: 0..<material.count) }
+            let aes = SymmetricKey(data: material.prefix(16))
+            let nonce = try AES.GCM.Nonce(data: material.suffix(16))
+            let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext.dropFirst(65).dropLast(16), tag: ciphertext.suffix(16))
+            var plain = try AES.GCM.open(box, using: aes)
+            defer { plain.resetBytes(in: 0..<plain.count) }
+            guard plain.count == 68 && plain.prefix(4) == Data("KVN1".utf8) else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "invalid plaintext frame") }
+            recoveryWrite(0, plain)
+            return 0
+        case "qualify-wrap":
+            guard let purpose = request["purpose"], ["nostr", "namecoin"].contains(purpose) else { throw HelperError(code: "bad_request", status: errSecParam, message: "invalid purpose") }
+            try recoveryFixtureQualification(recoveryData(request["blob"], 16384), recoveryData(request["point"], 65, 65), purpose)
+            recoveryWrite(0, Data("qualified".utf8))
+            return 0
+        default: throw HelperError(code: "bad_request", status: errSecParam, message: "private operation refused")
+        }
+    } catch {
+        // Closed fixed error vocabulary. No raw exception/input/OS text crosses
+        // this seam or reaches stderr, including authentication failures.
+        let mapped = (error as? HelperError) ?? translate(error, "recovery")
+        let code: String
+        switch mapped.code {
+        case "presence_required": code = "presence_required"
+        case "user_canceled", "auth_failed", "presence_unavailable", "presence_failed": code = "auth_refused"
+        case "enclave_unavailable": code = "enclave_unavailable"
+        case "bad_request": code = "bad_request"
+        case "policy_refused": code = "policy_refused"
+        default: code = "invalid_blob"
+        }
+        recoveryWrite(1, Data(code.utf8))
+        return 1
+    }
+}
+
+if CommandLine.arguments == [CommandLine.arguments[0], "--recovery-private"] {
+    exit(recoveryPrivate())
+}
+
 do {
     let request = try readFrame()
     guard let op = request["op"] as? String else {

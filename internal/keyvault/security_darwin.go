@@ -297,28 +297,22 @@ func (*NostrSecurityStore) Create(request NostrRecord) (NostrRecord, error) {
 }
 
 func (*NostrSecurityStore) List() ([]NostrRecord, error) {
-	var raw *C.char
-	var length C.size_t
-	status := int(C.MacKeyVaultNostrList(&raw, &length))
-	if status != 0 {
-		return nil, &StatusError{Op: "nostr list", Status: status}
+	records, _, err := recoveryNativeRows()
+	if r, ok := err.(*Refusal); ok && strings.HasPrefix(r.Code, "recovery_") {
+		return nil, nostrRefuse(strings.TrimPrefix(r.Code, "recovery_"))
 	}
-	if raw == nil {
-		return []NostrRecord{}, nil
-	}
-	defer C.free(unsafe.Pointer(raw))
-	if length > 4*1024*1024 {
-		return nil, nostrRefuse("invalid_record")
-	}
-	return parseNostrList(C.GoBytes(unsafe.Pointer(raw), C.int(length)))
+	return records, err
 }
 
-func (*NostrSecurityStore) Sign(record NostrRecord, digest []byte) ([]byte, error) {
+func (s *NostrSecurityStore) Sign(record NostrRecord, digest []byte) ([]byte, error) {
 	if len(digest) != 32 {
 		return nil, nostrRefuse("invalid_digest")
 	}
 	if err := validateNostrRecord(record); err != nil {
 		return nil, err
+	}
+	if record.Storage == "enclave-wrapped-keychain" {
+		return s.signRecovery(record, digest)
 	}
 	metadata, _ := json.Marshal(record)
 	account := C.CString(record.Account())

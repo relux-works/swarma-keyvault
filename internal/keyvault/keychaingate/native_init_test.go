@@ -29,6 +29,8 @@ var reviewedNativeInputs = []string{
 	"internal/keyvault/kek/inspect_darwin.c",
 	"internal/keyvault/kek/inspect_darwin.go",
 	"internal/keyvault/kek/inspect_darwin.h",
+	"internal/keyvault/recovery_darwin.go",
+	"internal/keyvault/recoveryfixture/native_darwin.go",
 	"internal/keyvault/security_darwin.c",
 	"internal/keyvault/security_darwin.go",
 	"internal/keyvault/security_darwin.h",

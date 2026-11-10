@@ -13,6 +13,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  recovery-reference:
+    name: Unmodified recovery reference and public fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOMAXPROCS: '2'
+      GOFLAGS: '-mod=readonly -p=2'
+      GOWORK: 'off'
+    steps:
+      - name: Check out the exact candidate
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up the pinned Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: tools/recoveryreference/go.mod
+          cache: false
+      - name: Verify and test the independent public reference
+        working-directory: tools/recoveryreference
+        run: |
+          go mod download
+          go mod verify
+          go test -race -count=1 ./...
+      - name: Reproduce the committed public fixture bytes
+        working-directory: tools/recoveryreference
+        run: |
+          go run . > "$RUNNER_TEMP/recovery-public.json"
+          cmp "$RUNNER_TEMP/recovery-public.json" ../../internal/keyvault/testdata/recovery/reference-public.json
+
   linux:
     name: Go vet and race tests (Linux)
     runs-on: ubuntu-latest

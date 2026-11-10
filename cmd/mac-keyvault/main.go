@@ -72,6 +72,7 @@ func usagef(format string, args ...any) error {
 // as the hint of a usage error.
 var usageLines = map[string]string{
 	"nostr":          nostrUsage,
+	"recovery":       recoveryUsage,
 	"init":           "mac-keyvault [--json] init --service S --purpose P [--kind key] [--algorithm ec-p256] [--title T] [--description D] [--usages a,b] [--format-public F] [--format-signature F] [--format-envelope F] [--extraction none|human|agent] [--not-after RFC3339] [--meta k=v]... [--meta-json FILE] [--generate SPEC] [--keychain|--enclave] [--user-presence]",
 	"list":           "mac-keyvault [--json] list [--service S] [--kind K]",
 	"describe":       "mac-keyvault [--json] describe <service>/<purpose> [--kind K] [--version N]",
@@ -165,7 +166,7 @@ func (o output) classify(err error) (int, *responseError) {
 			hint = usageLines[strings.SplitN(o.command, " ", 2)[0]]
 		}
 		if hint == "" {
-			hint = "mac-keyvault help lists the commands: init, list, describe, pub, sign, verify, rotate, delete, meta, signer, version"
+			hint = "mac-keyvault help lists the commands: recovery, nostr, init, list, describe, pub, sign, verify, rotate, delete, meta, signer, version"
 		}
 		return exitUsage, &responseError{Code: keyvault.CodeUsage, Message: usage.msg, Hint: hint}
 	}
@@ -244,6 +245,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	rest := args[1:]
 	switch command {
+	case "recovery":
+		return runRecovery(rest, out)
 	case "nostr":
 		return runNostr(rest, out)
 	case "init":
@@ -1099,6 +1102,7 @@ Usage:
   %s
   %s
   %s
+  %s
 
 sign takes a SHA-256 digest (--digest) or hashes --data-file/--stdin itself and says so;
 it emits strict DER with low-S (or --raw r||s). verify judges the digest, the signature
@@ -1118,7 +1122,7 @@ consumer such as kvctl: hello line, then {id, op: describe|pub|sign|verify, ...}
 
 Exit codes: 0 ok, 1 failure, 2 usage, 3 refused by a policy gate. Every error is
 {code, message, hint, os_status}; text mode prints "error: <code>: <message>" and "hint: <hint>".
-`, keyvault.LabelPrefix, usageLines["nostr"], usageLines["init"], usageLines["list"], usageLines["describe"], usageLines["pub"], usageLines["sign"], usageLines["verify"], usageLines["rotate"], usageLines["delete"], usageLines["meta"], usageLines["signer"], usageLines["ssh-agent"], usageLines["confirm-dialog"], usageLines["version"])
+`, keyvault.LabelPrefix, usageLines["recovery"], usageLines["nostr"], usageLines["init"], usageLines["list"], usageLines["describe"], usageLines["pub"], usageLines["sign"], usageLines["verify"], usageLines["rotate"], usageLines["delete"], usageLines["meta"], usageLines["signer"], usageLines["ssh-agent"], usageLines["confirm-dialog"], usageLines["version"])
 }
 
 // runSigner dispatches the signer subcommands; serve is the only one in

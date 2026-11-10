@@ -4,12 +4,10 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"io"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -19,9 +17,9 @@ import (
 
 const NostrNamespace = "works.relux.mac-keyvault.nostr.v1"
 
-// NostrRecord contains public metadata only. This software key is protected at
-// rest by a file-Keychain ACL; it is neither a Secure Enclave key nor a key whose
-// use requires user presence. No private export or import operation is provided.
+// NostrRecord contains public metadata only. Storage distinguishes a legacy
+// ACL-held scalar from a device-wrapped recovery leaf. Neither is a hardware
+// secp256k1 key or a presence key. No private export operation is provided.
 type NostrRecord struct {
 	Schema        string `json:"schema"`
 	Service       string `json:"service"`
@@ -57,7 +55,7 @@ func validateNostrRecord(r NostrRecord) error {
 		return err
 	}
 	created, err := time.Parse(time.RFC3339, r.Created)
-	if err != nil || created.UTC().Format(time.RFC3339) != r.Created || r.Schema != "nostr-key/1" || r.Algorithm != "secp256k1-bip340" || r.Storage != "keychain-acl" || r.Presence || r.PrivateExport {
+	if err != nil || created.UTC().Format(time.RFC3339) != r.Created || r.Schema != "nostr-key/1" || r.Algorithm != "secp256k1-bip340" || (r.Storage != "keychain-acl" && r.Storage != "enclave-wrapped-keychain") || r.Presence || r.PrivateExport {
 		return nostrRefuse("invalid_record")
 	}
 	pub, err := hex.DecodeString(r.PublicKey)
@@ -174,6 +172,9 @@ func newNostrMaterial(r NostrRecord) (NostrRecord, []byte, error) {
 }
 
 func newNostrMaterialWithRandom(r NostrRecord, random io.Reader) (NostrRecord, []byte, error) {
+	if r.Storage != "keychain-acl" {
+		return NostrRecord{}, nil, nostrRefuse("invalid_record")
+	}
 	if r.PublicKey != "" || r.NPub != "" {
 		return NostrRecord{}, nil, nostrRefuse("invalid_record")
 	}
@@ -219,6 +220,34 @@ type NostrManager struct {
 	backend NostrBackend
 	lock    Locker
 	now     func() time.Time
+}
+
+// Delete removes one legacy item only, pinned to its retained public identity.
+// A recovery projection cannot remove half of an atomic paired group.
+func (m *NostrManager) Delete(service, purpose string, version int, expectedNPub string) error {
+	if expectedNPub == "" || m.lock == nil || m.backend == nil {
+		return nostrRefuse("public_pin_required")
+	}
+	backend, ok := m.backend.(interface{ NostrDelete(NostrRecord) error })
+	if !ok {
+		return nostrRefuse("delete_unavailable")
+	}
+	release, err := m.lock.Lock()
+	if err != nil {
+		return nostrRefuse("lock_unavailable")
+	}
+	defer release()
+	r, err := m.Describe(service, purpose, version)
+	if err != nil {
+		return err
+	}
+	if r.NPub != expectedNPub {
+		return nostrRefuse("public_pin_mismatch")
+	}
+	if r.Storage != "keychain-acl" {
+		return nostrRefuse("paired_group_requires_group_delete")
+	}
+	return backend.NostrDelete(r)
 }
 
 func NewNostrManager(backend NostrBackend, lock Locker) *NostrManager {
@@ -319,27 +348,9 @@ func (m *NostrManager) Sign(service, purpose string, version int, digest []byte)
 // parseNostrList reads only attributes returned by the native metadata query.
 // The service namespace is fixed natively; each account must match its record.
 func parseNostrList(raw []byte) ([]NostrRecord, error) {
-	records := []NostrRecord{}
-	if len(raw) > 4*1024*1024 {
+	records, _, err := recoveryRows(raw)
+	if err != nil {
 		return nil, nostrRefuse("invalid_record")
-	}
-	for _, row := range strings.Split(string(raw), "\x1e") {
-		if row == "" {
-			continue
-		}
-		fields := strings.Split(row, "\x1f")
-		if len(fields) != 2 || len(fields[1]) > 4096 {
-			return nil, nostrRefuse("invalid_record")
-		}
-		var r NostrRecord
-		if DecodeSingleJSON([]byte(fields[1]), &r) != nil || validateNostrRecord(r) != nil || fields[0] != r.Account() {
-			return nil, nostrRefuse("invalid_record")
-		}
-		canonical, _ := json.Marshal(r)
-		if string(canonical) != fields[1] {
-			return nil, nostrRefuse("invalid_record")
-		}
-		records = append(records, r)
 	}
 	return records, nil
 }
