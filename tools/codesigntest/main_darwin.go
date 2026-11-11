@@ -84,7 +84,7 @@ func supervise(mode string) (result error) {
 	cmd := exec.Command(self, "_worker", mode)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
+	if err := codesigntest.RunHealthy(cmd.Start); err != nil {
 		return err
 	}
 	done := make(chan error, 1)
@@ -180,7 +180,12 @@ func checkContention(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	out, err := exec.CommandContext(ctx, self, "_probe-lock").CombinedOutput()
+	var out []byte
+	err = codesigntest.RunHealthy(func() error {
+		var err error
+		out, err = exec.CommandContext(ctx, self, "_probe-lock").CombinedOutput()
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("independent lock control: %w: %s", err, out)
 	}
@@ -217,7 +222,7 @@ func (r runner) build(name, pkg string, flags ...string) (string, error) {
 	binary, args := r.confine(filepath.Join(runtime.GOROOT(), "bin", "go"), args)
 	cmd := r.command(r.repo, "0", binary, args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	if err := codesigntest.RunHealthy(cmd.Run); err != nil {
 		return "", fmt.Errorf("compile %s: %w", name, err)
 	}
 	return path, nil
@@ -232,7 +237,12 @@ func (r runner) test(path, pkg, selection, optIn string, confined bool) ([]byte,
 	if confined {
 		binary, args = r.confine(binary, args)
 	}
-	out, err := r.command(filepath.Join(r.repo, pkg), optIn, binary, args...).CombinedOutput()
+	var out []byte
+	err := codesigntest.RunHealthy(func() error {
+		var err error
+		out, err = r.command(filepath.Join(r.repo, pkg), optIn, binary, args...).CombinedOutput()
+		return err
+	})
 	_, _ = os.Stdout.Write(out)
 	return out, err
 }

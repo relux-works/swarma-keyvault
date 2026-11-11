@@ -24,40 +24,6 @@ import (
 	"github.com/relux-works/swarma-keyvault/pkg/kekclient"
 )
 
-// fixtureClient connects to the socket named by its first argument and
-// waits for the server to close the connection.
-const fixtureClient = `package main
-
-import (
-	"net"
-	"os"
-	"strconv"
-	"syscall"
-)
-
-func main() {
-	if len(os.Args) == 3 && os.Args[1] == "inherited" {
-		fd, err := strconv.Atoi(os.Args[2]); if err != nil { os.Exit(2) }
-		f := os.NewFile(uintptr(fd), "inherited-socket")
-		f.Write([]byte{'r'})
-		f.Read(make([]byte,1))
-		return
-	}
-	c, err := net.Dial("unix", os.Args[1])
-	if err != nil {
-		os.Exit(1)
-	}
-	buf := make([]byte, 1)
-	c.Read(buf)
-	if len(os.Args) == 3 {
-		f, err := c.(*net.UnixConn).File(); if err != nil { os.Exit(3) }
-		fd := f.Fd()
-		if _,_,errno := syscall.Syscall(syscall.SYS_FCNTL,fd,syscall.F_SETFD,0); errno!=0 { os.Exit(4) }
-		if err := syscall.Exec(os.Args[2], []string{os.Args[2],"inherited",strconv.Itoa(int(fd))}, os.Environ()); err!=nil { os.Exit(5) }
-	}
-}
-`
-
 const getTaskAllow = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>
@@ -73,16 +39,8 @@ func buildSigned(t *testing.T, run, dir, name string, signArgs ...string) string
 		if err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(filepath.Join(src, "main.go"), []byte(fixtureClient), 0600); err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fixture\n\ngo 1.25\n"), 0600); err != nil {
-			return "", err
-		}
-		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", "client", ".")
-		cmd.Dir = src
-		codesigntest.NativeAttempt(t, "build KEK socket client")
-		if out, err := cmd.CombinedOutput(); err != nil {
+		cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "1", "-o", filepath.Join(src, "client"), "./testdata/codesignclient")
+		if out, err := codesigntest.NativeOutput(t, "build KEK socket client", cmd); err != nil {
 			return "", fmt.Errorf("build fixture: %w\n%s", err, out)
 		}
 		return filepath.Join(src, "client"), nil
@@ -99,8 +57,7 @@ func buildSigned(t *testing.T, run, dir, name string, signArgs ...string) string
 		t.Fatal(err)
 	}
 	args := append([]string{"--force", "--sign", "-", "--identifier", "works.relux.kek-fixture." + name}, signArgs...)
-	codesigntest.NativeAttempt(t, "sign KEK socket client")
-	if out, err := exec.Command("/usr/bin/codesign", append(args, path)...).CombinedOutput(); err != nil {
+	if out, err := codesigntest.NativeOutput(t, "sign KEK socket client", exec.Command("/usr/bin/codesign", append(args, path)...)); err != nil {
 		t.Fatalf("codesign %s: %v\n%s", name, err, out)
 	}
 	return path
@@ -119,8 +76,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 	run := codesigntest.Require(t, codesigntest.KEKSelection, codesigntest.CertificateSelection)
 	const path = "/usr/bin/true"
 	t.Logf("native fixture gate: Applied=%v Confined=%v", keychaingate.Applied(), keychaingate.Confined())
-	codesigntest.NativeAttempt(t, "inspect public certificate")
-	id, err := (CodeInspector{}).File(path)
+	id, err := inspectFixtureFile(t, path)
 	if err != nil && keychaingate.Confined() && err.Error() == "code identity of /usr/bin/true: OSStatus -2147409622" {
 		if id != (CodeIdentity{}) {
 			t.Fatalf("confined trust refusal exposed facts: %+v", id)
@@ -133,8 +89,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 	}
 	dir := codesigntest.FixtureDir(t, run, "certificate")
 	prefix := filepath.Join(dir, "cert")
-	codesigntest.NativeAttempt(t, "extract public certificate")
-	out, err := exec.Command("/usr/bin/codesign", "--display", "--extract-certificates="+prefix, "--verbose=4", path).CombinedOutput()
+	out, err := codesigntest.NativeOutput(t, "extract public certificate", exec.Command("/usr/bin/codesign", "--display", "--extract-certificates="+prefix, "--verbose=4", path))
 	if err != nil {
 		t.Fatalf("extract public signature: %v\n%s", err, out)
 	}
@@ -171,7 +126,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 		// The shipped curl connects only to this owned Unix socket. Disable
 		// curlrc and proxy selection; no TLS, cookies, network endpoint or key.
 		const binary = "/usr/bin/curl"
-		file, err := (CodeInspector{}).File(binary)
+		file, err := inspectFixtureFile(t, binary)
 		if err != nil || !file.Valid || file.CertificateSHA1 == "" || file.Identifier == "" {
 			t.Fatalf("public curl identity: %+v %v", file, err)
 		}
@@ -187,8 +142,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 		cmd := exec.CommandContext(ctx, binary, "--disable", "--silent", "--show-error", "--max-time", "5", "--noproxy", "*", "--proxy", "", "--unix-socket", sock, "http://localhost/")
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
-		codesigntest.NativeAttempt(t, "execute public curl socket client")
-		if err := cmd.Start(); err != nil {
+		if err := codesigntest.NativeAttempt(t, "execute public curl socket client", cmd.Start); err != nil {
 			t.Fatal(err)
 		}
 		t.Logf("owned public Unix-socket fixture PID%d", cmd.Process.Pid)
@@ -203,7 +157,7 @@ func TestCodeInspectorPublicCertificate(t *testing.T) {
 		}
 		defer conn.Close()
 		conn.SetDeadline(time.Now().Add(5 * time.Second))
-		peer, err := (CodeInspector{}).Peer(conn)
+		peer, err := inspectFixturePeer(t, conn)
 		if err != nil || peer != file {
 			t.Fatalf("signed peer %+v %v differs from validated file %+v", peer, err, file)
 		}
@@ -244,8 +198,7 @@ func TestCodeInspectorPeerExec(t *testing.T) {
 	cmd := exec.CommandContext(ctx, first, sock, second)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	codesigntest.NativeAttempt(t, "execute KEK socket client")
-	if err := cmd.Start(); err != nil {
+	if err := codesigntest.NativeAttempt(t, "execute KEK socket client", cmd.Start); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("owned exec fixture PID%d", cmd.Process.Pid)
@@ -260,21 +213,24 @@ func TestCodeInspectorPeerExec(t *testing.T) {
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	before, err := (CodeInspector{}).Peer(conn)
+	before, err := inspectFixturePeer(t, conn)
 	if err != nil || before.Problem() != "" {
 		t.Fatalf("before exec: %+v %v", before, err)
 	}
 	if before.CDHash != codesignCDHash(t, first) {
 		t.Fatal("wrong initial code identity")
 	}
-	if _, err := conn.Write([]byte{'x'}); err != nil {
+	if err := codesigntest.NativeAttempt(t, "authorize KEK client exec", func() error {
+		_, err := conn.Write([]byte{'x'})
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var ready [1]byte
 	if n, err := conn.Read(ready[:]); err != nil || n != 1 || ready[0] != 'r' {
 		t.Fatalf("post-exec acknowledgement: %d %v %q", n, err, ready)
 	}
-	after, err := (CodeInspector{}).Peer(conn)
+	after, err := inspectFixturePeer(t, conn)
 	if err == nil && after == before {
 		t.Fatalf("exec kept an unchanged peer observation: %+v", after)
 	}
@@ -288,8 +244,10 @@ var cdhashLine = regexp.MustCompile(`(?m)^CDHash=([0-9a-f]{40})$`)
 
 func codesignCDHash(t *testing.T, path string) string {
 	t.Helper()
-	codesigntest.NativeAttempt(t, "inspect KEK code signature")
-	out, _ := exec.Command("/usr/bin/codesign", "-dvvv", path).CombinedOutput()
+	out, err := codesigntest.NativeOutput(t, "inspect KEK code signature", exec.Command("/usr/bin/codesign", "-dvvv", path))
+	if err != nil {
+		t.Fatalf("inspect KEK code signature: %v", err)
+	}
 	m := cdhashLine.FindSubmatch(out)
 	if m == nil {
 		t.Fatalf("no CDHash for %s:\n%s", path, out)
@@ -311,8 +269,7 @@ func peerOf(t *testing.T, binary string) (CodeIdentity, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, sock)
-	codesigntest.NativeAttempt(t, "execute KEK socket client")
-	if err := cmd.Start(); err != nil {
+	if err := codesigntest.NativeAttempt(t, "execute KEK socket client", cmd.Start); err != nil {
 		t.Fatal(err)
 	}
 	defer cmd.Wait()
@@ -321,7 +278,29 @@ func peerOf(t *testing.T, binary string) (CodeIdentity, error) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	return CodeInspector{}.Peer(conn)
+	return inspectFixturePeer(t, conn)
+}
+
+func inspectFixtureFile(t *testing.T, path string) (CodeIdentity, error) {
+	t.Helper()
+	var identity CodeIdentity
+	err := codesigntest.NativeAttempt(t, "assess fixture file", func() error {
+		var err error
+		identity, err = (CodeInspector{}).File(path)
+		return err
+	})
+	return identity, err
+}
+
+func inspectFixturePeer(t *testing.T, conn *net.UnixConn) (CodeIdentity, error) {
+	t.Helper()
+	var identity CodeIdentity
+	err := codesigntest.NativeAttempt(t, "assess fixture peer", func() error {
+		var err error
+		identity, err = (CodeInspector{}).Peer(conn)
+		return err
+	})
+	return identity, err
 }
 
 // The inspector reads what codesign wrote: the cdhash codesign prints, the
@@ -352,7 +331,7 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 			path := buildSigned(t, run, dir, v.name, v.args...)
 			v.want.CDHash = codesignCDHash(t, path)
 			v.want.Identifier = "works.relux.kek-fixture." + v.name
-			file, err := CodeInspector{}.File(path)
+			file, err := inspectFixtureFile(t, path)
 			if err != nil || file != v.want {
 				t.Fatalf("file = %+v, %v; want %+v", file, err, v.want)
 			}
@@ -375,7 +354,7 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 		if err := os.WriteFile(path, data, 0700); err != nil {
 			t.Fatal(err)
 		}
-		file, err := CodeInspector{}.File(path)
+		file, err := inspectFixtureFile(t, path)
 		if err == nil && file.Valid {
 			t.Fatalf("a changed binary is valid: %+v", file)
 		}
@@ -387,7 +366,7 @@ func TestCodeInspectorReadsSignatures(t *testing.T) {
 		path := buildSigned(t, run, dir, "target", "--options", "runtime,library")
 		link := filepath.Join(dir, "link")
 		os.Symlink(path, link)
-		if id, err := (CodeInspector{}).File(link); err == nil {
+		if id, err := inspectFixtureFile(t, link); err == nil {
 			t.Fatalf("a symlink was identified: %+v", id)
 		}
 	})

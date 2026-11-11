@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -60,6 +61,9 @@ func admit(optIn, run, parallel, count string, selections []string, inherited fu
 }
 
 func inheritedRun(selection string) (string, error) {
+	if err := CheckHostHealth(); err != nil {
+		return "", err
+	}
 	pid := strconv.Itoa(os.Getppid())
 	if os.Getenv(ParentEnv) != pid {
 		return "", errors.New("codesign fixture requires its runner as the parent process")
@@ -189,9 +193,23 @@ func CheckDefaultOutput(out []byte, tests ...string) error {
 	return nil
 }
 
-func NativeAttempt(t testing.TB, action string) {
+func NativeAttempt(t testing.TB, action string, run func() error) error {
 	t.Helper()
-	t.Log(NativeAttemptPrefix + action)
+	return RunHealthy(func() error {
+		t.Log(NativeAttemptPrefix + action)
+		return run()
+	})
+}
+
+func NativeOutput(t testing.TB, action string, command *exec.Cmd) ([]byte, error) {
+	t.Helper()
+	var out []byte
+	err := NativeAttempt(t, action, func() error {
+		var err error
+		out, err = command.CombinedOutput()
+		return err
+	})
+	return out, err
 }
 
 // FixtureDir creates a subtree that the operator cleans up with the whole run.

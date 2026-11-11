@@ -46,12 +46,10 @@ func TestRecoveryActualChildCodeBoundary(t *testing.T) {
 				args = append(args, "--entitlements", ent)
 			}
 			args = append(args, path)
-			codesigntest.NativeAttempt(t, "sign recovery code fixture")
-			if out, err := exec.Command("/usr/bin/codesign", args...).CombinedOutput(); err != nil {
+			if out, err := codesigntest.NativeOutput(t, "sign recovery code fixture", exec.Command("/usr/bin/codesign", args...)); err != nil {
 				t.Fatalf("fixture signing failed: %v %s", err, out)
 			}
-			codesigntest.NativeAttempt(t, "inspect recovery code signature")
-			info, err := exec.Command("/usr/bin/codesign", "-d", "--verbose=4", path).CombinedOutput()
+			info, err := codesigntest.NativeOutput(t, "inspect recovery code signature", exec.Command("/usr/bin/codesign", "-d", "--verbose=4", path))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,17 +72,22 @@ func TestRecoveryActualChildCodeBoundary(t *testing.T) {
 					return nil
 				}
 				verifiedChild = true
-				err := verifyRecoveryCode(pid, hash)
+				err := codesigntest.NativeAttempt(t, "assess recovery child code", func() error {
+					return verifyRecoveryCode(pid, hash)
+				})
 				if refusal, ok := err.(*Refusal); ok {
 					childStatus = refusal.Status
 				}
 				t.Logf("%s%s status=%d accepted=%t", codesigntest.RecoveryObservationPrefix, mode, childStatus, err == nil)
 				return err
 			}}
-			codesigntest.NativeAttempt(t, "execute recovery identity fixture")
-			data, err := h.call(struct {
-				Op string `json:"op"`
-			}{"fixture"}, 68)
+			var data []byte
+			err = codesigntest.NativeAttempt(t, "execute recovery identity fixture", func() error {
+				data, err = h.call(struct {
+					Op string `json:"op"`
+				}{"fixture"}, 68)
+				return err
+			})
 			if mode == "hardened" {
 				if err != nil || len(data) != 68 {
 					t.Fatalf("valid actual code refused: %v", err)

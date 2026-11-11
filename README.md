@@ -82,20 +82,30 @@ The native-input allowlist is a review tripwire; it does not replace confinement
 
 The default suite skips the recovery helper framing and code-identity fixtures
 and the three native KEK code-inspector fixtures. Run those fixtures on macOS
-with cgo, by themselves, from the repository root:
+with cgo, by themselves, from the repository root. Compile the runner as a
+separate preparation step after verifying host-watch is healthy. The runner's
+in-process admission checks apply after it starts, including every subsequent
+fixture compilation, signing, code assessment and helper execution:
 
 ```sh
-test ! -e "$HOME/Library/Application Support/host-health/exec-degraded" || exit 1
 CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
 MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
 The runner uses the account's registered home and requires a physical path
-whose components are directories. Before starting its worker and each new
-build or test executable, it checks the fixed host-watch flag at
-`~/Library/Application Support/host-health/exec-degraded` with an in-process
-stat. A present flag, including malformed contents, or an inspection error
-refuses new work. The runner leaves the flag and any retained files in place.
+whose components are directories. It ignores an overridden `HOME` for health
+admission and checks the fixed host-watch flag at
+`~/Library/Application Support/host-health/exec-degraded`. Every existing
+directory component must be owned by the account, physical and non-writable
+by other users. A genuinely missing directory or flag admits work. A present
+flag entry, including a dangling symlink or malformed contents, or an
+inspection error refuses new work without following the flag or reading it.
+The runner leaves the flag and any retained files in place. Each individual
+fixture action rechecks, including subtests, cached-fixture reuse and the
+socket client's secondary exec. Publication of the flag and an admitted
+action are separate operations; a concurrent publication can overlap an
+action whose final check has already succeeded. Running work finishes, and
+the next action must pass a fresh check.
 One exclusive lock covers that account's
 checkouts. Run the lane under one designated account on a Mac. Other accounts
 use independent lanes. The runner compiles and runs both test packages
