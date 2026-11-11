@@ -72,7 +72,7 @@ func (f *muIssueFixture) runSigned(kind string, spec map[string]any, subject boo
 		args = append(args, "--subject-spki-der", f.subject)
 	}
 	if kind == "grant" {
-		args = append(args, muAttestFiles(f.t, attKey, attRoot, f.agent, "@meta-keeper.keeper-sirius:gr.relux.works")...)
+		args = append(args, muAttestFiles(f.t, attKey, attRoot, f.agent, "@agent:example.invalid")...)
 	}
 	return muCLIRun(args...)
 }
@@ -109,8 +109,8 @@ func TestMUIssue(t *testing.T) {
 		kind, recordKind, reasonPrefix string
 		subject                        bool
 	}{
-		{"grant", "grant/1", "до срока · @meta-keeper.keeper-sirius:gr.relux.works · ", false},
-		{"mac-agent", "attestation/1", "ключ агента · @meta-keeper.keeper-sirius:gr.relux.works · поколение 1 · ", true},
+		{"grant", "grant/1", "до срока · @agent:example.invalid · ", false},
+		{"mac-agent", "attestation/1", "ключ агента · @agent:example.invalid · поколение 1 · ", true},
 		{"publisher", "attestation/1", "ключ отзыва грантов · ", true},
 		{"publisher-ed25519", "attestation/1", "ключ отзыва грантов Ed25519 · ", true},
 	}
@@ -177,7 +177,7 @@ func TestMUIssueRefusals(t *testing.T) {
 	t.Run("reason-overflow", func(t *testing.T) {
 		f := newMUIssueFixture(t, nil)
 		spec := muAttestSpec("mac-agent", f.root)
-		spec["mxid"] = "@" + strings.Repeat("a", 180) + ":gr.relux.works"
+		spec["mxid"] = "@" + strings.Repeat("a", 180) + ":example.invalid"
 		if code, out, _ := f.run("mac-agent", spec, true); code != 1 || out != "" || f.store.factories != 0 {
 			t.Fatal(code, f.store.factories)
 		}
@@ -231,7 +231,7 @@ func TestMUIssueRefusals(t *testing.T) {
 		f := newMUIssueFixture(t, nil)
 		var out bytes.Buffer
 		args := append([]string{"grants", "mu-issue", "--kind", "grant", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(f.root, f.agentID)), "--owner-spki-der", f.ownerPin, "--owner-key", "synthetic-mu-owner/grants-owner-v1", "--owner-key-version", "12"},
-			muAttestFiles(t, f.owner, f.root, f.agent, "@meta-keeper.keeper-sirius:gr.relux.works")...)
+			muAttestFiles(t, f.owner, f.root, f.agent, "@agent:example.invalid")...)
 		// Built and admitted up to the key gate; only the failing review sink refuses.
 		if code := run(args, strings.NewReader(""), &out, muFailWriter{}); code != 1 || out.Len() != 0 || f.store.signs != 0 || f.store.factories != 1 {
 			t.Fatal(code, f.store.signs)

@@ -41,7 +41,7 @@ func TestMUCLIEd25519PublisherAttestation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, p, errText := muAttestPrepare(t, muAttestSpec("publisher-ed25519", root), edSPKI)
+	code, p, errText := muAttestPrepare(t, muAttestSpec("publisher-ed25519", root), edSPKI, rk)
 	if code != 0 || p["kind"] != "attestation/1" || p["key"] != root || p["subject_key"] != subject || !strings.HasPrefix(subject, "ed25519:") {
 		t.Fatal("prepare", code, errText, p)
 	}
@@ -81,7 +81,7 @@ func TestMUCLIEd25519PublisherAttestation(t *testing.T) {
 		"p256-under-ed25519-kind":   {muAttestSpec("publisher-ed25519", root), p256},
 		"mxid-in-ed25519-publisher": {withMXID, edSPKI},
 	} {
-		if code, out, _ := muAttestPrepare(t, c.spec, c.spki); code != 1 || out != nil {
+		if code, out, _ := muAttestPrepare(t, c.spec, c.spki, rk); code != 1 || out != nil {
 			t.Error("refusal expected", name, code, out)
 		}
 	}

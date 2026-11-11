@@ -15,6 +15,13 @@ import (
 
 type recoveryPipeOperations struct{ recoveryReceiptOperations }
 
+func (f *recoveryPipeOperations) Plan(q keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
+	if os.Getenv("RECOVERY_PIPE_OP") == "plan-refusal" {
+		return keyvault.RecoveryPlan{}, &keyvault.Refusal{Code: "recovery_duplicate", Message: "Recovery operation refused: duplicate"}
+	}
+	return f.recoveryCLIOperations.Plan(q)
+}
+
 func (f *recoveryPipeOperations) Create(q keyvault.RecoveryRequest, t keyvault.RecoveryTerminal, r bool) (keyvault.RecoveryRecord, error) {
 	record, err := f.recoveryReceiptOperations.Create(q, t, r)
 	fmt.Fprintln(os.Stderr, "fixture_effect=1")
@@ -46,6 +53,13 @@ func TestRecoveryPipeChild(t *testing.T) {
 		args = append([]string{"--json"}, args...)
 	}
 	switch op {
+	case "plan-refusal":
+		for i, arg := range args {
+			if arg == op {
+				args[i] = "plan"
+			}
+		}
+		args = append(args, "--nostr-identity", "north", "--namecoin-identity", "south")
 	case "delete":
 		args = append(args, "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
 	case "generate", "restore":
@@ -103,6 +117,45 @@ func TestRecoveryClosedStdoutPipe(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// A definite no-effect refusal retains its code on an open fd1; a real broken
+// JSON fd1 returns a bounded receipt-delivery failure, without SIGPIPE or effects.
+func TestRecoveryRefusalClosedStdoutPipe(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(exe, "-test.run=^TestRecoveryPipeChild$")
+		cmd.Env = append(os.Environ(), "RECOVERY_PIPE_CHILD=1", "RECOVERY_PIPE_OP=plan-refusal", "RECOVERY_PIPE_JSON=1")
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		if closed {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Close()
+			defer w.Close()
+			cmd.Stdout = w
+		}
+		err = cmd.Run()
+		want := 3
+		if closed {
+			want = 1
+		}
+		if err == nil || cmd.ProcessState.ExitCode() != want || !strings.Contains(stderr.String(), fmt.Sprintf("fixture_return=%d effects=0", want)) || strings.Contains(stderr.String(), "fixture_effect=1") {
+			t.Fatalf("refusal delivery or zero-effect invariant failed: %v %q", err, stderr.String())
+		}
+		if closed {
+			if !strings.Contains(stderr.String(), "recovery_refusal_output_unavailable: refusal=recovery_duplicate") {
+				t.Fatal("failure classification lost", stderr.String())
+			}
+		} else if !strings.Contains(stdout.String(), `"code": "recovery_duplicate"`) {
+			t.Fatal("valid refusal receipt missing")
 		}
 	}
 }

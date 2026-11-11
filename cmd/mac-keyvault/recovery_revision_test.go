@@ -209,3 +209,39 @@ func TestRecoveryUnknownMutationReceipt(t *testing.T) {
 		}
 	}
 }
+
+// No-effect refusal receipts preserve each code on complete JSON/text writes.
+// Broken/short sinks return delivery failure and never reach a mutation.
+func TestRecoveryRefusalReceiptWrite(t *testing.T) {
+	for _, code := range []string{"recovery_duplicate", "recovery_generation_exhausted", "recovery_identity_confirmation_refused"} {
+		for _, jsonMode := range []bool{false, true} {
+			var delivered, diagnostic bytes.Buffer
+			out := output{json: jsonMode, command: "recovery plan", stdout: &delivered, stderr: &diagnostic}
+			refusal := &keyvault.Refusal{Code: code, Message: "Recovery operation refused", Hint: "check public inputs"}
+			if got := recoveryFailureReceipt(out, refusal); got != 3 {
+				t.Fatal("valid refusal delivery changed classification", got)
+			}
+			receipt := diagnostic.String()
+			if jsonMode {
+				receipt = delivered.String()
+			}
+			if !strings.Contains(receipt, code) {
+				t.Fatal("refusal code lost")
+			}
+			for _, short := range []bool{false, true} {
+				diagnostic.Reset()
+				if jsonMode {
+					out.stdout = recoveryFailedWriter{short: short}
+				} else {
+					out.stderr = recoveryFailedWriter{short: short}
+				}
+				if got := recoveryFailureReceipt(out, refusal); got != 1 {
+					t.Fatal("broken refusal delivery preserved ordinary code", got)
+				}
+				if jsonMode && (!strings.Contains(diagnostic.String(), "refusal="+code) || strings.Contains(diagnostic.String(), "synthetic writer")) {
+					t.Fatal("lost bounded classification", diagnostic.String())
+				}
+			}
+		}
+	}
+}

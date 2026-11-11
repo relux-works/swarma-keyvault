@@ -15,8 +15,8 @@ same signed operation.
 | Command | Actual input flags |
 | --- | --- |
 | `mu-key-id` | `--subject-spki-der FILE`; P-256 SPKI to platform key ID |
-| `mu-attestation-prepare` | `--spec FILE --subject-spki-der FILE` |
-| `mu-grant-prepare` | `--spec FILE --subject-attestation FILE --publisher-attestation FILE` |
+| `mu-attestation-prepare` | `--spec FILE --subject-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N --owner-spki-der FILE` |
+| `mu-grant-prepare` | `--spec FILE --subject-attestation FILE --publisher-attestation FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N --owner-spki-der FILE` |
 | `mu-request-prepare` | `--spec FILE`; prepares `message/1`, exact visible text and digest |
 | `mu-root-revocation-prepare` | `--spec FILE`; prepares `revocation/1`, no signature |
 | `mu-assemble` | `--kind grant/1\|message/1\|attestation/1\|revocation/1 --body FILE --key KEY_ID --signature DER_FILE`; checks/assembles supplied native P-256 signature |
@@ -24,6 +24,10 @@ same signed operation.
 Spec files use exact UTC whole-second `YYYY-MM-DDTHH:MM:SSZ`. Prepared output
 includes canonical body's unpadded base64url, content ID and signing digest;
 decode `body` for `--body`, do not pass the prepared JSON or base64 text.
+Owner-root preparation also returns `owner_key_pin` and prefixes rendering with
+the same exact vault address and DER hash used during issuance. The spec issuer
+must match that public DER. Obtain the address/DER association independently;
+public preparation performs no vault resolution. The signed body stays unchanged.
 Assembly uses the prepared body/key/kind and verifies the signature. It does not
 supply enrollment, install an attestation or publish a record. `mu-assemble`
 and `mu-key-id` are P-256 CLI routes; Ed25519 library support does not add an

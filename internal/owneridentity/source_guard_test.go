@@ -1,6 +1,8 @@
 package owneridentity
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -19,8 +21,8 @@ import (
 var ownerLiteral = regexp.MustCompile(`(?i)(?:/Users/|/home/|~[^ /]+/|\b[a-z0-9-]+[./]grants-owner-v1(?:\.v| v)[1-9][0-9]*)`)
 var ownerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+`)
 var matrixLiteral = regexp.MustCompile(`@[a-zA-Z0-9._=/-]+:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
-var swiftFixedAssignment = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*(?::\s*[a-z0-9_?]+\s*)?(?:==|!=|=)\s*(?:"[^"\\]+"|[0-9]+\b)`)
-var swiftIdentityFallback = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*\?\?\s*("[^"\\]+"|[a-z][a-z0-9_]*)`)
+var swiftFixedAssignment = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*(?::\s*[a-z0-9_?]+\s*)?(?:==|!=|=)\s*\(*\s*(?:"[^"\\]+"|[0-9]+\b)`)
+var swiftIdentityFallback = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*\?\?\s*\(*\s*("[^"\\]+"|[a-z][a-z0-9_]*)`)
 
 func identityField(name string) bool {
 	name = strings.ToLower(strings.ReplaceAll(name, "_", ""))
@@ -65,9 +67,9 @@ func fieldName(e ast.Expr) string {
 	return ""
 }
 
-// Recover directly embedded values, literal aliases, parentheses and string
-// concatenation. Ignore unknown runtime expressions and guard their config at
-// the public input boundary.
+// Recover fixed identity sources through literals, aliases, parentheses,
+// concatenation and calls with fixed arguments. Runtime roots are admitted here
+// and validated separately at the public configuration boundary.
 func fixedValue(e ast.Expr, depth int) (string, bool) {
 	if depth > 16 {
 		return "", false
@@ -89,24 +91,49 @@ func fixedValue(e ast.Expr, depth int) (string, bool) {
 			b, okb := fixedValue(n.Y, depth+1)
 			return a + b, oka && okb
 		}
+	case *ast.CompositeLit:
+		values := make([]string, len(n.Elts))
+		for i, element := range n.Elts {
+			value, fixed := fixedValue(element, depth+1)
+			if !fixed {
+				return "", false
+			}
+			values[i] = value
+		}
+		return strings.Join(values, ""), true
 	case *ast.CallExpr:
-		// String normalization does not make a fixed identity dynamic.
-		method, ok := n.Fun.(*ast.SelectorExpr)
-		if !ok || fieldName(method.X) != "strings" || len(n.Args) != 1 {
+		// These transforms preserve the identity source in their string
+		// argument even when an auxiliary cutset or predicate is dynamic.
+		if method, ok := n.Fun.(*ast.SelectorExpr); ok && fieldName(method.X) == "strings" && len(n.Args) > 0 {
+			switch method.Sel.Name {
+			case "Trim", "TrimLeft", "TrimRight", "TrimSpace", "TrimPrefix", "TrimSuffix", "TrimFunc", "TrimLeftFunc", "TrimRightFunc", "ToLower", "ToUpper", "ToTitle", "ToValidUTF8", "Replace", "ReplaceAll", "Repeat", "Clone", "Join":
+				return fixedValue(n.Args[0], depth+1)
+			case "Map":
+				if len(n.Args) == 2 {
+					return fixedValue(n.Args[1], depth+1)
+				}
+			}
+		}
+		// Calls whose arguments are all fixed remain fixed identity sources,
+		// including normalization and conversions not explicitly evaluated here.
+		// A runtime argument keeps the expression dynamic.
+		// flag.String/Int defaults are the configured value; flag name and
+		// help text are protocol metadata, never identity defaults.
+		if method, ok := n.Fun.(*ast.SelectorExpr); ok && (fieldName(method.X) == "fs" || fieldName(method.X) == "f") && (method.Sel.Name == "String" || method.Sel.Name == "Int") && len(n.Args) == 3 {
+			return fixedValue(n.Args[1], depth+1)
+		}
+		if len(n.Args) == 0 {
 			return "", false
 		}
-		value, ok := fixedValue(n.Args[0], depth+1)
-		if !ok {
-			return "", false
+		values := make([]string, len(n.Args))
+		for i, arg := range n.Args {
+			value, fixed := fixedValue(arg, depth+1)
+			if !fixed {
+				return "", false
+			}
+			values[i] = value
 		}
-		switch method.Sel.Name {
-		case "TrimSpace":
-			return strings.TrimSpace(value), true
-		case "ToLower":
-			return strings.ToLower(value), true
-		case "ToUpper":
-			return strings.ToUpper(value), true
-		}
+		return strings.Join(values, ""), true
 	case *ast.Ident:
 		if n.Obj != nil {
 			switch decl := n.Obj.Decl.(type) {
@@ -146,6 +173,14 @@ func guardGo(path string, raw []byte) (string, error) {
 			return
 		}
 		if identityField(name) {
+			// This named seed creates a public fixture key object, not an
+			// identity string. Keep its exact source/factory/value boundary.
+			if name == "service" && (path == "internal/muinterop/linux.go" || path == "internal/muinterop/publisher2.go") {
+				call, ok := e.(*ast.CallExpr)
+				if ok && fieldName(call.Fun) == "Ed25519" && len(call.Args) == 1 && value == "keymaker-service-root" {
+					return
+				}
+			}
 			if name == "Service" && value == "swarma-grants" && path == "internal/grantrequester/request.go" {
 				return
 			}
@@ -261,6 +296,11 @@ func makeConfig(owner, service, host, home string, uid int) config {
 		{"Owner: owner", `Owner: "opaque-principal"`, "fixed identity-bearing field"},
 		{"Service: service", `Service: "another-" + "person"`, "fixed identity-bearing field"},
 		{"Service: service", `Service: strings.TrimSpace(" unseen-person ")`, "fixed identity-bearing field"},
+		{"Service: service", `Service: strings.Trim(" unseen-person ", " ")`, "fixed identity-bearing field"},
+		{"Service: service", `Service: normalize(("unseen-person"))`, "fixed identity-bearing field"},
+		{"Service: service", `Service: strings.TrimFunc("unseen-person", unicode.IsSpace)`, "fixed identity-bearing field"},
+		{"Service: service", `Service: strings.Trim("unseen-person", suppliedCutset)`, "fixed identity-bearing field"},
+		{"Service: service", `Service: strings.Join([]string{"unseen", "person"}, "-")`, "fixed identity-bearing field"},
 		{"Host: host", `Host: "some-new-host"`, "fixed identity-bearing field"},
 		{"Home: home", `Home: "/var/private-user"`, "fixed identity-bearing field"},
 		{"UID: uid", `UID: 4091`, "fixed identity-bearing field"},
@@ -274,6 +314,18 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	}
 	if hit, err := guardGo("copy/probe.go", []byte(copied)); hit != "" || err != nil {
 		t.Fatal("parameterized source was refused", hit, err)
+	}
+	for _, plant := range []struct {
+		source  string
+		refused bool
+	}{
+		{`package probe; func f() { service := fs.String("service", "", "help"); _ = service }`, false},
+		{`package probe; func f() { service := fs.String("service", "fixed-person", "help"); _ = service }`, true},
+	} {
+		hit, err := guardGo("copy/probe.go", []byte(plant.source))
+		if err != nil || (hit != "") != plant.refused {
+			t.Fatal("flag-default boundary control failed", hit, err)
+		}
 	}
 	const forgery = "internal/keyvault/recordtest/forgeries.go"
 	known := strings.Replace(copied, "Service: service", `Service: "TEST"`, 1)
@@ -296,7 +348,137 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	if got := guardSwift([]byte(`guard label == "works.relux.mac-keyvault.key.unseen-person.grants-owner-v1.v41" else { return }`)); got != "fixed owner, account or home literal" {
 		t.Fatal("native label plant was not detected", got)
 	}
+	for _, fallback := range []string{`("unseen-person")`, `(("unseen-person"))`, `(fallback)`} {
+		source := `let fallback = "unseen-person"; let chosen = suppliedService ?? ` + fallback
+		if got := guardSwift([]byte(source)); got != "fixed native identity fallback" {
+			t.Fatal("parenthesized native fallback was admitted", got)
+		}
+	}
+	if hit, err := guardGo("copy/probe.go", []byte(strings.Replace(copied, "Service: service", `Service: strings.Trim(service, " ")`, 1))); hit != "" || err != nil {
+		t.Fatal("runtime normalization was refused", hit, err)
+	}
+	if got := guardSwift([]byte(`let fallback = ("unseen-person"); let chosen = suppliedService ?? fallback`)); got != "fixed native identity fallback" {
+		t.Fatal("parenthesized fixed alias was admitted", got)
+	}
+	if got := guardSwift([]byte(`let chosen = suppliedService ?? otherService`)); got != "" {
+		t.Fatal("runtime fallback input refused", got)
+	}
 	if got := guardSwift([]byte(`let service = suppliedIdentity; let label = prefix + service`)); got != "" {
 		t.Fatal("native parameterized input refused", got)
+	}
+}
+
+var fixtureRole = regexp.MustCompile(`(?i)(?:^|[._-])(?:keeper|orch)(?:[._-]|$)`)
+
+// Fixture principals use reserved example domains and neutral local labels.
+// Recursion checks JSON strings and base64-encoded public fields as well as text.
+func fixtureIdentityHit(raw string, depth int) bool {
+	if depth > 8 || len(raw) > 1<<20 {
+		return false
+	}
+	for _, principal := range matrixLiteral.FindAllString(raw, -1) {
+		local, domain, _ := strings.Cut(strings.TrimPrefix(principal, "@"), ":")
+		example := strings.HasSuffix(domain, ".invalid") || domain == "example.com" || domain == "example.org" || domain == "example.net"
+		if !example || fixtureRole.MatchString(local) {
+			return true
+		}
+	}
+	var value any
+	if json.Unmarshal([]byte(raw), &value) == nil {
+		var walk func(any) bool
+		walk = func(v any) bool {
+			switch x := v.(type) {
+			case string:
+				return fixtureIdentityHit(x, depth+1)
+			case []any:
+				for _, item := range x {
+					if walk(item) {
+						return true
+					}
+				}
+			case map[string]any:
+				for key, item := range x {
+					if fixtureIdentityHit(key, depth+1) || walk(item) {
+						return true
+					}
+				}
+			}
+			return false
+		}
+		if walk(value) {
+			return true
+		}
+	}
+	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		decoded, err := encoding.DecodeString(raw)
+		if err == nil && fixtureIdentityHit(string(decoded), depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// Retained MU test literals and shipped public JSON examples admit only neutral
+// fixture principals, including decoded serialized fields. The source guard's
+// deliberate arbitrary-value plants remain a separate, bounded scope.
+func TestMUFixtureIdentityBoundary(t *testing.T) {
+	files, err := filepath.Glob("../../cmd/swarma-keyvault/mu*test.go")
+	if err != nil || len(files) == 0 {
+		t.Fatal("MU fixtures unavailable", err)
+	}
+	for _, path := range files {
+		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(f, func(node ast.Node) bool {
+			literal, ok := node.(*ast.BasicLit)
+			if ok && literal.Kind == token.STRING {
+				value, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fixtureIdentityHit(value, 0) {
+					t.Errorf("fixture identity boundary failed in %s", filepath.Base(path))
+				}
+			}
+			return true
+		})
+	}
+	assets, err := filepath.Glob("../../agents/skills/swarma-keyvault/assets/local-verify/*.json")
+	if err != nil || len(assets) == 0 {
+		t.Fatal("public examples unavailable", err)
+	}
+	for _, path := range assets {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixtureIdentityHit(string(raw), 0) {
+			t.Errorf("public fixture identity boundary failed in %s", filepath.Base(path))
+		}
+	}
+}
+
+// The fixture check detects raw, JSON and encoded violations, while legitimate
+// reserved example principals pass in all supported serializations.
+func TestFixtureIdentityBoundaryPlants(t *testing.T) {
+	for _, tc := range []struct {
+		principal string
+		forbidden bool
+	}{
+		{"@reader:example.invalid", false}, {"@reader:interop.invalid", false},
+		{"@reader:example.org", false}, {"@reader:unreserved.test", true},
+		{"@sample.keeper-node:example.invalid", true},
+	} {
+		raw, err := json.Marshal(map[string]string{"principal": tc.principal})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []string{tc.principal, string(raw), base64.RawURLEncoding.EncodeToString(raw)} {
+			if fixtureIdentityHit(value, 0) != tc.forbidden {
+				t.Fatal("fixture serialization control verdict differs")
+			}
+		}
 	}
 }

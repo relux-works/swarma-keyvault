@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"flag"
 	"io"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +60,43 @@ func TestIssueMissingOwnerBeforePayloadAndCustody(t *testing.T) {
 		var out, diagnostic bytes.Buffer
 		if code := run(append(append([]string{}, base...), extra...), mustNotRead{}, &out, &diagnostic); code != 2 || out.Len() != 0 || store.factories != 0 || store.signs != 0 {
 			t.Fatal("invalid owner reached payload/custody")
+		}
+	}
+}
+
+// The README local-prepare example admits its security flags exactly once.
+// A duplicated key or generation is refused by the same flag implementation.
+func TestReadmeLocalPrepareOwnerArguments(t *testing.T) {
+	raw, err := os.ReadFile("../../README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, example, ok := strings.Cut(string(raw), ".temp/build/swarma-keyvault grants local-prepare \\\n")
+	if !ok {
+		t.Fatal("local-prepare example missing")
+	}
+	example, _, ok = strings.Cut(example, "> local-certificate.json")
+	if !ok {
+		t.Fatal("local-prepare redirect missing")
+	}
+	args := strings.Fields(strings.ReplaceAll(example, "\\\n", " "))
+	for _, extra := range [][]string{nil, {"--owner-key", "account/grants-owner-v1"}, {"--owner-key-version", "1"}} {
+		f := flag.NewFlagSet("readme", flag.ContinueOnError)
+		f.SetOutput(io.Discard)
+		owner := addOwnerFlags(f)
+		f.String("plan", "", "")
+		f.String("issuer-spki-der", "", "")
+		f.String("requester-spki-der", "", "")
+		err := f.Parse(append(append([]string{}, args...), extra...))
+		if extra == nil {
+			if err != nil {
+				t.Fatal("documented flags refuse", err)
+			}
+			if _, err := owner.config(); err != nil {
+				t.Fatal("documented owner refuses", err)
+			}
+		} else if err == nil {
+			t.Fatal("duplicate documented security flag admitted")
 		}
 	}
 }

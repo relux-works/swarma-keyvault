@@ -128,16 +128,30 @@ func muAttestationFromSpec(raw, spki []byte) (*muAttestation, error) {
 }
 
 func runMUAttestationPrepare(args []string, stdout, stderr io.Writer) int {
-	specPath, spkiPath, code := muSPKIArg("mu-attestation-prepare", " --spec FILE", args, stderr)
-	if code >= 0 {
-		return code
+	usage := "swarma-keyvault grants mu-attestation-prepare --spec FILE --subject-spki-der FILE" + muOwnerPreparationUsage
+	f := flag.NewFlagSet("mu-attestation-prepare", flag.ContinueOnError)
+	f.SetOutput(io.Discard)
+	owner := addMUOwnerPreparationFlags(f)
+	var spec, subject onceString
+	f.Var(&spec, "spec", "JSON specification file")
+	f.Var(&subject, "subject-spki-der", "subject public key, SPKI DER")
+	if err := f.Parse(args); err != nil {
+		fmt.Fprintln(stderr, usage)
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
 	}
-	raw, err := readInput(specPath, nil, 16384)
+	if f.NArg() != 0 || !spec.set || spec.value == "" || spec.value == "-" || !subject.set || subject.value == "" || subject.value == "-" || owner.validate() != nil {
+		fmt.Fprintln(stderr, usage)
+		return 2
+	}
+	raw, err := readInput(spec.value, nil, 16384)
 	if err != nil {
 		fmt.Fprintln(stderr, "cannot read bounded attestation specification")
 		return 1
 	}
-	spki, err := readInput(spkiPath, nil, muSPKIMax)
+	spki, err := readInput(subject.value, nil, muSPKIMax)
 	if err != nil {
 		fmt.Fprintln(stderr, "cannot read bounded public key")
 		return 1
@@ -147,10 +161,15 @@ func runMUAttestationPrepare(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	pin, err := owner.pin(a.issuer)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	d := a.plan.Digest()
 	return muWrite(stdout, map[string]string{
 		"type": "mu-attestation-prepared-1", "kind": "attestation/1", "key": a.issuer, "subject_key": a.subject,
 		"body": base64.RawURLEncoding.EncodeToString(a.plan.Body()), "content_id": a.plan.ContentID(),
-		"digest_sha256": hex.EncodeToString(d[:]), "rendering": a.rendering, "reason": a.reason,
+		"digest_sha256": hex.EncodeToString(d[:]), "rendering": "Owner key pin: " + pin + a.rendering, "reason": a.reason, "owner_key_pin": pin,
 	})
 }

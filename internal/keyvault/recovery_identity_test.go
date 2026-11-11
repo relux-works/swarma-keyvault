@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 )
@@ -306,5 +307,86 @@ func TestSplitIdentityManagerReservationsBothOrders(t *testing.T) {
 				t.Fatal("manager left inconsistent namespace", err)
 			}
 		}
+	}
+}
+
+// The unchanged frozen v1 group reserves its physical, Nostr and Namecoin
+// accounts through both managers. Collisions reach no words, wraps or writes,
+// preserve retained bytes, and neighboring allocations still succeed.
+func TestFrozenV1ManagerReservations(t *testing.T) {
+	raw, err := os.ReadFile("testdata/recovery/v1-public-record.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := parseRecoveryRecord(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := os.ReadFile("testdata/recovery/v1-public-ciphertext.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := func() (*RecoveryManager, *recoveryNamespaceStore, *recoveryFakeHelper) {
+		m, f, h := recoveryTestManager(t)
+		f.groups = []RecoveryRecord{retained}
+		f.data = map[string][]byte{retained.Account(): bytes.Clone(ciphertext)}
+		store := &recoveryNamespaceStore{recoveryFakeStore: f}
+		m.backend = store
+		return m, store, h
+	}
+	for _, slot := range []struct {
+		purpose   string
+		version   int
+		collision bool
+	}{{"recovery", 1, true}, {"nostr", 2, true}, {"namecoin", 1, true},
+		{"recovery", 2, false}, {"nostr", 3, false}, {"namecoin", 2, false}} {
+		t.Run("standalone/"+slot.purpose+"/"+fmt.Sprint(slot.version), func(t *testing.T) {
+			m, store, h := seed()
+			_, err := NewNostrManager(store, m.lock).Generate(retained.Service, slot.purpose, slot.version)
+			if slot.collision {
+				var refusal *Refusal
+				if !errors.As(err, &refusal) || refusal.Code != "nostr_duplicate" || store.creates != 0 {
+					t.Fatal("retained v1 standalone collision admitted", err)
+				}
+			} else if err != nil || store.creates != 1 {
+				t.Fatal("valid standalone neighbor refused", err)
+			}
+			if h.calls != 0 || store.stores != 0 || !bytes.Equal(store.data[retained.Account()], ciphertext) {
+				t.Fatal("standalone attempt changed retained group")
+			}
+			encoded, _ := json.Marshal(store.groups[0])
+			if !bytes.Equal(encoded, raw) {
+				t.Fatal("retained v1 metadata changed")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name      string
+		request   RecoveryRequest
+		collision bool
+	}{
+		{"physical", RecoveryRequest{NostrIdentity: "test", NamecoinIdentity: "south", Version: 1, NostrVersion: 11, NamecoinVersion: 11}, true},
+		{"nostr", RecoveryRequest{NostrIdentity: "test", NamecoinIdentity: "south", Version: 11, NostrVersion: 2, NamecoinVersion: 11}, true},
+		{"namecoin", RecoveryRequest{NostrIdentity: "north", NamecoinIdentity: "test", Version: 11, NostrVersion: 11, NamecoinVersion: 1}, true},
+		{"neighbor-generations", RecoveryRequest{NostrIdentity: "test", NamecoinIdentity: "test", Version: 2, NostrVersion: 3, NamecoinVersion: 2}, false},
+		{"neighbor-services", RecoveryRequest{NostrIdentity: "north", NamecoinIdentity: "south", Version: 1, NostrVersion: 2, NamecoinVersion: 1}, false},
+	} {
+		t.Run("split/"+tc.name, func(t *testing.T) {
+			m, store, h := seed()
+			terminal := &recoveryFakeTerminal{}
+			_, err := m.Create(tc.request, terminal, false)
+			if tc.collision {
+				recoveryCode(t, err, "duplicate")
+				if store.stores != 0 || h.calls != 0 || terminal.identityConfirmation != 1 || terminal.confirmation != 0 || terminal.read != 0 {
+					t.Fatal("retained v1 collision reached words/wrap/write")
+				}
+			} else if err != nil || store.stores != 1 || h.calls != 2 {
+				t.Fatal("valid split neighbor refused", err)
+			}
+			encoded, _ := json.Marshal(store.groups[0])
+			if store.creates != 0 || !bytes.Equal(encoded, raw) || !bytes.Equal(store.data[retained.Account()], ciphertext) {
+				t.Fatal("split attempt changed retained v1 bytes")
+			}
+		})
 	}
 }

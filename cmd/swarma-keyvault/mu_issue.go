@@ -127,7 +127,7 @@ func runMUIssue(args []string, stdout, stderr io.Writer) int {
 		if key.Address != address || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, pin) {
 			return errMUOwnerKey
 		}
-		text := rendering + "Touch ID reason: " + reason + "\n"
+		text := "Owner key pin: " + ownerkey.PublicPin(address, pin) + rendering + "Touch ID reason: " + reason + "\n"
 		if n, err := io.WriteString(stderr, text); err != nil {
 			return err
 		} else if n != len(text) {

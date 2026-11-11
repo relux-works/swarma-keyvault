@@ -62,6 +62,7 @@ func prepared(t *testing.T, document string) *Prepared {
 	return p
 }
 
+// Preparation owns exact source/DER bytes, binds the full digest and verifies only the unchanged document under the trusted public association.
 func TestExactBytesAndOwnership(t *testing.T) {
 	for _, document := range []string{"Exact English.\nТочный русский.", "Exact English.\n\nТочный русский.\n", "No terminal newline"} {
 		t.Run(document, func(t *testing.T) {
@@ -103,6 +104,7 @@ func TestExactBytesAndOwnership(t *testing.T) {
 	}
 }
 
+// Full rendering retains the far-tail sentinel and complete public context for a long Unicode document.
 func TestFullRenderNoTruncation(t *testing.T) {
 	// A far-tail sentinel must be present even beyond typical prompt capacity.
 	document := strings.Repeat(strings.Repeat("Ж", 70)+"\n", 70) + "TAIL EXACT END"
@@ -143,6 +145,7 @@ func (w *failingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Every injected render-stage writer failure propagates instead of reporting a complete review.
 func TestRenderFailureAtEveryStage(t *testing.T) {
 	p := prepared(t, "Complete text")
 	for at := 1; at <= 3; at++ {
@@ -155,6 +158,7 @@ func TestRenderFailureAtEveryStage(t *testing.T) {
 	}
 }
 
+// Malformed, controlled, empty or oversized document bytes refuse beside admitted bounded UTF-8 controls.
 func TestAdmissionRefusalsAndBounds(t *testing.T) {
 	negative := [][]byte{nil, {0xff}, []byte("\n\n"), []byte("END DOCUMENT"), []byte("BEGIN DOCUMENT"), []byte("x\r\ny"), []byte("x\ty"), []byte("x\x00y"), []byte("\x1b[2Jtext"), []byte("a\u202eb"), []byte("a\u200bb"), []byte("a\u00a0b"), []byte("e\u0301"), []byte("a\u3164b"), []byte(" leading"), []byte("trailing "), []byte("double  space"), []byte("line \nnext"), []byte(strings.Repeat("a", MaxLineScalars+1)), []byte(strings.Repeat("\n", MaxLines)), []byte(strings.Repeat("a", MaxDocumentBytes+1))}
 	for i, raw := range negative {
@@ -162,7 +166,7 @@ func TestAdmissionRefusalsAndBounds(t *testing.T) {
 			t.Fatal("invalid/ambiguous/bounded input admitted", i)
 		}
 	}
-	for _, raw := range []string{strings.Repeat("a", MaxLineScalars), "a" + strings.Repeat("\n", MaxLines-1), "Алексис — подпись.\n\nIvan: exact bytes."} {
+	for _, raw := range []string{strings.Repeat("a", MaxLineScalars), "a" + strings.Repeat("\n", MaxLines-1), "Точный текст.\n\nReader: exact bytes."} {
 		if _, err := Prepare(ownerAddress, []byte(raw), fixturePublic(t)); err != nil {
 			t.Fatal("valid neighbor refused", err)
 		}
@@ -180,6 +184,7 @@ func TestAdmissionRefusalsAndBounds(t *testing.T) {
 	}
 }
 
+// Exact P-256 DER and canonical low-S DER signatures are required, with a valid associated signature as the positive control.
 func TestStrictPublicAndSignature(t *testing.T) {
 	p := prepared(t, "Exact")
 	for _, pin := range [][]byte{nil, {1, 2, 3}, append(fixturePublic(t), 0), pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: fixturePublic(t)})} {
@@ -271,6 +276,7 @@ func fixtureManager(t *testing.T, events *[]string, mutate func(*keyvault.Record
 	return keyvault.NewManager(s, nil, keyvault.Origin{}), s
 }
 
+// The software store observes full rendering and exact confirmation before one private call, followed by public verification. This does not qualify native display or presence.
 func TestSyntheticReviewConfirmSignVerifyOrder(t *testing.T) {
 	p := prepared(t, "English exact.\nРусский точно.\n")
 	var events []string
@@ -299,6 +305,7 @@ func TestSyntheticReviewConfirmSignVerifyOrder(t *testing.T) {
 	}
 }
 
+// Source, review, cancellation and key-policy refusals prevent a private call in the software store.
 func TestSyntheticRefusalHasNoPrivateCall(t *testing.T) {
 	for _, scenario := range []string{"changed-before", "changed-during-review", "short-confirmed", "modified-confirmed", "review-error", "cancel-review", "cancel-final-source", "source-error", "wrong-generation", "wrong-store", "no-presence", "extractable", "wrong-pin"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -371,6 +378,7 @@ func TestSyntheticRefusalHasNoPrivateCall(t *testing.T) {
 	}
 }
 
+// A source change or cancellation after the synthetic private dispatch releases no signature.
 func TestAfterDispatchChangeOrCancellationReleasesNothing(t *testing.T) {
 	for _, cancellation := range []bool{false, true} {
 		p := prepared(t, "Exact")
@@ -393,6 +401,7 @@ func TestAfterDispatchChangeOrCancellationReleasesNothing(t *testing.T) {
 	}
 }
 
+// A refused software private call is attempted once and yields no released signature.
 func TestSyntheticPrivateRefusalDoesNotRetry(t *testing.T) {
 	p := prepared(t, "Exact")
 	var events []string
@@ -404,6 +413,7 @@ func TestSyntheticPrivateRefusalDoesNotRetry(t *testing.T) {
 	}
 }
 
+// Unsupported native review refuses before software custody, preserving the portable admission boundary.
 func TestNonDarwinRouteRefusesWithoutCustody(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		t.Skip("non-Darwin refusal only; native route is exercised with synthetic custody separately")
@@ -425,6 +435,7 @@ func TestNonDarwinRouteRefusesWithoutCustody(t *testing.T) {
 	}
 }
 
+// Only bounded regular document files are read, with special or oversized inputs refused.
 func TestBoundedRegularInput(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "document")

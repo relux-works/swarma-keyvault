@@ -1,11 +1,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"strconv"
 	"strings"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
+	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 	"github.com/relux-works/swarma-keyvault/internal/owneridentity"
 	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
@@ -58,4 +60,43 @@ func (o *ownerFlags) config() (owneridentity.Config, error) {
 		return owneridentity.Config{}, err
 	}
 	return owneridentity.New(o.principal.value, address.Service, address.Purpose, address.Version)
+}
+
+const muOwnerPreparationUsage = ownerAddressUsage + " --owner-spki-der FILE"
+
+type muOwnerPreparationFlags struct {
+	addressFlags *ownerAddressFlags
+	publicDER    onceString
+}
+
+func addMUOwnerPreparationFlags(f *flag.FlagSet) *muOwnerPreparationFlags {
+	o := &muOwnerPreparationFlags{addressFlags: addOwnerAddressFlags(f)}
+	f.Var(&o.publicDER, "owner-spki-der", "independently expected owner root public key, SPKI DER")
+	return o
+}
+
+func (o *muOwnerPreparationFlags) validate() error {
+	if _, err := o.addressFlags.address(); err != nil {
+		return err
+	}
+	if !o.publicDER.set || o.publicDER.value == "" || o.publicDER.value == "-" {
+		return owneridentity.ErrConfig
+	}
+	return nil
+}
+
+func (o *muOwnerPreparationFlags) pin(issuer string) (string, error) {
+	address, err := o.addressFlags.address()
+	if err != nil {
+		return "", err
+	}
+	der, err := readInput(o.publicDER.value, nil, muSPKIMax)
+	if err != nil {
+		return "", errors.New("cannot read bounded owner public key")
+	}
+	root, err := mugrant.KeyIDFromSPKI(der)
+	if err != nil || root != issuer {
+		return "", errors.New("specification refused: issuer is not the given owner root")
+	}
+	return ownerkey.PublicPin(address, der), nil
 }

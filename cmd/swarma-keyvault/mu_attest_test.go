@@ -15,7 +15,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/mugrant"
 )
 
-const muAttestMXID = "@meta-keeper.keeper-sirius:gr.relux.works"
+const muAttestMXID = "@agent:example.invalid"
 
 func muSPKI(t *testing.T, k *ecdsa.PrivateKey) []byte {
 	t.Helper()
@@ -34,9 +34,9 @@ func muAttestSpec(kind, issuer string) map[string]any {
 	return m
 }
 
-func muAttestPrepare(t *testing.T, spec map[string]any, spki []byte) (int, map[string]string, string) {
+func muAttestPrepare(t *testing.T, spec map[string]any, spki []byte, owner *ecdsa.PrivateKey) (int, map[string]string, string) {
 	t.Helper()
-	code, out, errText := muCLIRun("grants", "mu-attestation-prepare", "--spec", muCLIWrite(t, "spec.json", spec), "--subject-spki-der", muCLIWrite(t, "subject.der", spki))
+	code, out, errText := muCLIRun(append([]string{"grants", "mu-attestation-prepare", "--spec", muCLIWrite(t, "spec.json", spec), "--subject-spki-der", muCLIWrite(t, "subject.der", spki)}, muPrepareOwnerArgs(t, owner)...)...)
 	var p map[string]string
 	if code == 0 {
 		if err := json.Unmarshal([]byte(out), &p); err != nil {
@@ -70,7 +70,7 @@ func TestMUCLIAttestationRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	for kind, want := range map[string]*mugrant.Plan{"mac-agent": agentPlan, "publisher": pubPlan} {
-		code, p, errText := muAttestPrepare(t, muAttestSpec(kind, root), spki)
+		code, p, errText := muAttestPrepare(t, muAttestSpec(kind, root), spki, rk)
 		if code != 0 || p["type"] != "mu-attestation-prepared-1" || p["kind"] != "attestation/1" || p["key"] != root || p["subject_key"] != wantSubject {
 			t.Fatal("prepare", kind, code, errText, p)
 		}
@@ -111,11 +111,11 @@ func TestMUCLIAttestationRoundTrip(t *testing.T) {
 // Claim: every malformed attestation request refuses with exit 1 and no
 // output, beside valid controls for both kinds; usage errors exit 2.
 func TestMUCLIAttestationRefusals(t *testing.T) {
-	_, root := muCLIKey(t)
+	rk, root := muCLIKey(t)
 	sk, subject := muCLIKey(t)
 	spki := muSPKI(t, sk)
 	for _, kind := range []string{"mac-agent", "publisher"} {
-		if code, _, errText := muAttestPrepare(t, muAttestSpec(kind, root), spki); code != 0 {
+		if code, _, errText := muAttestPrepare(t, muAttestSpec(kind, root), spki, rk); code != 0 {
 			t.Fatal("valid control refused", kind, errText)
 		}
 	}
@@ -125,7 +125,7 @@ func TestMUCLIAttestationRefusals(t *testing.T) {
 		"window-367d":         func(m map[string]any) { m["expires"] = "2027-11-07T17:00:00Z" },
 		"inverted-window":     func(m map[string]any) { m["expires"] = "2026-11-05T16:00:00Z" },
 		"non-exact-time":      func(m map[string]any) { m["not_before"] = "2026-11-05T17:00:00+00:00" },
-		"bad-mxid":            func(m map[string]any) { m["mxid"] = "meta-keeper" },
+		"bad-mxid":            func(m map[string]any) { m["mxid"] = "invalid-principal" },
 		"generation-zero":     func(m map[string]any) { m["generation"] = 0 },
 		"bad-issuer":          func(m map[string]any) { m["issuer"] = "p256:AAAA" },
 		"issuer-is-subject":   func(m map[string]any) { m["issuer"] = subject },
@@ -134,13 +134,13 @@ func TestMUCLIAttestationRefusals(t *testing.T) {
 	for name, mutate := range cases {
 		m := muAttestSpec("mac-agent", root)
 		mutate(m)
-		code, out, _ := muCLIRun("grants", "mu-attestation-prepare", "--spec", muCLIWrite(t, "spec.json", m), "--subject-spki-der", muCLIWrite(t, "s.der", spki))
+		code, out, _ := muCLIRun(append([]string{"grants", "mu-attestation-prepare", "--spec", muCLIWrite(t, "spec.json", m), "--subject-spki-der", muCLIWrite(t, "s.der", spki)}, muPrepareOwnerArgs(t, rk)...)...)
 		if code != 1 || out != "" {
 			t.Error("refusal expected", name, code)
 		}
 	}
 	for name, key := range map[string][]byte{"garbage": []byte("not a key"), "truncated": spki[:40], "oversize": bytes.Repeat([]byte{1}, muSPKIMax+1)} {
-		if code, _, _ := muAttestPrepare(t, muAttestSpec("mac-agent", root), key); code != 1 {
+		if code, _, _ := muAttestPrepare(t, muAttestSpec("mac-agent", root), key, rk); code != 1 {
 			t.Error("bad subject key admitted", name)
 		}
 	}

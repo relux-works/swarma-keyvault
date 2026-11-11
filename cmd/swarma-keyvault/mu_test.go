@@ -48,6 +48,11 @@ func muCLIWrite(t *testing.T, name string, v any) string {
 	return path
 }
 
+func muPrepareOwnerArgs(t *testing.T, owner *ecdsa.PrivateKey) []string {
+	t.Helper()
+	return []string{"--owner-key", "synthetic-mu-owner/grants-owner-v1", "--owner-key-version", "12", "--owner-spki-der", muCLIWrite(t, "prepare-owner.der", muSPKI(t, owner))}
+}
+
 func muCLIRun(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
 	code := run(args, strings.NewReader(""), &out, &errb)
@@ -56,7 +61,7 @@ func muCLIRun(args ...string) (int, string, string) {
 
 func muGrantSpecMap(issuer, subject string) map[string]any {
 	return map[string]any{
-		"issuer": issuer, "subject": subject, "subject_mxid": "@meta-keeper.keeper-sirius:gr.relux.works", "audience": "swarma-keyvault-receiver",
+		"issuer": issuer, "subject": subject, "subject_mxid": "@agent:example.invalid", "audience": "swarma-keyvault-receiver",
 		"entries":    []any{map[string]any{"action": "work.assign", "kind": "product", "id": "swarma-platform"}},
 		"not_before": "2026-11-05T17:00:00Z", "expires": "2027-11-05T17:00:00Z", "use": "until_expiry",
 	}
@@ -120,13 +125,13 @@ func muSignAndAssemble(t *testing.T, prepared map[string]string, k *ecdsa.Privat
 func TestMUCLIGrantRoundTrip(t *testing.T) {
 	ik, issuer := muCLIKey(t)
 	sk, subject := muCLIKey(t)
-	args := append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(issuer, subject))}, muAttestFiles(t, ik, issuer, sk, "@meta-keeper.keeper-sirius:gr.relux.works")...)
-	code, out, errText := muCLIRun(args...)
+	args := append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "spec.json", muGrantSpecMap(issuer, subject))}, muAttestFiles(t, ik, issuer, sk, "@agent:example.invalid")...)
+	code, out, errText := muCLIRun(append(args, muPrepareOwnerArgs(t, ik)...)...)
 	if code != 0 {
 		t.Fatal(code, errText)
 	}
 	var p map[string]string
-	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @meta-keeper") || !strings.Contains(p["rendering"], "use policy: until_expiry") || !strings.Contains(p["rendering"], "revocation publisher key fingerprint (as mac-keyvault prints it): ") || !strings.Contains(p["rendering"], "grantee: @meta-keeper.keeper-sirius:gr.relux.works (generation 1, from attestation sha256:") {
+	if err := json.Unmarshal([]byte(out), &p); err != nil || p["type"] != "mu-grant-prepared-1" || !strings.HasPrefix(p["reason"], "до срока · @agent:example.invalid") || !strings.Contains(p["rendering"], "use policy: until_expiry") || !strings.Contains(p["rendering"], "revocation publisher key fingerprint (as mac-keyvault prints it): ") || !strings.Contains(p["rendering"], "grantee: @agent:example.invalid (generation 1, from attestation sha256:") {
 		t.Fatal("prepared output", err, out)
 	}
 	code, wire, errText := muSignAndAssemble(t, p, ik)
@@ -144,7 +149,7 @@ func TestMUCLIGrantRoundTrip(t *testing.T) {
 func TestMUCLIRequestRoundTrip(t *testing.T) {
 	ak, author := muCLIKey(t)
 	spec := map[string]any{"author": author, "author_attestation": "sha256:" + strings.Repeat("cd", 32), "audience": "swarma-keyvault-receiver",
-		"room": "!room:gr.relux.works", "to": "@keyvault.orch-altair:gr.relux.works", "action": "work.assign", "kind": "product", "id": "swarma-platform",
+		"room": "!room:example.invalid", "to": "@agent:example.invalid", "action": "work.assign", "kind": "product", "id": "swarma-platform",
 		"arguments": map[string]string{"module": "swarma-keyvault", "title": "Review"}, "text": "assign: review", "issued_at": "2026-11-05T17:00:00Z", "lifetime_seconds": 120}
 	code, out, errText := muCLIRun("grants", "mu-request-prepare", "--spec", muCLIWrite(t, "req.json", spec))
 	if code != 0 {
@@ -169,13 +174,13 @@ func TestMUCLIRequestRoundTrip(t *testing.T) {
 func TestMUCLIRefusals(t *testing.T) {
 	ik, issuer := muCLIKey(t)
 	sk, subject := muCLIKey(t)
-	attest := muAttestFiles(t, ik, issuer, sk, "@meta-keeper.keeper-sirius:gr.relux.works")
+	attest := append(muAttestFiles(t, ik, issuer, sk, "@agent:example.invalid"), muPrepareOwnerArgs(t, ik)...)
 	if code, _, errText := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, attest...)...); code != 0 {
 		t.Fatal("valid control refused", errText)
 	}
 	otherRoot, otherID := muCLIKey(t)
 	mismatch := muGrantSpecMap(issuer, subject)
-	mismatch["subject_mxid"] = "@other-agent:gr.relux.works"
+	mismatch["subject_mxid"] = "@other-agent:example.invalid"
 	unknown := muGrantSpecMap(issuer, subject)
 	unknown["max_uses"] = 5
 	badTime := muGrantSpecMap(issuer, subject)
@@ -188,12 +193,14 @@ func TestMUCLIRefusals(t *testing.T) {
 		}
 	}
 	// Attestations signed by another root do not bind this issuer's grant.
-	foreign := muAttestFiles(t, otherRoot, otherID, sk, "@meta-keeper.keeper-sirius:gr.relux.works")
+	foreign := muAttestFiles(t, otherRoot, otherID, sk, "@agent:example.invalid")
+	foreign = append(foreign, muPrepareOwnerArgs(t, ik)...)
 	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, foreign...)...); code != 1 || out != "" {
 		t.Fatal("foreign-root attestations admitted", code)
 	}
 	// The two attestations swapped between the flags do not bind.
 	swapped := []string{"--subject-attestation", attest[3], "--publisher-attestation", attest[1]}
+	swapped = append(swapped, muPrepareOwnerArgs(t, ik)...)
 	if code, out, _ := muCLIRun(append([]string{"grants", "mu-grant-prepare", "--spec", muCLIWrite(t, "s.json", muGrantSpecMap(issuer, subject))}, swapped...)...); code != 1 || out != "" {
 		t.Fatal("swapped attestations admitted", code)
 	}

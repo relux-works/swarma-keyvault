@@ -377,7 +377,6 @@ obtained owner and requester P-256 SPKI DER files:
 .temp/build/swarma-keyvault grants local-prepare \
   --plan local-plan.json --owner-mxid @owner:example.invalid \
   --owner-key account/grants-owner-v1 --owner-key-version 1 \
-  --owner-key account/grants-owner-v1 --owner-key-version 1 \
   --issuer-spki-der owner.spki.der --requester-spki-der requester.spki.der \
   > local-certificate.json
 .temp/build/swarma-keyvault grants local-issue \

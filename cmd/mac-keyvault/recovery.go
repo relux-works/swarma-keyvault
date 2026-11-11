@@ -32,11 +32,11 @@ var makeRecoveryManager = func(backend keyvault.RecoveryBackend, lock keyvault.L
 
 func runRecovery(args []string, out output) int {
 	if len(args) == 0 {
-		return out.fail(usagef("recovery operation required"))
+		return recoveryFailureReceipt(out, usagef("recovery operation required"))
 	}
 	op := args[0]
 	if op != "plan" && op != "generate" && op != "restore" && op != "pub" && op != "delete" {
-		return out.fail(usagef("unsupported recovery operation; private input and export are refused"))
+		return recoveryFailureReceipt(out, usagef("unsupported recovery operation; private input and export are refused"))
 	}
 	fs := flag.NewFlagSet("recovery "+op, flag.ContinueOnError)
 	var q keyvault.RecoveryRequest
@@ -87,49 +87,49 @@ func runRecovery(args []string, out output) int {
 	}
 	positional, err := parseFlags(fs, args[1:])
 	if err != nil {
-		return out.fail(usagef("invalid recovery arguments; no secret argument/file/environment route is supported"))
+		return recoveryFailureReceipt(out, usagef("invalid recovery arguments; no secret argument/file/environment route is supported"))
 	}
 	validName := func(s string) bool { return keyvault.ValidateName("service", keyvault.CodeInvalidService, s) == nil }
 	validVersion := func(v int, optional bool) bool { return v >= 1 && v <= 2147483647 || optional && v == 0 }
 	if family {
 		if len(positional) != 0 {
-			return out.fail(usagef("unexpected recovery arguments"))
+			return recoveryFailureReceipt(out, usagef("unexpected recovery arguments"))
 		}
 		if seen["service"] {
 			if seen["nostr-identity"] || seen["namecoin-identity"] || !validName(q.Service) {
-				return out.fail(usagef("legacy service is exclusive of purpose identities"))
+				return recoveryFailureReceipt(out, usagef("legacy service is exclusive of purpose identities"))
 			}
 		} else if !validName(q.NostrIdentity) || !validName(q.NamecoinIdentity) {
-			return out.fail(usagef("both explicit valid purpose identities are required"))
+			return recoveryFailureReceipt(out, usagef("both explicit valid purpose identities are required"))
 		}
 		if !validVersion(q.NostrVersion, op == "plan" && !seen["nostr-version"]) || !validVersion(q.NamecoinVersion, op == "plan" && !seen["namecoin-version"]) {
-			return out.fail(usagef("valid purpose generations are required"))
+			return recoveryFailureReceipt(out, usagef("valid purpose generations are required"))
 		}
 	} else {
 		if len(positional) != 1 || !validName(positional[0]) {
-			return out.fail(usagef("one valid Nostr identity is required"))
+			return recoveryFailureReceipt(out, usagef("one valid Nostr identity is required"))
 		}
 		q.Service = positional[0]
 	}
 	if !validVersion(q.Version, op == "plan" && !seen["version"]) {
-		return out.fail(usagef("valid group generation required"))
+		return recoveryFailureReceipt(out, usagef("valid group generation required"))
 	}
 	if op == "restore" && q.ValidateRestorePins() != nil {
-		return out.fail(usagef("three canonical retained public recovery pins are required"))
+		return recoveryFailureReceipt(out, usagef("three canonical retained public recovery pins are required"))
 	}
 	if op == "delete" && len(expectedGroup) != 32 {
-		return out.fail(usagef("exact public group pin required"))
+		return recoveryFailureReceipt(out, usagef("exact public group pin required"))
 	}
 	if op == "delete" {
 		for _, c := range expectedGroup {
 			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-				return out.fail(usagef("canonical public group pin required"))
+				return recoveryFailureReceipt(out, usagef("canonical public group pin required"))
 			}
 		}
 	}
 	lock, err := vaultLock()
 	if err != nil {
-		return out.fail(&keyvault.Refusal{Code: "recovery_lock_unavailable",
+		return recoveryFailureReceipt(out, &keyvault.Refusal{Code: "recovery_lock_unavailable",
 			Message: "Recovery operation refused: lock_unavailable", Hint: "check that the vault lock is available"})
 	}
 	// A mutation requires the owner's controlling terminal before custody is
@@ -138,7 +138,7 @@ func runRecovery(args []string, out output) int {
 	if op == "generate" || op == "restore" || op == "delete" {
 		terminal, err = newRecoveryTerminal()
 		if err != nil {
-			return out.fail(usagef("owner foreground controlling terminal unavailable"))
+			return recoveryFailureReceipt(out, usagef("owner foreground controlling terminal unavailable"))
 		}
 		defer terminal.Close()
 	}
@@ -239,15 +239,44 @@ func recoveryReceiptLost(out output, operation string, reference keyvault.Recove
 	return exitFailure
 }
 
+// Definite refusals retain their contract code only after complete delivery.
+// Delivery failure is a separate bounded error and never retries the operation.
+func recoveryFailureReceipt(out output, err error) int {
+	code, detail := out.classify(err)
+	writer := out.stderr
+	var b []byte
+	if out.json {
+		writer = out.stdout
+		b, err = json.MarshalIndent(response{OK: false, Command: out.command, Error: detail}, "", "  ")
+		if err == nil {
+			b = append(b, '\n')
+		}
+	} else {
+		var text bytes.Buffer
+		fmt.Fprintf(&text, "error: %s: %s\n", detail.Code, detail.Message)
+		if detail.Status != 0 {
+			fmt.Fprintf(&text, "os_status: %d (%s)\n", detail.Status, keyvault.OSStatusName(detail.Status))
+		}
+		fmt.Fprintf(&text, "hint: %s\n", detail.Hint)
+		b = text.Bytes()
+		err = nil
+	}
+	if err != nil || !writeRecoveryReceipt(writer, b) {
+		writeRecoveryReceipt(out.stderr, []byte("recovery_refusal_output_unavailable: refusal="+detail.Code+"; could not write failure result\n"))
+		return exitFailure
+	}
+	return code
+}
+
 func recoveryBoundedFailure(out output, err error) int {
 	if errors.Is(err, keyvault.ErrNotFound) {
-		return out.fail(keyvault.ErrNotFound)
+		return recoveryFailureReceipt(out, keyvault.ErrNotFound)
 	}
 	if keyvault.ClassifyError(err).Code == keyvault.CodeFailure {
 		err = &keyvault.Refusal{Code: "recovery_backend_unavailable",
 			Message: "Recovery backend unavailable", Hint: "check the vault without changing existing records", Failure: true}
 	}
-	return out.fail(err)
+	return recoveryFailureReceipt(out, err)
 }
 
 func recoveryMutationFailure(out output, err error) int {
