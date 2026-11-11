@@ -43,8 +43,8 @@ checks its signature, not a certificate's allowance.
 When execution of public examples is authorized, use the committed
 [`assets/local-verify/`](../assets/local-verify/) triplet with the portable CLI.
 It was serialized from `localTestFixture` / `localFixture.envelopes` in
-`internal/grants/local_request_test.go`; only public SPKIs and signed envelopes
-are included. The ephemeral software private keys were never serialized.
+`internal/grants/local_request_test.go`, with neutral `example.invalid`
+principals; only public SPKIs and signed envelopes are included. The ephemeral software private keys were never serialized.
 The example enrollment selects its owner and the profile repository. The
 synthetic public pins do not enroll a real owner or authorize that repository.
 Never install this enrollment as a runtime trust configuration.

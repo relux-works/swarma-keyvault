@@ -276,6 +276,7 @@ public DER input is limited to 1,024 bytes. No private key belongs in either fil
 .temp/build/swarma-keyvault grants prepare \
   --plan .temp/draft.canonical.json \
   --owner-mxid @owner:example.invalid \
+  --owner-key account/grants-owner-v1 --owner-key-version 1 \
   --issuer-spki-der .temp/owner-public.der \
   > .temp/certificate.unsigned.json 2> .temp/certificate.review.txt
 ```
@@ -283,7 +284,8 @@ public DER input is limited to 1,024 bytes. No private key belongs in either fil
 `--plan -` reads the bounded draft from stdin. Stdout contains the exact unsigned
 canonical payload without a newline. Stderr contains an explicitly unsigned
 full-field review and SHA-256 of `swarma-grants/certificate/1`, LF and those exact
-payload bytes. The issuer key ID is SHA-256 of the exact supplied public DER.
+payload bytes. The review also displays the explicitly configured key address and exact public
+DER hash. The issuer key ID is SHA-256 of the exact supplied public DER.
 The CLI itself writes no files; the shell redirections above create the outputs.
 Input refusal produces no payload. A failed or short review write prevents
 payload output; a failed or short payload write returns failure, so discard any
@@ -299,7 +301,10 @@ under its owner-presence contract. A prepared document grants no active rights.
 
 `owner-document review` renders a bounded exact UTF-8 document in full;
 `owner-document verify` checks an existing detached P-256 SHA-256 low-S DER
-signature against those unchanged bytes and an independent public DER pin.
+signature against those unchanged bytes, an independent public DER pin and a
+trusted `--owner-key-pin FILE` associating that public key with the exact address.
+The association format and enrollment requirement are documented in the source
+contract.
 `owner-document sign` has a typed macOS route for complete plain-text review,
 explicit confirmation, final byte/key binding and presence authentication.
 Non-macOS hosts refuse before custody access. The exact native build and runtime
@@ -371,6 +376,8 @@ obtained owner and requester P-256 SPKI DER files:
 ```sh
 .temp/build/swarma-keyvault grants local-prepare \
   --plan local-plan.json --owner-mxid @owner:example.invalid \
+  --owner-key account/grants-owner-v1 --owner-key-version 1 \
+  --owner-key account/grants-owner-v1 --owner-key-version 1 \
   --issuer-spki-der owner.spki.der --requester-spki-der requester.spki.der \
   > local-certificate.json
 .temp/build/swarma-keyvault grants local-issue \

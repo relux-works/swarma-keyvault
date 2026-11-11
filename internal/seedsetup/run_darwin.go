@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
 const Usage = "keyvault-seed --nostr-identity NAME --namecoin-identity NAME [--version N --nostr-version N --namecoin-version N] [--qualification-nostr-identity NAME --qualification-namecoin-identity NAME] [--artifact-dir DIRECTORY]"
@@ -75,11 +77,16 @@ func runAttended(ctx context.Context, c Config, release Release, out io.Writer) 
 	if err != nil {
 		return err
 	}
+	lock, err := keyvault.DefaultFileLock()
+	if err != nil || lock.Path != paths.Lock || lock.BootstrapDir != home {
+		return refused("vault_plan_lock_unavailable")
+	}
 	p := installation{paths: paths, release: release, uid: uint32(os.Getuid())}
 	w := workflow{
+		planner: keyvault.NewRecoveryPlanner(keyvault.NewRecoveryInventory(), lock),
 		out:     out,
-		run:     func(binary string, argv ...string) ([]byte, int) { return command(ctx, home, binary, argv...) },
-		restore: func(binary string, t publicTarget) ([]byte, int) { return publicFixtureRestore(ctx, home, binary, t) },
+		run:     func(binary string, argv ...string) invocation { return command(ctx, home, binary, argv...) },
+		restore: func(binary string, t publicTarget) invocation { return publicFixtureRestore(ctx, home, binary, t) },
 		prompt:  func(message string, limit int) (string, error) { return publicPrompt(ctx, message, limit) },
 	}
 	return execute(ctx, p, w, c, ids)
@@ -107,7 +114,7 @@ func childExit(ctx context.Context, err error) int {
 	return exit.ExitCode()
 }
 
-func command(parent context.Context, home, binary string, args ...string) ([]byte, int) {
+func command(parent context.Context, home, binary string, args ...string) invocation {
 	budget := 30 * time.Second
 	if len(args) > 2 && args[0] == "--json" && args[1] == "recovery" && args[2] == "generate" {
 		budget = 20 * time.Minute
@@ -119,6 +126,9 @@ func command(parent context.Context, home, binary string, args ...string) ([]byt
 	// controlling terminal. We capture only its closed public JSON pipe.
 	stdout, stderr := &capped{limit: 32768}, &capped{limit: 8192}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	exit := childExit(ctx, cmd.Run())
+	if err := cmd.Start(); err != nil {
+		return invocation{}
+	}
+	exit := childExit(ctx, cmd.Wait())
 	return checkCappedOutput(stdout, stderr, exit, binary == "/usr/bin/codesign")
 }

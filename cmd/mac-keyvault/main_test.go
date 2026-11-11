@@ -194,11 +194,11 @@ func (s *memStore) Sign(label string, digest []byte) ([]byte, error) {
 
 func useStore(t *testing.T, store keyvault.Backend) {
 	t.Helper()
-	previousBackend, previousLock := newBackend, lockPath
+	previousBackend, previousLock := newBackend, vaultLock
 	newBackend = func() keyvault.Backend { return store }
 	lock := filepath.Join(t.TempDir(), "init.lock")
-	lockPath = func() (string, error) { return lock, nil }
-	t.Cleanup(func() { newBackend, lockPath = previousBackend, previousLock })
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: lock}, nil }
+	t.Cleanup(func() { newBackend, vaultLock = previousBackend, previousLock })
 }
 
 func runJSON(t *testing.T, args ...string) (int, response, string) {

@@ -23,15 +23,16 @@ var sha256Pattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 type seedManifest struct {
 	manifest
-	Version string   `json:"release_version"`
-	Foreign artifact `json:"public_qualification"`
+	Version       string   `json:"release_version"`
+	PlannerSource string   `json:"public_planner_source_head"`
+	Foreign       artifact `json:"public_qualification"`
 }
 
 // Each value is validated before joining the linker's own argument syntax.
 // No path, spaces, caller string or environment becomes a linker expression.
 func seedLinkerFlags(m seedManifest, manifestSHA string) (string, error) {
 	if !seedVersionPattern.MatchString(m.Version) || !sha1Pattern.MatchString(m.Head) ||
-		!sha1Pattern.MatchString(m.Tree) || !sha256Pattern.MatchString(manifestSHA) {
+		!sha1Pattern.MatchString(m.Tree) || m.PlannerSource != m.Head || !sha256Pattern.MatchString(manifestSHA) {
 		return "", errors.New("invalid seed release pins")
 	}
 	for _, a := range []artifact{m.Vault, m.Helper, m.Foreign} {
@@ -46,6 +47,7 @@ func seedLinkerFlags(m seedManifest, manifestSHA string) (string, error) {
 	pins := [][2]string{
 		{"releaseVersion", m.Version},
 		{"releaseSource", m.Head},
+		{"releasePlannerSource", m.PlannerSource},
 		{"releaseManifestSHA", manifestSHA},
 		{"releaseVaultSHA", m.Vault.SHA256},
 		{"releaseVaultCDHash", m.Vault.CDHash},
@@ -87,7 +89,7 @@ func buildSeedBundle(ctx context.Context, log io.Writer, goTool, out, version, h
 	vault.Path, helper.Path, foreign.Path = "mac-keyvault", "mac-keyvault-enclave", publicQualifier
 	m := seedManifest{manifest: manifest{
 		Schema: "keyvault-seed-build/1", Head: head, Tree: tree, Go: runtime.Version(), Swift: swift, Vault: vault, Helper: helper,
-	}, Version: version, Foreign: foreign}
+	}, Version: version, PlannerSource: head, Foreign: foreign}
 	encoded, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err

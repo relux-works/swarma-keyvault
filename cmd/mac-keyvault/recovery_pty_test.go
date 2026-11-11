@@ -106,11 +106,11 @@ func TestRecoveryPTYChild(t *testing.T) {
 	f := &recoveryPTYStore{}
 	newRecoveryBackend = func() keyvault.RecoveryBackend { return f }
 	makeRecoveryManager = func(keyvault.RecoveryBackend, keyvault.Locker) recoveryOperations { return recoveryPTYManager{f} }
-	lockPath = func() (string, error) { return t.TempDir() + "/fixture.lock", nil }
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: t.TempDir() + "/fixture.lock"}, nil }
 	args := []string{"--json", "recovery", "generate", "--service", "fixture", "--version", "1", "--nostr-version", "1", "--namecoin-version", "1"}
 	if strings.HasPrefix(mode, "restore") {
 		args[2] = "restore"
-		args = append(args, "--expected-npub", "public-fixture", "--expected-namecoin-xpub", "public-fixture", "--expected-origin", "public-fixture")
+		args = append(args, recoveryPublicFixturePins(t)...)
 	}
 	_ = run(args, os.Stdout, os.Stderr)
 	after, afterErr := recoveryGetTermios(int(os.Stdin.Fd()))

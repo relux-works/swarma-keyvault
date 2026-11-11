@@ -24,6 +24,7 @@ func testDigest() [32]byte {
 	return d
 }
 
+// The displayed digest cue, full document digest and configured owner-key reason bind the same prepared request.
 func TestDigestCueAndFullReasonBinding(t *testing.T) {
 	d := testDigest()
 	if got := shortDigest(d); got != "0001 0203 0405 0607" {

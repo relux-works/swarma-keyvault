@@ -39,7 +39,7 @@ func TestRecoveryPipeChild(t *testing.T) {
 	newRecoveryBackend = func() keyvault.RecoveryBackend { return nil }
 	makeRecoveryManager = func(keyvault.RecoveryBackend, keyvault.Locker) recoveryOperations { return f }
 	newRecoveryTerminal = func() (ownerRecoveryTerminal, error) { return recoveryReceiptTerminal{}, nil }
-	lockPath = func() (string, error) { return t.TempDir() + "/lock", nil }
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: t.TempDir() + "/lock"}, nil }
 	op := os.Getenv("RECOVERY_PIPE_OP")
 	args := []string{"recovery", op}
 	if os.Getenv("RECOVERY_PIPE_JSON") == "1" {
@@ -47,11 +47,11 @@ func TestRecoveryPipeChild(t *testing.T) {
 	}
 	switch op {
 	case "delete":
-		args = append(args, "fixture", "--namecoin-identity", "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
+		args = append(args, "fixture", "--version", "1", "--expected-group-id", strings.Repeat("1", 32))
 	case "generate", "restore":
 		args = append(args, "--service", "fixture", "--version", "1", "--nostr-version", "2", "--namecoin-version", "1")
 		if op == "restore" {
-			args = append(args, "--expected-npub", "public", "--expected-namecoin-xpub", "public", "--expected-origin", "public")
+			args = append(args, recoveryPublicFixturePins(t)...)
 		}
 	default:
 		t.Fatal("invalid public fixture operation")

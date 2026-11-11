@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -229,5 +230,34 @@ func TestLocalEnvelopeBounds(t *testing.T) {
 				t.Fatal("forbidden local representation accepted")
 			}
 		})
+	}
+}
+
+// The shipped neutral public example verifies byte-for-byte as stored and
+// refuses at its exclusive expiry. Public verification creates no state.
+func TestCommittedPublicEnrollmentExample(t *testing.T) {
+	root := filepath.Join("..", "..", "agents", "skills", "swarma-keyvault", "assets", "local-verify")
+	read := func(name string) []byte {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	e, err := ParseLocalEnrollment(read("enrollment.json"))
+	if err != nil {
+		t.Fatal("committed enrollment refused", err)
+	}
+	if err := e.RequireOwner("@fixture-owner:example.invalid"); err != nil {
+		t.Fatal("example owner is not neutral", err)
+	}
+	cert, req := read("certificate.json"), read("request.json")
+	at := time.Date(2026, 11, 2, 11, 0, 0, 0, time.UTC)
+	if _, err := e.Verify(cert, req, at); err != nil {
+		t.Fatal("committed public example refused", err)
+	}
+	if _, err := e.Verify(cert, req, at.Add(30*time.Minute)); !errors.Is(err, ErrExpired) {
+		t.Fatal("expiry did not refuse as expired", err)
 	}
 }

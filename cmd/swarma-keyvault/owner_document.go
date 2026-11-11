@@ -13,7 +13,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/ownerdocument"
 )
 
-const ownerDocumentUsage = "swarma-keyvault owner-document review|sign|verify --document FILE --owner-spki-der FILE" + ownerAddressUsage + " [--signature FILE (verify only)]"
+const ownerDocumentUsage = "swarma-keyvault owner-document review|sign|verify --document FILE --owner-spki-der FILE" + ownerAddressUsage + " [--signature FILE --owner-key-pin FILE (both required for verify)]"
 
 func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 	usage := func() int { fmt.Fprintln(stderr, ownerDocumentUsage); return 2 }
@@ -27,11 +27,12 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 	f := flag.NewFlagSet("owner-document "+op, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	ownerOptions := addOwnerAddressFlags(f)
-	var document, public, signature onceString
+	var document, public, signature, trustedOwnerPin onceString
 	f.Var(&document, "document", "exact nonempty bounded UTF-8 regular file (no symlinks)")
 	f.Var(&public, "owner-spki-der", "independent exact owner P-256 SPKI DER pin")
 	if op == "verify" {
 		f.Var(&signature, "signature", "detached strict low-S DER file")
+		f.Var(&trustedOwnerPin, "owner-key-pin", "trusted canonical key-address and SPKI SHA-256 association")
 	}
 	if err := f.Parse(args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -40,7 +41,10 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 		}
 		return usage()
 	}
-	if f.NArg() != 0 || !document.set || !public.set || document.value == "" || document.value == "-" || public.value == "" || public.value == "-" || op == "verify" && (!signature.set || signature.value == "" || signature.value == "-") {
+	if f.NArg() != 0 || !document.set || !public.set || document.value == "" || document.value == "-" || public.value == "" || public.value == "-" {
+		return usage()
+	}
+	if op == "verify" && (!signature.set || signature.value == "" || signature.value == "-" || !trustedOwnerPin.set || trustedOwnerPin.value == "" || trustedOwnerPin.value == "-") {
 		return usage()
 	}
 	address, err := ownerOptions.address()
@@ -75,9 +79,18 @@ func runOwnerDocument(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case "verify":
+		association, err := ownerdocument.ReadFile(trustedOwnerPin.value, ownerdocument.MaxOwnerPinBytes)
+		if err != nil {
+			fmt.Fprintln(stderr, ownerdocument.ErrOwnerPin)
+			return 1
+		}
 		der, err := ownerdocument.ReadFile(signature.value, 80)
 		if err == nil {
-			err = p.Verify(der)
+			err = p.Verify(der, association)
+		}
+		if errors.Is(err, ownerdocument.ErrOwnerPin) {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 		if err != nil {
 			fmt.Fprintln(stderr, "owner-document: exact-byte public verification refused")

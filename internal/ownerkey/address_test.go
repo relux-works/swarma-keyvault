@@ -45,3 +45,23 @@ func TestConfiguredOwnerDisplay(t *testing.T) {
 		}
 	}
 }
+
+// The enrollment line carries the full address/generation and public DER hash.
+// Reusing one DER at another configured address changes the trusted association.
+func TestPublicPinBindsAddressAndDER(t *testing.T) {
+	a := signerclient.Address{Kind: signerclient.KindKey, Service: "north", Purpose: GrantPurpose, Version: 7}
+	first := PublicPin(a, []byte("public DER fixture"))
+	if !strings.HasPrefix(first, "key/north/grants-owner-v1@7 sha256:") || !strings.HasSuffix(first, "\n") {
+		t.Fatal("missing exact public address")
+	}
+	other := a
+	other.Service = "south"
+	if PublicPin(other, []byte("public DER fixture")) == first || PublicPin(a, []byte("other public DER fixture")) == first {
+		t.Fatal("association ignored address or public key")
+	}
+	other = a
+	other.Version++
+	if PublicPin(other, []byte("public DER fixture")) == first {
+		t.Fatal("association ignored generation")
+	}
+}

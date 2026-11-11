@@ -184,6 +184,7 @@ CLI built from the pinned unchanged forward base:
 
 ```sh
 LAB_KEYVAULT_CLI=/absolute/private/build/swarma-keyvault \
+LAB_CANDIDATE_KEYVAULT_CLI=/absolute/private/build/candidate-swarma-keyvault \
   go test ./lab/namecoinwrapper -skip TestMirror -count=1 -v
 ```
 
@@ -194,6 +195,7 @@ source graph supplied for review, then run:
 
 ```sh
 LAB_KEYVAULT_CLI=/absolute/private/build/configurable-keyvault \
+LAB_CANDIDATE_KEYVAULT_CLI=/absolute/private/build/candidate-swarma-keyvault \
 LAB_TEST_SIGNER=/absolute/private/build/labtestsigner \
 LAB_COMPOSE=/absolute/private/build/labcompose \
 LAB_OWN_NODE=/absolute/private/build/labownnode \

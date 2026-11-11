@@ -2,8 +2,11 @@ package keyvault
 
 import (
 	"bytes"
+	"crypto/ecdh"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"os"
 	"testing"
 )
 
@@ -167,6 +170,141 @@ func TestRecoveryPurposeIdentityCreation(t *testing.T) {
 }
 
 func recoveryTestDelete(m *RecoveryManager, service string, version int, pin string) error {
-	_, err := m.Delete(RecoveryDeleteRequest{NostrIdentity: service, NamecoinIdentity: service, Version: version, ExpectedGroupID: pin}, &recoveryFakeTerminal{})
+	_, err := m.Delete(RecoveryDeleteRequest{NostrIdentity: service, Version: version, ExpectedGroupID: pin}, &recoveryFakeTerminal{})
 	return err
+}
+
+// Frozen metadata and ciphertext emitted by v0.1.0 are read unchanged through
+// its v1 binding, toy ECDH unwrap and BIP-340 signature path. Wrapping scalars
+// 1 and 2 belong solely to the published public fixture. This establishes
+// software compatibility, with no native/ACL/Enclave qualification claim.
+func TestFrozenV1CiphertextToSignature(t *testing.T) {
+	raw, err := os.ReadFile("testdata/recovery/v1-public-record.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := parseRecoveryRecord(raw)
+	if err != nil || r.Schema != "keyvault-recovery/1" {
+		t.Fatal("frozen v1 record refused", err)
+	}
+	encoded, err := os.ReadFile("testdata/recovery/v1-public-ciphertext.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := parseRecoveryCiphertext(encoded, r)
+	if err != nil {
+		t.Fatal("frozen v1 ciphertext refused", err)
+	}
+	var scalar [32]byte
+	scalar[31] = 1
+	wrapping, err := ecdh.P256().NewPrivateKey(scalar[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := recoveryTestOpen(wrapping, c.Nostr.Ciphertext)
+	if err != nil {
+		t.Fatal("frozen envelope failed to unwrap", err)
+	}
+	defer clear(plain)
+	secret, err := recoveryNostrPlain(r, plain)
+	if err != nil {
+		t.Fatal("v1 binding changed", err)
+	}
+	digest := make([]byte, 32)
+	sig, err := signNostrSecret(r.NostrRecord(), bytes.Clone(secret), digest)
+	public, _ := hex.DecodeString(r.Nostr.PublicKey)
+	if err != nil || VerifyNostr(public, digest, sig) != nil {
+		t.Fatal("v1 key signature failed", err)
+	}
+	changed := bytes.Clone(digest)
+	changed[0] = 1
+	if err := VerifyNostr(public, changed, sig); err == nil {
+		t.Fatal("changed digest accepted")
+	}
+	scalar[31] = 2
+	other, err := ecdh.P256().NewPrivateKey(scalar[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoveryTestOpen(other, c.Nostr.Ciphertext); err == nil {
+		t.Fatal("wrong wrapping purpose opened v1")
+	}
+	v2, err := parseRecoveryRecord(recoveryIdentityV2(raw, r.Service, "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = parseRecoveryCiphertext(encoded, v2)
+	recoveryCode(t, err, "invalid_envelope")
+	changedCipher := bytes.Replace(encoded, []byte("keyvault-recovery-ciphertext/1"), []byte("keyvault-recovery-ciphertext/2"), 1)
+	_, err = parseRecoveryCiphertext(changedCipher, r)
+	recoveryCode(t, err, "invalid_envelope")
+	_, err = recoveryNostrPlain(v2, plain)
+	recoveryCode(t, err, "binding_mismatch")
+	canonical, _ := json.Marshal(r)
+	if !bytes.Equal(canonical, raw) {
+		t.Fatal("frozen v1 metadata bytes changed")
+	}
+}
+
+// Split-purpose pair reservations and standalone records reject the same
+// exact account in both manager creation orders. Neighboring purpose, service
+// or generation controls remain usable; collision leaves bytes and counters.
+func TestSplitIdentityManagerReservationsBothOrders(t *testing.T) {
+	q := RecoveryRequest{NostrIdentity: "north", NamecoinIdentity: "south", Version: 3, NostrVersion: 5, NamecoinVersion: 7}
+	for _, slot := range []struct {
+		service, purpose string
+		version          int
+		collision        bool
+	}{
+		{"north", "recovery", 3, true}, {"north", "nostr", 5, true}, {"south", "namecoin", 7, true},
+		{"north", "namecoin", 7, false}, {"south", "nostr", 5, false}, {"south", "namecoin", 8, false},
+	} {
+		for _, pairFirst := range []bool{false, true} {
+			m, f, h := recoveryTestManager(t)
+			store := &recoveryNamespaceStore{recoveryFakeStore: f}
+			m.backend = store
+			n := NewNostrManager(store, m.lock)
+			terminal := &recoveryFakeTerminal{}
+			if pairFirst {
+				r, err := m.Create(q, terminal, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := bytes.Clone(f.data[r.Account()])
+				_, err = n.Generate(slot.service, slot.purpose, slot.version)
+				if slot.collision {
+					var refusal *Refusal
+					if !errors.As(err, &refusal) || refusal.Code != "nostr_duplicate" || store.creates != 0 {
+						t.Fatal("pair-first collision admitted", err)
+					}
+				} else if err != nil || store.creates != 1 {
+					t.Fatal("pair-first valid neighbor refused", err)
+				}
+				if f.stores != 1 || h.calls != 2 || !bytes.Equal(before, f.data[r.Account()]) {
+					t.Fatal("standalone attempt changed paired ciphertext")
+				}
+			} else {
+				if _, err := n.Generate(slot.service, slot.purpose, slot.version); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := json.Marshal(f.keys)
+				_, err := m.Create(q, terminal, false)
+				if slot.collision {
+					recoveryCode(t, err, "duplicate")
+					if f.stores != 0 || h.calls != 0 || terminal.confirmation != 0 || terminal.read != 0 {
+						t.Fatal("standalone-first collision reached words/wrap/write")
+					}
+				} else if err != nil || f.stores != 1 || h.calls != 2 {
+					t.Fatal("standalone-first neighbor refused", err)
+				}
+				after, _ := json.Marshal(f.keys)
+				if !bytes.Equal(before, after) || store.creates != 1 {
+					t.Fatal("pair attempt changed standalone record")
+				}
+			}
+			if _, _, err := store.rows(); err != nil {
+				t.Fatal("manager left inconsistent namespace", err)
+			}
+		}
+	}
 }

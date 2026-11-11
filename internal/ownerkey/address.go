@@ -3,6 +3,7 @@
 package ownerkey
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"unicode"
@@ -14,6 +15,12 @@ import (
 const GrantPurpose = "grants-owner-v1"
 
 var ErrAddress = errors.New("explicit exact grants-owner-v1 key address required")
+
+// PublicPin represents the configured key address and exact public DER hash.
+// An independent verifier obtains the same line from its trusted enrollment.
+func PublicPin(a signerclient.Address, publicDER []byte) string {
+	return fmt.Sprintf("%s/%s/%s@%d sha256:%x\n", a.Kind, a.Service, a.Purpose, a.Version, sha256.Sum256(publicDER))
+}
 
 // ValidateAddress is the native key boundary, independent of the owner's
 // Matrix principal. Exact public-pin, store, extraction and presence checks

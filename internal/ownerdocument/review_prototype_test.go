@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 // Historical contract prototype, retained only as a synthetic test model.
@@ -74,7 +75,7 @@ func (p *Prepared) signWithReview(ctx context.Context, manager *keyvault.Manager
 	if err != nil {
 		return nil, errors.Join(ErrOutcomeUnknown, err)
 	}
-	if err := p.Verify(der); err != nil {
+	if err := p.Verify(der, []byte(ownerkey.PublicPin(p.address, p.public))); err != nil {
 		return nil, errors.Join(ErrOutcomeUnknown, err)
 	}
 	return der, nil

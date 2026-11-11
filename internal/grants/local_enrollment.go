@@ -21,6 +21,15 @@ type LocalEnrollment struct {
 	epoch            [32]byte
 }
 
+// RequireOwner checks an independent caller pin against the enrolled
+// principal. The enrollment still supplies the trusted verification key.
+func (e *LocalEnrollment) RequireOwner(principal string) error {
+	if e == nil || e.owner.ownerMXID != principal {
+		return errIssuerUntrusted
+	}
+	return nil
+}
+
 func ParseLocalEnrollment(raw []byte) (*LocalEnrollment, error) {
 	node, err := parseCanonical(raw, localEnrollment2Wire)
 	if err != nil {

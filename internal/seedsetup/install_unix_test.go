@@ -12,9 +12,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
 func installFixture(t *testing.T) (installation, runner) {
@@ -33,7 +34,7 @@ func installFixture(t *testing.T) (installation, runner) {
 		d := sha256.Sum256([]byte(raw))
 		return hex.EncodeToString(d[:])
 	}
-	release := Release{Version: "v0.2.0", Source: strings.Repeat("b", 40), ManifestSHA: hash("public manifest"),
+	release := Release{Version: "v0.2.0", Source: strings.Repeat("b", 40), PlannerSource: strings.Repeat("b", 40), ManifestSHA: hash("public manifest"),
 		Vault: ArtifactPin{hash("vault bytes"), strings.Repeat("1", 40)}, Helper: ArtifactPin{hash("helper bytes"), strings.Repeat("2", 40)},
 		Foreign: ArtifactPin{hash("foreign bytes"), strings.Repeat("3", 40)}}
 	paths, err := UserPaths(home, filepath.Join(source, "keyvault-seed"), "", release.Version, release.Source)
@@ -48,23 +49,23 @@ func installFixture(t *testing.T) (installation, runner) {
 		}
 	}
 	// This is an injected inspection receipt. It never calls codesign.
-	return p, func(binary string, args ...string) ([]byte, int) {
+	return p, func(binary string, args ...string) invocation {
 		if binary != "/usr/bin/codesign" || len(args) != 3 {
 			t.Fatalf("unexpected non-fixture inspection: %s", binary)
 		}
 		switch args[0] {
 		case "--verify":
-			return nil, 0
+			return invocation{raw: nil, exit: 0, started: true}
 		case "-d":
 			raw, err := os.ReadFile(args[2])
 			if err != nil {
 				t.Fatal(err)
 			}
 			pins := map[string]ArtifactPin{"vault bytes": release.Vault, "helper bytes": release.Helper, "foreign bytes": release.Foreign}
-			return []byte("# designated => cdhash H\"" + pins[string(raw)].CDHash + "\"\n"), 0
+			return invocation{raw: []byte("# designated => cdhash H\"" + pins[string(raw)].CDHash + "\"\n"), exit: 0, started: true}
 		}
 		t.Fatal("unexpected inspection")
-		return nil, -1
+		return invocation{raw: nil, exit: -1, started: true}
 	}
 }
 
@@ -89,7 +90,7 @@ func TestFirstUserInstallAndRepeatRefusal(t *testing.T) {
 	}
 	for _, f := range p.files() {
 		path := filepath.Join(p.paths.InstallDirectory, f.relative)
-		if ok, err := optionalOwned(path, p.uid, false, f.mode); !ok || err != nil {
+		if ok, err := p.optionalOwned(path, false, f.mode); !ok || err != nil {
 			t.Fatal("wrong installed mode/ownership", err)
 		}
 		if err := p.verifyFile(path, f, run); err != nil {
@@ -171,31 +172,26 @@ func TestSetupStopsBeforeAnyWriteOnSecondIdentityRefusal(t *testing.T) {
 			qual := publicTarget{"fixture-north", "fixture-south", 1, 1, 1}
 			ids := Identities{actual.NostrIdentity, actual.NamecoinIdentity, qual.NostrIdentity, qual.NamecoinIdentity}
 			plans, prompts, restores := 0, 0, 0
-			plan := func(target publicTarget) []byte {
-				return successReply(t, "recovery", publicPlan{"keyvault-recovery-plan/1", true,
-					target.NostrIdentity, target.NamecoinIdentity, target.Version, target.NostrVersion, target.NamecoinVersion,
-					target.group(), target.nostr(), target.namecoin()})
-			}
+
 			var out bytes.Buffer
-			w := workflow{out: &out, run: func(binary string, args ...string) ([]byte, int) {
-				if binary == "/usr/bin/codesign" {
-					return code(binary, args...)
+			w := workflow{out: &out, run: func(binary string, args ...string) invocation {
+				if binary != "/usr/bin/codesign" {
+					t.Fatal("source vault launched before consent")
 				}
-				if binary != p.sourceVault() || len(args) < 3 || !reflect.DeepEqual(args[:3], []string{"--json", "recovery", "plan"}) {
-					t.Fatal("non-plan command ran before qualification")
-				}
+				return code(binary, args...)
+			}, planner: plannerFunc(func(q keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
 				plans++
 				if plans == 1 {
-					if !reflect.DeepEqual(args[3:], []string{"--nostr-identity", actual.NostrIdentity, "--namecoin-identity", actual.NamecoinIdentity}) {
+					if q != (keyvault.RecoveryRequest{NostrIdentity: actual.NostrIdentity, NamecoinIdentity: actual.NamecoinIdentity}) {
 						t.Fatal("actual advisory plan changed")
 					}
-					return plan(actual), 0
+					return fixturePlan(actual), nil
 				}
-				if plans != 2 || !reflect.DeepEqual(args[3:], qual.mutationArguments()) {
+				if plans != 2 || q != (keyvault.RecoveryRequest{NostrIdentity: qual.NostrIdentity, NamecoinIdentity: qual.NamecoinIdentity, Version: 1, NostrVersion: 1, NamecoinVersion: 1}) {
 					t.Fatal("qualification advisory plan changed")
 				}
-				return plan(qual), 0
-			}, prompt: func(_ string, _ int) (string, error) {
+				return fixturePlan(qual), nil
+			}), prompt: func(_ string, _ int) (string, error) {
 				prompts++
 				mustNotExist(t, p.paths.Root)
 				mustNotExist(t, p.paths.Lock)
@@ -209,7 +205,7 @@ func TestSetupStopsBeforeAnyWriteOnSecondIdentityRefusal(t *testing.T) {
 					return "", io.EOF
 				}
 				return actual.NamecoinIdentity, nil
-			}, restore: func(binary string, got publicTarget) ([]byte, int) {
+			}, restore: func(binary string, got publicTarget) invocation {
 				restores++
 				if got != qual || binary != p.installedVault() {
 					t.Fatal("restore changed confirmed address/install")
@@ -217,7 +213,7 @@ func TestSetupStopsBeforeAnyWriteOnSecondIdentityRefusal(t *testing.T) {
 				if _, err := os.Stat(p.installedVault()); err != nil {
 					t.Fatal("restore started before install", err)
 				}
-				return nil, -1
+				return invocation{raw: nil, exit: -1, started: true}
 			}}
 			err := execute(context.Background(), p, w, Config{NostrIdentity: actual.NostrIdentity, NamecoinIdentity: actual.NamecoinIdentity}, ids)
 			if plans != 2 || prompts != 2 || out.Len() != 0 {
@@ -236,4 +232,123 @@ func TestSetupStopsBeforeAnyWriteOnSecondIdentityRefusal(t *testing.T) {
 			mustNotExist(t, p.paths.Lock)
 		})
 	}
+}
+
+// Two synthetic OS UID/home projections each complete the real file install
+// path, including checked bytes/modes. Cross-account source and home selections
+// refuse before installation. Ownership is injected; real multi-account native
+// adoption and ACL behavior remain outside this test.
+func TestTwoUserInstallOwnershipIsolation(t *testing.T) {
+	a, runA := installFixture(t)
+	b, runB := installFixture(t)
+	a.uid, b.uid = 20001, 20002
+	owner := func(path string, info os.FileInfo) (uint32, bool) {
+		for _, user := range []installation{a, b} {
+			for _, root := range []string{user.paths.Home, user.paths.ArtifactDirectory} {
+				if path == root || strings.HasPrefix(path, root+string(os.PathSeparator)) {
+					return user.uid, true
+				}
+			}
+		}
+		_, ok := ownerOf(info)
+		return 0, ok // existing synthetic shared ancestors
+	}
+	a.fileOwner, b.fileOwner = owner, owner
+	crossA, crossB := a, b
+	crossA.paths, crossB.paths = b.paths, a.paths
+	for _, cross := range []installation{crossA, crossB} {
+		if err := cross.preflight(func(string, ...string) invocation {
+			t.Fatal("foreign owner reached code inspection")
+			return invocation{}
+		}); err == nil || err.Error() != "directory_chain_unsafe" {
+			t.Fatal("cross-account home accepted", err)
+		}
+	}
+	for _, pair := range []struct {
+		install installation
+		run     runner
+	}{{a, runA}, {b, runB}} {
+		if err := pair.install.preflight(pair.run); err != nil {
+			t.Fatal("valid synthetic account preflight refused", err)
+		}
+		if err := pair.install.install(pair.run); err != nil {
+			t.Fatal("valid synthetic account install refused", err)
+		}
+		for _, spec := range pair.install.files() {
+			path := filepath.Join(pair.install.paths.InstallDirectory, spec.relative)
+			if ok, err := pair.install.optionalOwned(path, false, spec.mode); !ok || err != nil {
+				t.Fatal("incorrect synthetic account output", err)
+			}
+		}
+		mustNotExist(t, pair.install.paths.Lock)
+	}
+	if a.paths.InstallDirectory == b.paths.InstallDirectory || a.paths.Lock == b.paths.Lock {
+		t.Fatal("account paths overlapped")
+	}
+}
+
+// Replacing a source artifact after preflight cannot launch it for planning.
+// A valid identity confirmation reaches a hash refusal during install, before
+// fixture restore or actual generation. The preserved partial install is kept.
+func TestPreConsentSourceReplacementNeverExecutes(t *testing.T) {
+	for _, replace := range []string{"rename", "in-place"} {
+		t.Run(replace, func(t *testing.T) {
+			p, code := installFixture(t)
+			actual := publicTarget{"north", "south", 1, 1, 1}
+			qual := publicTarget{"fixture-north", "fixture-south", 1, 1, 1}
+			plans, prompts := 0, 0
+			w := workflow{run: func(binary string, args ...string) invocation {
+				if binary != "/usr/bin/codesign" {
+					t.Fatal("pre-consent source path executed")
+				}
+				return code(binary, args...)
+			}, planner: plannerFunc(func(keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
+				plans++
+				if plans == 1 {
+					return fixturePlan(actual), nil
+				}
+				return fixturePlan(qual), nil
+			}), restore: func(string, publicTarget) invocation { t.Fatal("replacement reached restore"); return invocation{} }, out: &bytes.Buffer{}}
+			w.prompt = func(string, int) (string, error) {
+				prompts++
+				if prompts == 1 {
+					if replace == "rename" {
+						if err := os.Rename(p.sourceVault(), p.sourceVault()+".prior"); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := os.WriteFile(p.sourceVault(), []byte("untrusted replacement"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					return actual.NostrIdentity, nil
+				}
+				return actual.NamecoinIdentity, nil
+			}
+			err := execute(context.Background(), p, w, Config{NostrIdentity: actual.NostrIdentity, NamecoinIdentity: actual.NamecoinIdentity}, Identities{actual.NostrIdentity, actual.NamecoinIdentity, qual.NostrIdentity, qual.NamecoinIdentity})
+			if err == nil || err.Error() != "release_artifact_hash" || plans != 2 || prompts != 2 {
+				t.Fatal("replacement was not stopped before execution", err, plans, prompts)
+			}
+			mustNotExist(t, p.installedVault())
+			mustNotExist(t, p.paths.Lock)
+		})
+	}
+}
+
+// The running utility accepts only a public planner source pin equal to the
+// matched vault source revision. Missing or different source pins refuse
+// before any public prompt or installation.
+func TestReleasePlannerSourcePin(t *testing.T) {
+	p, _ := installFixture(t)
+	if err := p.release.validate(); err != nil {
+		t.Fatal("matched planner source refused", err)
+	}
+	for _, pin := range []string{"", strings.Repeat("c", 40)} {
+		r := p.release
+		r.PlannerSource = pin
+		if err := r.validate(); err == nil || err.Error() != "release_planner_source_mismatch" {
+			t.Fatal("unmatched planner source admitted", err)
+		}
+	}
+	mustNotExist(t, p.paths.Root)
+	mustNotExist(t, p.paths.Lock)
 }

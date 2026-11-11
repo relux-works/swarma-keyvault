@@ -15,7 +15,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
-const recoveryUsage = "mac-keyvault [--json] recovery plan|generate|restore --nostr-identity A --namecoin-identity B [--version G --nostr-version N --namecoin-version M] | recovery pub A --version G | recovery delete A --namecoin-identity B --version G --expected-group-id ID"
+const recoveryUsage = "mac-keyvault [--json] recovery plan|generate|restore --nostr-identity A --namecoin-identity B [--version G --nostr-version N --namecoin-version M] | recovery pub A --version G | recovery delete A --version G --expected-group-id ID"
 
 var newRecoveryBackend = func() keyvault.RecoveryBackend { return keyvault.NewNostrSecurityStore() }
 
@@ -68,8 +68,10 @@ func runRecovery(args []string, out output) int {
 	}
 	intFlag("version", &q.Version)
 	family := op == "plan" || op == "generate" || op == "restore"
-	if family {
+	if op == "generate" || op == "restore" {
 		stringFlag("service", &q.Service)
+	}
+	if family {
 		stringFlag("nostr-identity", &q.NostrIdentity)
 		stringFlag("namecoin-identity", &q.NamecoinIdentity)
 		intFlag("nostr-version", &q.NostrVersion)
@@ -81,7 +83,6 @@ func runRecovery(args []string, out output) int {
 		stringFlag("expected-origin", &q.ExpectedOrigin)
 	}
 	if op == "delete" {
-		stringFlag("namecoin-identity", &q.NamecoinIdentity)
 		stringFlag("expected-group-id", &expectedGroup)
 	}
 	positional, err := parseFlags(fs, args[1:])
@@ -113,11 +114,11 @@ func runRecovery(args []string, out output) int {
 	if !validVersion(q.Version, op == "plan" && !seen["version"]) {
 		return out.fail(usagef("valid group generation required"))
 	}
-	if op == "restore" && (q.ExpectedNPub == "" || q.ExpectedXPub == "" || q.ExpectedOrigin == "") {
-		return out.fail(usagef("all retained public recovery pins are required"))
+	if op == "restore" && q.ValidateRestorePins() != nil {
+		return out.fail(usagef("three canonical retained public recovery pins are required"))
 	}
-	if op == "delete" && (!validName(q.NamecoinIdentity) || len(expectedGroup) != 32) {
-		return out.fail(usagef("Namecoin identity and exact public group pin required"))
+	if op == "delete" && len(expectedGroup) != 32 {
+		return out.fail(usagef("exact public group pin required"))
 	}
 	if op == "delete" {
 		for _, c := range expectedGroup {
@@ -126,9 +127,10 @@ func runRecovery(args []string, out output) int {
 			}
 		}
 	}
-	path, err := lockPath()
+	lock, err := vaultLock()
 	if err != nil {
-		return out.fail(err)
+		return out.fail(&keyvault.Refusal{Code: "recovery_lock_unavailable",
+			Message: "Recovery operation refused: lock_unavailable", Hint: "check that the vault lock is available"})
 	}
 	// A mutation requires the owner's controlling terminal before custody is
 	// constructed. Planning and public lookup have no terminal dependency.
@@ -140,19 +142,18 @@ func runRecovery(args []string, out output) int {
 		}
 		defer terminal.Close()
 	}
-	m := makeRecoveryManager(newRecoveryBackend(), keyvault.FileLock{Path: path})
+	m := makeRecoveryManager(newRecoveryBackend(), lock)
 	if op == "plan" {
 		p, err := m.Plan(q)
 		if err != nil {
-			return out.fail(err)
+			return recoveryBoundedFailure(out, err)
 		}
-		return out.success(p, func(w io.Writer) {
-			fmt.Fprintf(w, "group: %s\nnostr_record: %s\nnamecoin_record: %s\nadvisory: true\n", p.Group, p.NostrRecord, p.NamecoinRecord)
-		})
+		return recoveryPublicReceipt(out, p, fmt.Sprintf("group: %s\nnostr_record: %s\nnamecoin_record: %s\nadvisory: true\n",
+			p.Group, p.NostrRecord, p.NamecoinRecord))
 	}
 	var r keyvault.RecoveryRecord
 	if op == "delete" {
-		r, err = m.Delete(keyvault.RecoveryDeleteRequest{NostrIdentity: q.Service, NamecoinIdentity: q.NamecoinIdentity, Version: q.Version, ExpectedGroupID: expectedGroup}, terminal)
+		r, err = m.Delete(keyvault.RecoveryDeleteRequest{NostrIdentity: q.Service, Version: q.Version, ExpectedGroupID: expectedGroup}, terminal)
 	} else if op == "pub" {
 		r, err = m.Describe(q.Service, q.Version)
 	} else {
@@ -172,7 +173,23 @@ func runRecovery(args []string, out output) int {
 	if op != "pub" {
 		return recoveryMutationReceipt(out, op, r, r, text, nil)
 	}
-	return out.success(r, func(w io.Writer) { fmt.Fprint(w, text) })
+	return recoveryPublicReceipt(out, r, text)
+}
+
+func recoveryPublicReceipt(out output, result any, text string) int {
+	b := []byte(text)
+	if out.json {
+		raw, err := json.MarshalIndent(response{OK: true, Command: out.command, Result: result}, "", "  ")
+		if err != nil {
+			return exitFailure
+		}
+		b = append(raw, '\n')
+	}
+	if !writeRecoveryReceipt(out.stdout, b) {
+		writeRecoveryReceipt(out.stderr, []byte("recovery_public_output_unavailable: could not write public result\n"))
+		return exitFailure
+	}
+	return exitOK
 }
 
 // Mutation replies are checked independently of the general CLI emitter. A
@@ -197,31 +214,46 @@ func recoveryMutationReceipt(out output, operation string, reference keyvault.Re
 	} else {
 		b = []byte(text)
 	}
+	if !writeRecoveryReceipt(out.stdout, b) {
+		return recoveryReceiptLost(out, operation, reference)
+	}
+	return code
+}
+
+func writeRecoveryReceipt(w io.Writer, b []byte) bool {
 	// Go otherwise terminates on SIGPIPE for fd1/fd2 before returning EPIPE.
-	// Keep the handler through the fallback diagnostic, then release only our
-	// subscription. Preserve an already ignored signal or other subscribers.
+	// Preserve an already ignored signal or other subscribers.
 	if !signal.Ignored(syscall.SIGPIPE) {
 		broken := make(chan os.Signal, 1)
 		signal.Notify(broken, syscall.SIGPIPE)
 		defer signal.Stop(broken)
 	}
-	n, writeErr := out.stdout.Write(b)
-	if writeErr != nil || n != len(b) {
-		return recoveryReceiptLost(out, operation, reference)
-	}
-	return code
+	n, err := w.Write(b)
+	return err == nil && n == len(b)
 }
 func recoveryReceiptLost(out output, operation string, reference keyvault.RecoveryRecord) int {
 	// One bounded public diagnostic; never retry stdout or print writer errors.
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "recovery_outcome_unknown: %s may have completed; UNCONFIRMED reference %s nostr_record=%s namecoin_record=%s group_id=%s; reconcile; do not retry or delete\n", operation, reference.Account(), reference.PurposeAccount(reference.Nostr), reference.PurposeAccount(reference.Namecoin), reference.GroupID)
-	_, _ = out.stderr.Write(b.Bytes())
+	writeRecoveryReceipt(out.stderr, b.Bytes())
 	return exitFailure
 }
+
+func recoveryBoundedFailure(out output, err error) int {
+	if errors.Is(err, keyvault.ErrNotFound) {
+		return out.fail(keyvault.ErrNotFound)
+	}
+	if keyvault.ClassifyError(err).Code == keyvault.CodeFailure {
+		err = &keyvault.Refusal{Code: "recovery_backend_unavailable",
+			Message: "Recovery backend unavailable", Hint: "check the vault without changing existing records", Failure: true}
+	}
+	return out.fail(err)
+}
+
 func recoveryMutationFailure(out output, err error) int {
 	var unknown *keyvault.RecoveryOutcomeUnknown
 	if !errors.As(err, &unknown) {
-		return out.fail(err)
+		return recoveryBoundedFailure(out, err)
 	}
 	text := fmt.Sprintf("recovery_outcome_unknown: %s; UNCONFIRMED reference %s nostr_record=%s namecoin_record=%s group_id=%s; reconcile; do not retry or delete\n", unknown.Operation, unknown.Reference.Account(), unknown.Reference.PurposeAccount(unknown.Reference.Nostr), unknown.Reference.PurposeAccount(unknown.Reference.Namecoin), unknown.Reference.GroupID)
 	return recoveryMutationReceipt(out, unknown.Operation, unknown.Reference, unknown, text, err)

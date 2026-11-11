@@ -85,7 +85,9 @@ func TestSSHAgentCLIHelper(t *testing.T) {
 	}
 	store := newMemStore(tl("ssh-agent", 1))
 	newBackend = func() keyvault.Backend { return store }
-	lockPath = func() (string, error) { return filepath.Join(os.Getenv("MAC_KEYVAULT_SSH_HELPER_DIR"), "lock"), nil }
+	vaultLock = func() (keyvault.FileLock, error) {
+		return keyvault.FileLock{Path: filepath.Join(os.Getenv("MAC_KEYVAULT_SSH_HELPER_DIR"), "lock")}, nil
+	}
 	args := []string{"ssh-agent", "--socket", os.Getenv("MAC_KEYVAULT_SSH_HELPER_SOCKET"), "--key", "test/ssh-agent@1"}
 	if extra := os.Getenv("MAC_KEYVAULT_SSH_HELPER_EXTRA"); extra != "" {
 		args = append(args, strings.Split(extra, "\x1f")...)

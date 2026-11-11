@@ -54,11 +54,11 @@ type deps struct {
 
 var host = deps{
 	vault: func() (*keyvault.Manager, error) {
-		path, err := keyvault.DefaultLockPath()
+		lock, err := keyvault.DefaultFileLock()
 		if err != nil {
 			return nil, err
 		}
-		return keyvault.NewManager(keyvault.NewSecurityStore(), keyvault.FileLock{Path: path}, origin()), nil
+		return keyvault.NewManager(keyvault.NewSecurityStore(), lock, origin()), nil
 	},
 	inspector: kek.CodeInspector{},
 	audit: func() (*kek.Audit, error) {

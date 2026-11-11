@@ -21,11 +21,13 @@ test keys; it prints no key material. Public `.der` files may be exported.
 ```sh
 labtestsigner keygen --dir /private/custody/actors
 swarma-keyvault grants local-prepare \
-  --plan /private/tmp/plan.json --owner-mxid '@alexis:gr.relux.works' \
+  --plan /private/tmp/plan.json --owner-mxid '@north-owner:example.invalid' \
+  --owner-key north/grants-owner-v1 --owner-key-version 1 \
   --issuer-spki-der /private/custody/actors/owner.der \
   --requester-spki-der /private/custody/actors/requester.der \
   > /private/tmp/prepared.json 2> /private/tmp/review.txt
 labtestsigner certificate --payload /private/tmp/prepared.json \
+  --owner-mxid '@north-owner:example.invalid' \
   --digest EXACT_LOWERCASE_HEX_DIGEST_FROM_REVIEW \
   --key /private/custody/actors/owner.pk8 \
   --owner-spki /private/custody/actors/owner.der \
@@ -47,14 +49,11 @@ schema and no trailing LF. Its separate review supplies the exact digest.
 that digest through existing KeyVault APIs and reject any mismatch before
 loading the key. They require the local key's SPKI to match its independent pin.
 
-Certificate mode also accepts `--owner-mxid EXPECTED_OWNER`. Supply this from
+Certificate mode requires `--owner-mxid EXPECTED_OWNER`. Supply this from
 independently installed test policy, never from the payload, key, requester or
-name record. Omission preserves `@alexis:gr.relux.works`. For a synthetic
-Ivan-to-Alexis-agent certificate, prepare the payload with the existing
-`local-prepare --owner-mxid '@ivan:example.invalid'`, then pass
-`--owner-mxid '@ivan:example.invalid'` to `labtestsigner certificate` as well.
-That same payload refuses with the omitted default or a different expected
-owner. Empty, missing and duplicate owner options refuse; the option is invalid
+name record. Use the same explicit principal for preparation and signing.
+A different expected owner refuses. Empty, missing and duplicate owner
+options refuse; the option is invalid
 in `keygen`, `prepare-request` and `request` modes. Owner syntax and exact owner
 binding are checked by the existing issuance API before any private key read.
 

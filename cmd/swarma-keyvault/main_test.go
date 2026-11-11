@@ -31,7 +31,8 @@ func prepareCLIFixture(t *testing.T) ([]string, []byte, string) {
 		t.Fatal(err)
 	}
 	draft := []byte(`{"audience":{"deployment_id":"fixture","executor_id":"fixture"},"certificate_id":"fixture","cycles":[{"channel":"encrypted-dm","cycle_id":"codex-dm","runtime":"codex"}],"expires_at":"2026-11-04T03:00:00Z","name":"fixture","not_before":"2026-11-04T02:00:00Z","organization":"fixture","subject":{"account_mxid":"@fixture:example.invalid","device_ed25519":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE","device_id":"FIXTURE"}}`)
-	return []string{"grants", "prepare", "--plan", "-", "--owner-mxid", "@owner:example.invalid", "--issuer-spki-der", path}, draft, dir
+	return append([]string{"grants", "prepare", "--plan", "-", "--owner-mxid", "@owner:example.invalid", "--issuer-spki-der", path},
+		"--owner-key", fixtureOwnerService+"/grants-owner-v1", "--owner-key-version", "1"), draft, dir
 }
 
 // The real CLI path authors exact canonical stdout without LF, prints all
@@ -48,7 +49,8 @@ func TestPrepareCLI(t *testing.T) {
 				}
 			}
 			if mode == "equals" {
-				args = []string{"grants", "prepare", "-plan=-", "--owner-mxid=@owner:example.invalid", "-issuer-spki-der=" + args[7]}
+				args = []string{"grants", "prepare", "-plan=-", "--owner-mxid=@owner:example.invalid", "-issuer-spki-der=" + args[7],
+					"--owner-key=" + fixtureOwnerService + "/grants-owner-v1", "--owner-key-version=1"}
 			}
 			before, _ := os.ReadDir(dir)
 			var out, review bytes.Buffer
@@ -63,12 +65,12 @@ func TestPrepareCLI(t *testing.T) {
 				t.Fatal("not a certificate payload", err)
 			}
 			digest := sha256.Sum256(append([]byte("swarma-grants/certificate/1\n"), out.Bytes()...))
-			parts := strings.SplitN(review.String(), "\n", 4)
-			if len(parts) != 4 || !strings.Contains(parts[0], "UNSIGNED") || !strings.HasSuffix(parts[2], hex.EncodeToString(digest[:])) {
+			parts := strings.SplitN(review.String(), "\n", 5)
+			if len(parts) != 5 || !strings.HasPrefix(parts[0], "Owner key pin: ") || !strings.Contains(parts[1], "UNSIGNED") || !strings.HasSuffix(parts[3], hex.EncodeToString(digest[:])) {
 				t.Fatal("review missing unsigned status/digest")
 			}
 			var compact bytes.Buffer
-			if err := json.Compact(&compact, []byte(parts[3])); err != nil || !bytes.Equal(compact.Bytes(), out.Bytes()) {
+			if err := json.Compact(&compact, []byte(parts[4])); err != nil || !bytes.Equal(compact.Bytes(), out.Bytes()) {
 				t.Fatal("review differs from exact stdout", err)
 			}
 			after, _ := os.ReadDir(dir)
@@ -160,5 +162,31 @@ func TestPrepareCLINonRegularInput(t *testing.T) {
 		if err == nil || raw != nil || err.Error() != "regular input file required" {
 			t.Fatalf("nonregular input accepted: %q %v", path, err)
 		}
+	}
+}
+
+// Public preparation displays the exact independently configured address and
+// SPKI hash. Changing only the address alters review while retaining payload
+// bytes. Missing exact address refuses before reading the input stream.
+func TestPublicPrepareConfiguredKeyAssociation(t *testing.T) {
+	args, draft, _ := prepareCLIFixture(t)
+	var payloadA, reviewA bytes.Buffer
+	if code := run(args, bytes.NewReader(draft), &payloadA, &reviewA); code != 0 {
+		t.Fatal("valid preparation refused", code)
+	}
+	changed := append([]string(nil), args...)
+	for i, arg := range changed {
+		if arg == "--owner-key" {
+			changed[i+1] = "south/grants-owner-v1"
+		}
+	}
+	var payloadB, reviewB bytes.Buffer
+	if code := run(changed, bytes.NewReader(draft), &payloadB, &reviewB); code != 0 || !bytes.Equal(payloadA.Bytes(), payloadB.Bytes()) || reviewA.String() == reviewB.String() || !strings.HasPrefix(reviewB.String(), "Owner key pin: key/south/grants-owner-v1@1 sha256:") {
+		t.Fatal("address omitted or signed payload changed", code)
+	}
+	missing := append([]string(nil), args[:8]...)
+	var out, diag bytes.Buffer
+	if code := run(missing, mustNotRead{}, &out, &diag); code != 2 || out.Len() != 0 {
+		t.Fatal("missing address consumed input", code)
 	}
 }

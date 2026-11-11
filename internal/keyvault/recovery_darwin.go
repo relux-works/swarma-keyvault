@@ -146,3 +146,19 @@ func (s *NostrSecurityStore) signRecovery(record NostrRecord, digest []byte) ([]
 	}
 	return nil, ErrNotFound
 }
+
+// recoveryMetadataStore exposes only the attributes-only native query.
+// In particular it has no methods promoted from NostrSecurityStore.
+type recoveryMetadataStore struct{}
+
+func NewRecoveryInventory() RecoveryInventory { return recoveryMetadataStore{} }
+
+func (recoveryMetadataStore) List() ([]NostrRecord, error) {
+	keys, _, err := recoveryNativeRows()
+	return keys, err
+}
+
+func (recoveryMetadataStore) RecoveryList() ([]RecoveryRecord, error) {
+	_, groups, err := recoveryNativeRows()
+	return groups, err
+}

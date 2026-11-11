@@ -111,3 +111,20 @@ func TestPerUserPathsNoWrites(t *testing.T) {
 		}
 	}
 }
+
+// Valid UTF-8 homes and release paths preserve their exact bytes. Control,
+// format, invalid UTF-8 and traversal paths remain forbidden without writes.
+func TestUnicodeUserPaths(t *testing.T) {
+	for _, home := range []string{"/fixture-homes/é", "/fixture-homes/测试", "/fixture-homes/թ"} {
+		p, err := UserPaths(home, home+"/Загрузки/keyvault-seed", "", "v0.2.0", strings.Repeat("1", 40))
+		if err != nil || p.Home != home || !strings.HasPrefix(p.InstallDirectory, home+"/") {
+			t.Fatal("valid UTF-8 path refused", err)
+		}
+	}
+	for _, home := range []string{"/fixture-homes/a\nother", "/fixture-homes/a\x00other", "/fixture-homes/a\u202eother", "/fixture-homes/\xff", "/fixture-homes/a/../b"} {
+		if p, err := UserPaths(home, "/tmp/keyvault-seed", "", "v0.2.0", strings.Repeat("1", 40)); err == nil || p.Home != "" {
+			_ = p
+			t.Fatal("unsafe path admitted")
+		}
+	}
+}

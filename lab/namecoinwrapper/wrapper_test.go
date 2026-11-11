@@ -142,11 +142,10 @@ func freshDirection(t *testing.T, reverse bool) *fixture {
 		t.Fatal(err)
 	}
 	f.p = Policy{OwnerName: "d/alexis-sim", RequesterName: "d/ivan-agent-sim", Account: "@ivan-agent-sim:example.invalid", Device: "LAB", Deployment: "lab", Executor: "ivan-agent-sim", Cycle: "codex-dm", CLI: cli, CLIHash: hash(b), PrivateRoot: root}
-	ownerMXID, certificateID := "@alexis:gr.relux.works", "alexis-sim-to-ivan-agent-sim"
+	ownerMXID, certificateID := "@north-owner:example.invalid", "fixture-certificate"
 	if reverse {
 		f.at = time.Now().UTC().Truncate(time.Second)
-		ownerMXID, certificateID = "@ivan:example.invalid", "ivan-sim-to-alexis-agent-sim"
-		f.p.ExpectedOwner = ownerMXID
+		ownerMXID, certificateID = "@south-owner:example.invalid", "ivan-sim-to-alexis-agent-sim"
 		f.p.OwnerName, f.p.RequesterName = "d/ivan-sim", "d/alexis-agent-sim"
 		f.p.Account, f.p.Executor = "@alexis-agent-sim:example.invalid", "alexis-agent-sim"
 	}
@@ -192,6 +191,29 @@ func freshDirection(t *testing.T, reverse bool) *fixture {
 	f.n.set(t, "gettxout", map[string]any{"bestblock": f.best, "confirmations": 3, "scriptPubKey": map[string]string{"address": "LAB-OWNER"}}, f.seal.TxID, f.seal.Vout, true)
 	return f
 }
+
+// The wrapper can verify both configured owners with the current product CLI.
+// An independently enrolled different principal must reject the same envelopes.
+func TestCandidateVerifierConfiguredOwners(t *testing.T) {
+	candidate := labFixture(t, "LAB_CANDIDATE_KEYVAULT_CLI")
+	binary, err := os.ReadFile(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reverse := range []bool{false, true} {
+		f := freshDirection(t, reverse)
+		f.p.CLI, f.p.CLIHash = candidate, hash(binary)
+		owner := base64.RawURLEncoding.EncodeToString(f.ownerDER)
+		requester := base64.RawURLEncoding.EncodeToString(f.requesterDER)
+		if _, err := verifyCLI(context.Background(), f.p, owner, requester, f.certificate, f.request, f.at); err != nil {
+			t.Fatal("candidate verifier refused a correctly enrolled owner", err)
+		}
+		f.p.ExpectedOwner = "@different-owner:example.invalid"
+		if _, err := verifyCLI(context.Background(), f.p, owner, requester, f.certificate, f.request, f.at); !errors.Is(err, ErrRefused) {
+			t.Fatal("candidate verifier accepted a cross-owner envelope", err)
+		}
+	}
+}
 func (f *fixture) resign(t *testing.T) {
 	f.request = signed(t, f.requester, "swarma-grants/local-request/2", "grants-local-request-2", marshal(t, f.operation))
 }
@@ -233,11 +255,12 @@ func setExtendedTip(t *testing.T, f *fixture, network string) {
 	f.n.set(t, "getrawtransaction", f.requesterTX, f.requesterName.TxID, true)
 }
 
+// The real verifier accepts the initial observation and refuses a spent seal or reorg, including through a fresh verifier.
 func TestThinSlice(t *testing.T) {
 	f := fresh(t)
 	v := &Verifier{}
 	a := f.verify(t, v, true)
-	if a.CertificateID != "alexis-sim-to-ivan-agent-sim" || a.RequestID != "local-lab-request" {
+	if a.CertificateID != "fixture-certificate" || a.RequestID != "local-lab-request" {
 		t.Fatal(a)
 	}
 	// This repeatable observation carries no admission reservation or effect.

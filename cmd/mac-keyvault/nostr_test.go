@@ -60,13 +60,13 @@ func (f *nostrCLIStore) Sign(_ keyvault.NostrRecord, digest []byte) ([]byte, err
 
 func nostrCLITest(t *testing.T) (*nostrCLIStore, *int) {
 	t.Helper()
-	oldBackend, oldLock := newNostrBackend, lockPath
+	oldBackend, oldLock := newNostrBackend, vaultLock
 	f := &nostrCLIStore{}
 	constructed := new(int)
 	newNostrBackend = func() keyvault.NostrBackend { *constructed++; return f }
 	path := filepath.Join(t.TempDir(), "nostr.lock")
-	lockPath = func() (string, error) { return path, nil }
-	t.Cleanup(func() { newNostrBackend = oldBackend; lockPath = oldLock })
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: path}, nil }
+	t.Cleanup(func() { newNostrBackend = oldBackend; vaultLock = oldLock })
 	return f, constructed
 }
 func nostrCLIInvoke(t *testing.T, args ...string) (int, string) {

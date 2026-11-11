@@ -30,9 +30,11 @@ var goldenCorpusDir = filepath.Join("..", "..", "internal", "keyvault", signerte
 // so a refusal is proven to happen before the store is consulted.
 var startupSetups = map[string]func(t *testing.T){
 	"lock-path-unavailable": func(t *testing.T) {
-		previous := lockPath
-		lockPath = func() (string, error) { return "", errors.New("no writable state directory: HOME is unset") }
-		t.Cleanup(func() { lockPath = previous })
+		previous := vaultLock
+		vaultLock = func() (keyvault.FileLock, error) {
+			return keyvault.FileLock{}, errors.New("no writable state directory: HOME is unset")
+		}
+		t.Cleanup(func() { vaultLock = previous })
 	},
 }
 

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
@@ -72,8 +73,8 @@ func TestLocalPrepareIssueCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, review bytes.Buffer
-	prepare := []string{"grants", "local-prepare", "--plan", "-", "--owner-mxid", fixtureOwnerPrincipal, "--issuer-spki-der", args[5], "--requester-spki-der", args[7]}
-	if code := run(prepare, bytes.NewReader(raw), &out, &review); code != 0 || !bytes.Equal(out.Bytes(), payload) || store.signs != 0 || store.factories != 0 {
+	prepare := withFixtureOwnerArgs([]string{"grants", "local-prepare", "--plan", "-", "--issuer-spki-der", args[5], "--requester-spki-der", args[7]})
+	if code := run(prepare, bytes.NewReader(raw), &out, &review); code != 0 || !bytes.Equal(out.Bytes(), payload) || store.signs != 0 || store.factories != 0 || !strings.HasPrefix(review.String(), "Owner key pin: key/"+fixtureOwnerService+"/grants-owner-v1@1 sha256:") {
 		t.Fatal("local prepare", code, review.String())
 	}
 	out.Reset()

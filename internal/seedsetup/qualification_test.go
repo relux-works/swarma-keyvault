@@ -24,17 +24,17 @@ func TestQualificationChecks(t *testing.T) {
 			w := workflow{
 				out:    &out,
 				prompt: func(_ string, _ int) (string, error) { return "ACL-ONE", nil },
-				restore: func(binary string, got publicTarget) ([]byte, int) {
+				restore: func(binary string, got publicTarget) invocation {
 					restores++
 					if binary != "installed-vault" || got != target {
 						t.Fatal("different disposable target")
 					}
 					if mode == "wrong-pins" {
-						return successReply(t, "recovery", differentFixtureRecord(t, got)), 0
+						return invocation{raw: successReply(t, "recovery", differentFixtureRecord(t, got)), exit: 0, started: true}
 					}
-					return successReply(t, "recovery", r), 0
+					return invocation{raw: successReply(t, "recovery", r), exit: 0, started: true}
 				},
-				run: func(binary string, args ...string) ([]byte, int) {
+				run: func(binary string, args ...string) invocation {
 					calls++
 					if len(args) < 3 || args[0] != "--json" || args[2] == "generate" {
 						t.Fatal("qualification attempted unexpected mutation")
@@ -54,30 +54,30 @@ func TestQualificationChecks(t *testing.T) {
 								if mode == "wrong-status" {
 									status = -25308
 								}
-								return failedReply(t, "nostr", "security", status), 1
+								return invocation{raw: failedReply(t, "nostr", "security", status), exit: 1, started: true}
 							}
 						} else if digest == "00" && mode != "digest-accepted" {
-							return failedReply(t, "nostr", "usage", 0), 2
+							return invocation{raw: failedReply(t, "nostr", "usage", 0), exit: 2, started: true}
 						}
-						return successReply(t, "nostr", map[string]string{"algorithm": "secp256k1-bip340", "signature": sig}), 0
+						return invocation{raw: successReply(t, "nostr", map[string]string{"algorithm": "secp256k1-bip340", "signature": sig}), exit: 0, started: true}
 					case "recovery/plan":
 						if !reflect.DeepEqual(args[3:], target.mutationArguments()) {
 							t.Fatal("read-only duplicate probe changed target")
 						}
 						if mode != "duplicate-accepted" {
-							return failedReply(t, "recovery", "recovery_duplicate", 0), 3
+							return invocation{raw: failedReply(t, "recovery", "recovery_duplicate", 0), exit: 3, started: true}
 						}
-						return successReply(t, "recovery", struct{}{}), 0
+						return invocation{raw: successReply(t, "recovery", struct{}{}), exit: 0, started: true}
 					case "nostr/pub":
 						if mode == "private-export-accepted" {
-							return successReply(t, "nostr", map[string]string{"bogus": "not public evidence"}), 0
+							return invocation{raw: successReply(t, "nostr", map[string]string{"bogus": "not public evidence"}), exit: 0, started: true}
 						}
-						return failedReply(t, "nostr", "usage", 0), 2
+						return invocation{raw: failedReply(t, "nostr", "usage", 0), exit: 2, started: true}
 					case "recovery/pub":
-						return successReply(t, "recovery", r), 0
+						return invocation{raw: successReply(t, "recovery", r), exit: 0, started: true}
 					default:
 						t.Fatal("unexpected qualification operation")
-						return nil, -1
+						return invocation{raw: nil, exit: -1, started: true}
 					}
 				},
 			}

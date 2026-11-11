@@ -75,7 +75,7 @@ func TestA2ACertificateCLI(t *testing.T) {
 	args, c, store := a2aCLIFixture(t)
 	payload := a2aCLIBytes(t, c)
 	var out, errout bytes.Buffer
-	if code := run(args, bytes.NewReader(payload), &out, &errout); code != 0 || store.factories != 0 || store.signs != 0 || !bytes.Equal(out.Bytes(), payload) || !strings.Contains(errout.String(), string(payload)) {
+	if code := run(args, bytes.NewReader(payload), &out, &errout); code != 0 || store.factories != 0 || store.signs != 0 || !bytes.Equal(out.Bytes(), payload) || !strings.Contains(errout.String(), string(payload)) || !strings.HasPrefix(errout.String(), "Owner key pin: key/"+fixtureOwnerService+"/grants-owner-v1@1 sha256:") {
 		t.Fatal("public prepare", code, errout.String(), store.factories, store.signs)
 	}
 	args[1] = "a2a-issue"

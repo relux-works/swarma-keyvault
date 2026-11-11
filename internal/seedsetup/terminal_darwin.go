@@ -114,15 +114,15 @@ func fixturePTY() (*os.File, *os.File, error) {
 	return master, slave, nil
 }
 
-func publicFixtureRestore(parent context.Context, home, binary string, target publicTarget) ([]byte, int) {
+func publicFixtureRestore(parent context.Context, home, binary string, target publicTarget) invocation {
 	if target.validate() != nil || target.Version != 1 || target.NostrVersion != 1 || target.NamecoinVersion != 1 {
-		return nil, -1
+		return invocation{}
 	}
 	args := append([]string{"--json", "recovery", "restore"}, target.mutationArguments()...)
 	args = append(args, "--expected-npub", publicFixtureNPub, "--expected-namecoin-xpub", publicFixtureXPub, "--expected-origin", publicFixtureOrigin)
 	master, slave, err := fixturePTY()
 	if err != nil {
-		return nil, -1
+		return invocation{}
 	}
 	defer master.Close()
 	defer slave.Close()
@@ -134,16 +134,16 @@ func publicFixtureRestore(parent context.Context, home, binary string, target pu
 	stdout, stderr := &capped{limit: 32768}, &capped{limit: 8192}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if cmd.Start() != nil {
-		return nil, -1
+		return invocation{}
 	}
 	// The Go wrapper owns only this child PID and this separate PTY. Reap it
 	// on every branch; never send a signal to another group or process.
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	stop := func() ([]byte, int) {
+	stop := func() invocation {
 		cancel()
 		<-done
-		return nil, -1
+		return invocation{exit: -1, started: true}
 	}
 	steps := []struct{ prompt, line string }{
 		{"Retype Nostr identity: ", target.NostrIdentity},
@@ -157,8 +157,8 @@ func publicFixtureRestore(parent context.Context, home, binary string, target pu
 		select {
 		case err := <-done:
 			exit := childExit(ctx, err)
-			if stage != len(steps) && (exit == 0 || stage < 2) {
-				return nil, -1
+			if stage != len(steps) && exit == 0 {
+				return invocation{exit: -1, started: true}
 			}
 			return checkCappedOutput(stdout, stderr, exit, false)
 		default:

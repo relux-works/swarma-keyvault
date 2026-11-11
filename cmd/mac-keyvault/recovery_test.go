@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -32,11 +34,11 @@ func (f *recoveryCLIOperations) Delete(q keyvault.RecoveryDeleteRequest, _ keyva
 // custody when the controlling owner terminal is unavailable; malformed input
 // never reaches either route. PTY tests cover the actual terminal frontend.
 func TestRecoveryCLIAdmissionBeforeCustody(t *testing.T) {
-	oldBackend, oldManager, oldTerminal, oldLock := newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, lockPath
+	oldBackend, oldManager, oldTerminal, oldLock := newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock
 	t.Cleanup(func() {
-		newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, lockPath = oldBackend, oldManager, oldTerminal, oldLock
+		newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock = oldBackend, oldManager, oldTerminal, oldLock
 	})
-	constructed, opened := 0, 0
+	constructed, opened, lockReads := 0, 0, 0
 	operations := &recoveryCLIOperations{}
 	newRecoveryBackend = func() keyvault.RecoveryBackend { constructed++; return nil }
 	makeRecoveryManager = func(keyvault.RecoveryBackend, keyvault.Locker) recoveryOperations { return operations }
@@ -44,7 +46,10 @@ func TestRecoveryCLIAdmissionBeforeCustody(t *testing.T) {
 		opened++
 		return nil, errors.New("fixture has no controlling terminal")
 	}
-	lockPath = func() (string, error) { return t.TempDir() + "/recovery.lock", nil }
+	vaultLock = func() (keyvault.FileLock, error) {
+		lockReads++
+		return keyvault.FileLock{Path: t.TempDir() + "/recovery.lock"}, nil
+	}
 	invoke := func(args ...string) (int, string) {
 		var stdout, stderr bytes.Buffer
 		code := run(append([]string{"--json", "recovery"}, args...), &stdout, &stderr)
@@ -69,6 +74,7 @@ func TestRecoveryCLIAdmissionBeforeCustody(t *testing.T) {
 		{"pub", "fixture"}, {"pub", "fixture", "--version", "1", "--format", "private"},
 		{"pub", "fixture", "--version", "1", "--out", inputPlant},
 		{"delete", "fixture", "--version", "1"}, {"delete", "fixture", "--expected-group-id", "public"},
+		{"delete", "fixture", "--version", "1", "--namecoin-identity", "fixture", "--expected-group-id", strings.Repeat("1", 32)},
 	} {
 		beforeConstructed, beforeOpened, beforeCalls := constructed, opened, len(operations.calls)
 		code, raw := invoke(args...)
@@ -84,19 +90,54 @@ func TestRecoveryCLIAdmissionBeforeCustody(t *testing.T) {
 	if code != 2 || !strings.Contains(raw, "owner foreground controlling terminal unavailable") || constructed != before || opened != 1 {
 		t.Fatal("missing terminal reached custody or refused for an unrelated reason")
 	}
+
+	// Replace each pin independently so the refusal is attributable to that
+	// public input. The untouched tuple reaches the existing terminal gate.
+	args := []string{"restore", "--service", "fixture", "--version", "1", "--nostr-version", "2", "--namecoin-version", "1"}
+	args = append(args, recoveryPublicFixturePins(t)...)
+	for _, index := range []int{10, 12, 14} {
+		malformed := append([]string(nil), args...)
+		malformed[index] = inputPlant
+		beforeLock, beforeTTY := lockReads, opened
+		if code, raw := invoke(malformed...); code != 2 || !strings.Contains(raw, "canonical retained public recovery pins") ||
+			strings.Contains(raw, inputPlant) || constructed != before || lockReads != beforeLock || opened != beforeTTY {
+			t.Fatal("malformed pin crossed admission or was disclosed")
+		}
+	}
+	if code, raw := invoke(args...); code != 2 || !strings.Contains(raw, "owner foreground controlling terminal unavailable") ||
+		constructed != before || opened != 2 {
+		t.Fatal("canonical pins did not reach the terminal gate")
+	}
+}
+
+func recoveryPublicFixturePins(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("../../internal/seedsetup/testdata/public-fixture.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pins struct {
+		NPub   string `json:"npub"`
+		XPub   string `json:"namecoin_xpub"`
+		Origin string `json:"origin"`
+	}
+	if err := json.Unmarshal(raw, &pins); err != nil {
+		t.Fatal(err)
+	}
+	return []string{"--expected-npub", pins.NPub, "--expected-namecoin-xpub", pins.XPub, "--expected-origin", pins.Origin}
 }
 
 // A correctly addressed deletion still refuses before backend construction if
 // the owner cannot confirm both identities on a controlling terminal.
 func TestRecoveryDeleteRequiresOwnerTerminal(t *testing.T) {
-	oldB, oldT, oldL := newRecoveryBackend, newRecoveryTerminal, lockPath
-	t.Cleanup(func() { newRecoveryBackend, newRecoveryTerminal, lockPath = oldB, oldT, oldL })
+	oldB, oldT, oldL := newRecoveryBackend, newRecoveryTerminal, vaultLock
+	t.Cleanup(func() { newRecoveryBackend, newRecoveryTerminal, vaultLock = oldB, oldT, oldL })
 	constructed, opened := 0, 0
 	newRecoveryBackend = func() keyvault.RecoveryBackend { constructed++; return nil }
 	newRecoveryTerminal = func() (ownerRecoveryTerminal, error) { opened++; return nil, errors.New("no terminal") }
-	lockPath = func() (string, error) { return t.TempDir() + "/lock", nil }
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: t.TempDir() + "/lock"}, nil }
 	var out, diagnostic bytes.Buffer
-	code := run([]string{"recovery", "delete", "north", "--namecoin-identity", "south", "--version", "1", "--expected-group-id", strings.Repeat("1", 32)}, &out, &diagnostic)
+	code := run([]string{"recovery", "delete", "north", "--version", "1", "--expected-group-id", strings.Repeat("1", 32)}, &out, &diagnostic)
 	if code != 2 || constructed != 0 || opened != 1 || !strings.Contains(diagnostic.String(), "controlling terminal unavailable") {
 		t.Fatal("deletion bypassed owner terminal admission")
 	}

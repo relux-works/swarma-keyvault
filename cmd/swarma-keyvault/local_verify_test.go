@@ -96,6 +96,17 @@ func TestLocalVerifyCLIOutput(t *testing.T) {
 	if code := run(args, bytes.NewReader(request), &out, &stderr); code != 0 || stderr.Len() != 0 || !strings.Contains(out.String(), `"verdict":"accepted"`) || bytes.HasSuffix(out.Bytes(), []byte("\n")) {
 		t.Fatal("valid CLI", code, out.String(), stderr.String())
 	}
+	var pinnedOut bytes.Buffer
+	if code := run(append(args, "--owner-mxid", fixtureOwnerPrincipal), bytes.NewReader(request), &pinnedOut, &stderr); code != 0 ||
+		!bytes.Equal(out.Bytes(), pinnedOut.Bytes()) || stderr.Len() != 0 {
+		t.Fatal("matching caller principal changed the enrolled verdict", code, stderr.String())
+	}
+	pinnedOut.Reset()
+	if code := run(append(args, "--owner-mxid", "@other-owner:example.invalid"), mustNotRead{}, &pinnedOut, &stderr); code != 1 ||
+		pinnedOut.Len() != 0 || stderr.String() != "refused: issuer-untrusted\n" {
+		t.Fatal("caller principal overrode the enrollment", code, stderr.String())
+	}
+	stderr.Reset()
 	file := filepath.Join(t.TempDir(), "request.json")
 	if err := os.WriteFile(file, request, 0600); err != nil {
 		t.Fatal(err)
@@ -124,7 +135,7 @@ func TestLocalVerifyCLIOutput(t *testing.T) {
 
 // Claim: Missing, repeated, unknown, positional and malformed time arguments exit 2 without output or private/executor construction.
 func TestLocalVerifyCLIUsage(t *testing.T) {
-	for _, mode := range []string{"missing", "empty", "config-stdin", "certificate-stdin", "duplicate", "unknown", "positional", "bad-time", "empty-time", "duplicate-time"} {
+	for _, mode := range []string{"missing", "empty", "config-stdin", "certificate-stdin", "duplicate", "unknown", "positional", "bad-time", "empty-time", "duplicate-time", "bad-owner", "duplicate-owner"} {
 		t.Run(mode, func(t *testing.T) {
 			args, q := verifyCLIFixture(t)
 			switch mode {
@@ -148,6 +159,10 @@ func TestLocalVerifyCLIUsage(t *testing.T) {
 				args[9] = ""
 			case "duplicate-time":
 				args = append(args, "--at", args[9])
+			case "bad-owner":
+				args = append(args, "--owner-mxid", "@missing-domain:")
+			case "duplicate-owner":
+				args = append(args, "--owner-mxid", fixtureOwnerPrincipal, "--owner-mxid", fixtureOwnerPrincipal)
 			}
 			var out, stderr bytes.Buffer
 			if code := run(args, bytes.NewReader(q), &out, &stderr); code != 2 || out.Len() != 0 || stderr.String() != verifyUsage+"\n" {

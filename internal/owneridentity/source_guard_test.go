@@ -16,13 +16,18 @@ import (
 // The source guard is deliberately scoped to identity inputs and owner-key
 // display/custody representations. Protocol constants are still valid. It is
 // not whole-program data-flow analysis.
-var ownerLiteral = regexp.MustCompile(`(?i)(?:/Users/|/home/|~[^ /]+/|@relux\.works\b|gr\.relux\.works\b|\balexis\b|\b[a-z0-9-]+[./]grants-owner-v1(?:\.v| v)[1-9][0-9]*)`)
+var ownerLiteral = regexp.MustCompile(`(?i)(?:/Users/|/home/|~[^ /]+/|\b[a-z0-9-]+[./]grants-owner-v1(?:\.v| v)[1-9][0-9]*)`)
 var ownerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+`)
 var matrixLiteral = regexp.MustCompile(`@[a-zA-Z0-9._=/-]+:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
-var swiftIdentityAssignment = regexp.MustCompile(`(?im)\b(owner(?:principal|mxid|address)?|expectedowner|nostridentity|namecoinidentity|service|host|home(?:dir)?|user|label|uid|gid)\s*(?::\s*[A-Za-z0-9_?]+\s*)?(?:==|!=|=)\s*(?:"[^"\\]+"|[0-9]+\b)`)
+var swiftFixedAssignment = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*(?::\s*[a-z0-9_?]+\s*)?(?:==|!=|=)\s*(?:"[^"\\]+"|[0-9]+\b)`)
+var swiftIdentityFallback = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*\?\?\s*("[^"\\]+"|[a-z][a-z0-9_]*)`)
 
 func identityField(name string) bool {
-	switch strings.ToLower(strings.ReplaceAll(name, "_", "")) {
+	name = strings.ToLower(strings.ReplaceAll(name, "_", ""))
+	for _, prefix := range []string{"default", "fallback", "fixed", "legacy", "supplied", "configured"} {
+		name = strings.TrimPrefix(name, prefix)
+	}
+	switch name {
 	case "owner", "expectedowner", "ownermxid", "ownerprincipal", "owneraddress", "ownerkey",
 		"principal", "service", "nostridentity", "namecoinidentity", "qualificationnostr", "qualificationnamecoin",
 		"user", "username", "host", "hostname", "home", "homedir", "uid", "gid":
@@ -83,6 +88,24 @@ func fixedValue(e ast.Expr, depth int) (string, bool) {
 			a, oka := fixedValue(n.X, depth+1)
 			b, okb := fixedValue(n.Y, depth+1)
 			return a + b, oka && okb
+		}
+	case *ast.CallExpr:
+		// String normalization does not make a fixed identity dynamic.
+		method, ok := n.Fun.(*ast.SelectorExpr)
+		if !ok || fieldName(method.X) != "strings" || len(n.Args) != 1 {
+			return "", false
+		}
+		value, ok := fixedValue(n.Args[0], depth+1)
+		if !ok {
+			return "", false
+		}
+		switch method.Sel.Name {
+		case "TrimSpace":
+			return strings.TrimSpace(value), true
+		case "ToLower":
+			return strings.ToLower(value), true
+		case "ToUpper":
+			return strings.ToUpper(value), true
 		}
 	case *ast.Ident:
 		if n.Obj != nil {
@@ -165,8 +188,19 @@ func guardSwift(raw []byte) string {
 	if literalIdentity("swift", string(raw)) {
 		return "fixed owner, account or home literal"
 	}
-	if swiftIdentityAssignment.Match(raw) {
-		return "fixed native identity-bearing field"
+	fixed := map[string]bool{}
+	for _, match := range swiftFixedAssignment.FindAllSubmatch(raw, -1) {
+		name := string(match[1])
+		if identityField(name) || strings.EqualFold(name, "label") {
+			return "fixed native identity-bearing field"
+		}
+		fixed[name] = true
+	}
+	for _, match := range swiftIdentityFallback.FindAllSubmatch(raw, -1) {
+		source, fallback := string(match[1]), string(match[2])
+		if identityField(source) && (strings.HasPrefix(fallback, `"`) || fixed[fallback]) {
+			return "fixed native identity fallback"
+		}
 	}
 	return ""
 }
@@ -226,6 +260,7 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	for _, plant := range []struct{ old, injected, want string }{
 		{"Owner: owner", `Owner: "opaque-principal"`, "fixed identity-bearing field"},
 		{"Service: service", `Service: "another-" + "person"`, "fixed identity-bearing field"},
+		{"Service: service", `Service: strings.TrimSpace(" unseen-person ")`, "fixed identity-bearing field"},
 		{"Host: host", `Host: "some-new-host"`, "fixed identity-bearing field"},
 		{"Home: home", `Home: "/var/private-user"`, "fixed identity-bearing field"},
 		{"UID: uid", `UID: 4091`, "fixed identity-bearing field"},
@@ -251,6 +286,12 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	}
 	if got := guardSwift([]byte(`let service = "a-hidden-person"`)); got != "fixed native identity-bearing field" {
 		t.Fatal("native identity plant was not detected", got)
+	}
+	if got := guardSwift([]byte(`let fallbackService = "unseen-person"; let chosen = suppliedService ?? fallbackService`)); got != "fixed native identity-bearing field" {
+		t.Fatal("native fixed fallback assignment was not detected", got)
+	}
+	if got := guardSwift([]byte(`let fallback = "unseen-person"; let chosen = suppliedService ?? fallback`)); got != "fixed native identity fallback" {
+		t.Fatal("native fallback through a local alias was not detected", got)
 	}
 	if got := guardSwift([]byte(`guard label == "works.relux.mac-keyvault.key.unseen-person.grants-owner-v1.v41" else { return }`)); got != "fixed owner, account or home literal" {
 		t.Fatal("native label plant was not detected", got)

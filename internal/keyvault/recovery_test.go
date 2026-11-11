@@ -177,7 +177,8 @@ func recoveryTestOpen(key *ecdh.PrivateKey, wire []byte) ([]byte, error) {
 func recoveryTestManager(t *testing.T) (*RecoveryManager, *recoveryFakeStore, *recoveryFakeHelper) {
 	f := &recoveryFakeStore{}
 	h := &recoveryFakeHelper{}
-	m := NewRecoveryManager(f, FileLock{Path: t.TempDir() + "/recovery.lock"})
+	root := t.TempDir()
+	m := NewRecoveryManager(f, FileLock{Path: root + "/recovery.lock", BootstrapDir: root})
 	m.helper = h
 	m.now = func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) }
 	m.random = bytes.NewReader(make([]byte, 4096))
@@ -282,7 +283,7 @@ func TestRecoveryAtomicPairAndBinding(t *testing.T) {
 // Every pre-store refusal is paired with the valid restore above. Pins reject
 // another valid mnemonic, not just a bad checksum, before hardware or storage.
 func TestRecoveryRefusalsLeaveNoPartialPair(t *testing.T) {
-	for _, name := range []string{"cancel", "checksum", "valid-other-phrase", "12-words", "missing-pins", "wrong-npub", "wrong-xpub", "wrong-origin", "helper-second-fails", "passcode-fallback", "store-refused"} {
+	for _, name := range []string{"cancel", "checksum", "valid-other-phrase", "12-words", "missing-pins", "malformed-npub", "malformed-xpub", "malformed-origin", "wrong-origin", "helper-second-fails", "passcode-fallback", "store-refused"} {
 		t.Run(name, func(t *testing.T) {
 			m, f, h := recoveryTestManager(t)
 			q := recoveryTestRequest()
@@ -312,10 +313,15 @@ func TestRecoveryRefusalsLeaveNoPartialPair(t *testing.T) {
 			case "missing-pins":
 				q.ExpectedNPub = ""
 				want = "public_pins_required"
-			case "wrong-npub":
-				q.ExpectedNPub += "x"
-			case "wrong-xpub":
-				q.ExpectedXPub += "x"
+			case "malformed-npub":
+				q.ExpectedNPub = strings.ToUpper(q.ExpectedNPub)
+				want = "invalid_public_pins"
+			case "malformed-xpub":
+				q.ExpectedXPub = q.ExpectedXPub[:len(q.ExpectedXPub)-1] + "0"
+				want = "invalid_public_pins"
+			case "malformed-origin":
+				q.ExpectedOrigin = "[00000000/84h/7h/1h]"
+				want = "invalid_public_pins"
 			case "wrong-origin":
 				q.ExpectedOrigin = "[00000000/84h/7h/0h]"
 			case "helper-second-fails":
@@ -330,6 +336,9 @@ func TestRecoveryRefusalsLeaveNoPartialPair(t *testing.T) {
 			}
 			_, err = m.Create(q, terminal, true)
 			recoveryCode(t, err, want)
+			if (want == "invalid_public_pins" || want == "public_pins_required") && (terminal.identityConfirmation != 0 || terminal.read != 0) {
+				t.Fatal("malformed public pins reached the terminal")
+			}
 			if f.stores != 0 || len(f.groups) != 0 || len(f.data) != 0 || f.deletes != 0 {
 				t.Fatal("refusal changed persistent state")
 			}

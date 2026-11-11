@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 func documentCLIFixture(t *testing.T, text string) ([]string, string, string) {
@@ -51,6 +52,8 @@ func documentRun(args []string, output io.Writer) (int, string) {
 	return code, stderr.String()
 }
 
+// Review prints the exact document. Detached verification checks both its
+// trusted address/SPKI association and signature without invoking custody.
 func TestOwnerDocumentCLIReviewVerifyRefuseNative(t *testing.T) {
 	text := "Exact English.\n\nТочный русский.\n"
 	args, file, signature := documentCLIFixture(t, text)
@@ -65,11 +68,25 @@ func TestOwnerDocumentCLIReviewVerifyRefuseNative(t *testing.T) {
 		t.Fatal(code, err, output.String())
 	}
 	output.Reset()
-	verify := append(append([]string{"verify"}, args...), "--signature", signature)
+	pin, err := os.ReadFile(args[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	association := filepath.Join(t.TempDir(), "owner-key-pin.txt")
+	address := keyvault.Address{Kind: keyvault.KindKey, Service: "synthetic-document-owner", Purpose: "grants-owner-v1", Version: 5}
+	if err := os.WriteFile(association, []byte(ownerkey.PublicPin(address, pin)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	verify := append(append([]string{"verify"}, args...), "--signature", signature, "--owner-key-pin", association)
 	if code, err := documentRun(verify, &output); code != 0 || !strings.Contains(output.String(), "verified exact document") {
 		t.Fatal(code, err)
 	}
 	output.Reset()
+	swapped := append([]string(nil), verify...)
+	swapped[6] = "different-document-owner/grants-owner-v1"
+	if code, err := documentRun(swapped, &output); code != 1 || output.Len() != 0 || !strings.Contains(err, "owner-document-owner-pin") {
+		t.Fatal("configured address substitution verified", code, err)
+	}
 	if runtime.GOOS != "darwin" {
 		if code, err := documentRun(append([]string{"sign"}, args...), &output); code != 1 || output.Len() != 0 || !strings.Contains(err, "owner-document-native-unavailable") {
 			t.Fatal("native gap hidden", code, err)
@@ -99,6 +116,7 @@ func (w *documentMutatingWriter) Write(raw []byte) (int, error) {
 	return w.buffer.Write(raw)
 }
 
+// A file change during full public rendering is detected before a signature can be released.
 func TestOwnerDocumentCLIChangedDuringRender(t *testing.T) {
 	args, file, _ := documentCLIFixture(t, "Exact source")
 	w := &documentMutatingWriter{file: file}
@@ -108,6 +126,7 @@ func TestOwnerDocumentCLIChangedDuringRender(t *testing.T) {
 	}
 }
 
+// Unsupported arguments, unsafe document bytes and short rendering writes refuse without signature output.
 func TestOwnerDocumentCLIInputAndOutputRefusals(t *testing.T) {
 	args, file, _ := documentCLIFixture(t, "Exact")
 	for _, extra := range [][]string{{"--document", file}, {"--signature", file}, {"--unknown"}, {"positional"}} {

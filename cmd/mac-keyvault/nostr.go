@@ -100,11 +100,11 @@ func runNostr(args []string, out output) int {
 		}
 		return out.success(map[string]bool{"verified": true}, func(w io.Writer) { fmt.Fprintln(w, "verified: true") })
 	}
-	path, err := lockPath()
+	lock, err := vaultLock()
 	if err != nil {
 		return out.fail(err)
 	}
-	m := keyvault.NewNostrManager(newNostrBackend(), keyvault.FileLock{Path: path})
+	m := keyvault.NewNostrManager(newNostrBackend(), lock)
 	if op == "delete" {
 		if expectedNPub == "" {
 			return out.fail(usagef("exact public Nostr pin required"))

@@ -6,6 +6,8 @@ import (
 	"io"
 	"reflect"
 	"strings"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
 const qualificationDigest = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -20,23 +22,34 @@ const (
 	publicFixtureOrigin = "[57471a66/84h/7h/0h]"
 )
 
-type runner func(string, ...string) ([]byte, int)
-type fixtureRestorer func(string, publicTarget) ([]byte, int)
+type invocation struct {
+	raw     []byte
+	exit    int
+	started bool
+}
+
+type runner func(string, ...string) invocation
+type fixtureRestorer func(string, publicTarget) invocation
 type promptFunc func(string, int) (string, error)
+
+type replyError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Hint    string `json:"hint"`
+	Status  int    `json:"os_status,omitempty"`
+}
 
 type envelope struct {
 	OK      bool            `json:"ok"`
 	Command string          `json:"command"`
 	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-		Hint    string `json:"hint"`
-		Status  int    `json:"os_status,omitempty"`
-	} `json:"error,omitempty"`
+	Error   *replyError     `json:"error,omitempty"`
 }
 
 type workflow struct {
+	planner interface {
+		Plan(keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error)
+	}
 	run     runner
 	restore fixtureRestorer
 	prompt  promptFunc
@@ -71,10 +84,13 @@ func readReply(raw []byte, exit int, family string) (envelope, error) {
 }
 
 func (w workflow) call(binary, family, op string, args ...string) (envelope, int, error) {
-	raw, exit := w.run(binary, append([]string{"--json", family, op}, args...)...)
-	defer clear(raw)
-	e, err := readReply(raw, exit, family)
-	return e, exit, err
+	reply := w.run(binary, append([]string{"--json", family, op}, args...)...)
+	defer clear(reply.raw)
+	if !reply.started {
+		return envelope{}, reply.exit, refused("vault_child_not_started")
+	}
+	e, err := readReply(reply.raw, reply.exit, family)
+	return e, reply.exit, err
 }
 
 func (w workflow) requireRefusal(binary, family, op, code string, exitCode, status int, args ...string) error {
@@ -85,21 +101,25 @@ func (w workflow) requireRefusal(binary, family, op, code string, exitCode, stat
 	return nil
 }
 
-func (w workflow) plan(binary string, c Config) (publicTarget, error) {
-	args := []string{"--nostr-identity", c.NostrIdentity, "--namecoin-identity", c.NamecoinIdentity}
-	for _, opt := range []struct {
-		flag string
-		n    int
-	}{{"--version", c.Version}, {"--nostr-version", c.NostrVersion}, {"--namecoin-version", c.NamecoinVersion}} {
-		if opt.n != 0 {
-			args = append(args, opt.flag, fmt.Sprint(opt.n))
-		}
+func (w workflow) plan(c Config) (publicTarget, error) {
+	if w.planner == nil {
+		return publicTarget{}, refused("vault_plan_unavailable")
 	}
-	e, _, err := w.call(binary, "recovery", "plan", args...)
-	if err != nil || !e.OK {
+	p, err := w.planner.Plan(keyvault.RecoveryRequest{NostrIdentity: c.NostrIdentity, NamecoinIdentity: c.NamecoinIdentity,
+		Version: c.Version, NostrVersion: c.NostrVersion, NamecoinVersion: c.NamecoinVersion})
+	if err != nil {
+		classified := keyvault.ClassifyError(err)
+		e := envelope{Error: &replyError{Code: classified.Code, Status: classified.Status}}
+		if bounded := definiteRecoveryRefusal(e, 3); bounded != "" {
+			return publicTarget{}, refused(bounded)
+		}
 		return publicTarget{}, refused("vault_plan_refused")
 	}
-	return acceptPlan(e.Result, c)
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return publicTarget{}, refused("vault_plan_refused")
+	}
+	return acceptPlan(raw, c)
 }
 
 func (w workflow) confirm(p installation, actual, qualification publicTarget) error {
@@ -142,10 +162,36 @@ type unknownRecovery struct {
 
 const unknownMutation = "recovery_outcome_unknown_reconcile_do_not_retry_or_delete"
 
-func (w workflow) mutationReply(raw []byte, exit int, target publicTarget, op string) (record, error) {
-	defer clear(raw)
+// Only protocol classes that guarantee no recovery item effect are actionable.
+// Ignore arbitrary child messages and unknown status/code combinations.
+func definiteRecoveryRefusal(e envelope, exit int) string {
+	if e.OK || e.Error == nil || exit != 3 || e.Error.Status != 0 || len(e.Result) != 0 {
+		return ""
+	}
+	switch e.Error.Code {
+	case "recovery_duplicate":
+		return "recovery_duplicate_no_change"
+	case "recovery_identity_confirmation_failed", "recovery_generation_exhausted",
+		"recovery_invalid_address", "recovery_invalid_arguments", "recovery_invalid_record",
+		"recovery_lock_unavailable", "recovery_unavailable", "recovery_confirmation_refused",
+		"recovery_terminal_refused", "recovery_random_unavailable", "recovery_public_pins_required",
+		"recovery_invalid_public_pins", "recovery_public_pin_mismatch", "recovery_requires_24_words",
+		"recovery_invalid_checksum", "recovery_invalid_mnemonic", "recovery_invalid_derivation",
+		"recovery_helper_not_admitted", "recovery_helper_protocol", "recovery_helper_refused",
+		"recovery_helper_unavailable", "recovery_vault_not_hardened", "recovery_wrapping_policy_refused",
+		"recovery_invalid_envelope", "recovery_seal_failed", "recovery_store_refused":
+		return e.Error.Code
+	}
+	return ""
+}
+
+func (w workflow) mutationReply(reply invocation, target publicTarget, op string) (record, error) {
+	defer clear(reply.raw)
 	var zero record
-	e, err := readReply(raw, exit, "recovery")
+	if !reply.started {
+		return zero, refused("vault_child_not_started")
+	}
+	e, err := readReply(reply.raw, reply.exit, "recovery")
 	if err != nil {
 		return zero, refused(unknownMutation)
 	}
@@ -157,22 +203,20 @@ func (w workflow) mutationReply(raw []byte, exit int, target publicTarget, op st
 		return r, nil
 	}
 	if e.Error.Code != "recovery_outcome_unknown" {
-		// Only a protocol-level duplicate is actionable as a definite no-op.
-		// Suppress all child diagnostics, including arbitrary failure strings.
-		if exit == 3 && e.Error.Code == "recovery_duplicate" && e.Error.Status == 0 && len(e.Result) == 0 {
-			return zero, refused("recovery_duplicate_no_change")
+		if code := definiteRecoveryRefusal(e, reply.exit); code != "" {
+			return zero, refused(code)
 		}
 		return zero, refused(unknownMutation)
 	}
 	var u unknownRecovery
-	if exit == 1 && e.Error.Status == 0 &&
+	if reply.exit == 1 && e.Error.Status == 0 &&
 		e.Error.Message == "Recovery mutation outcome is unknown; public reference is UNCONFIRMED" &&
 		e.Error.Hint == "reconcile the UNCONFIRMED public reference; do not retry or delete" &&
 		decode(e.Result, &u) == nil && u.Outcome == "unknown" && u.Operation == op &&
 		validateRecord(u.Reference, target) == nil && (op != "restore" || pinnedFixture(u.Reference)) {
 		public, marshalErr := json.Marshal(u)
-		if marshalErr == nil {
-			_ = writePublic(w.out, "UNCONFIRMED public reference; reconcile; do not retry or delete: "+string(public)+"\n")
+		if marshalErr != nil || writePublic(w.out, "UNCONFIRMED public reference; reconcile; do not retry or delete: "+string(public)+"\n") != nil {
+			return zero, refused("recovery_outcome_unknown_public_reference_unavailable_do_not_retry_or_delete")
 		}
 	}
 	return zero, refused(unknownMutation)
@@ -196,8 +240,7 @@ func (w workflow) requireACL(target publicTarget) error {
 }
 
 func (w workflow) qualify(binary, foreign string, target publicTarget) error {
-	raw, exit := w.restore(binary, target)
-	r, err := w.mutationReply(raw, exit, target, "restore")
+	r, err := w.mutationReply(w.restore(binary, target), target, "restore")
 	if err != nil {
 		return err
 	}
@@ -238,8 +281,7 @@ func (w workflow) qualify(binary, foreign string, target publicTarget) error {
 
 func (w workflow) createActual(binary string, target publicTarget) error {
 	args := append([]string{"--json", "recovery", "generate"}, target.mutationArguments()...)
-	raw, exit := w.run(binary, args...)
-	r, err := w.mutationReply(raw, exit, target, "generate")
+	r, err := w.mutationReply(w.run(binary, args...), target, "generate")
 	if err != nil {
 		return err
 	}

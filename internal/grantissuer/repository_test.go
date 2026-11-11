@@ -104,12 +104,12 @@ func TestTypedRepositoryIssuance(t *testing.T) {
 	if outer["type"] != "grants-signed-certificate-1" || !bytes.Equal(raw, payload) || !ecdsa.VerifyASN1(&store.key.PublicKey, digest[:], sig) {
 		t.Fatal("envelope/signature differs from exact typed payload")
 	}
-	parts := strings.SplitN(review.String(), "\n", 5)
-	if len(parts) != 5 || !strings.Contains(parts[0], Organization+"/"+Repository) || !strings.Contains(parts[0], "удаление не выполняется") || !strings.Contains(parts[1], "не подтверждает Matrix identity") {
+	parts := strings.SplitN(review.String(), "\n", 6)
+	if len(parts) != 6 || !strings.HasPrefix(parts[0], "Owner key pin: key/") || !strings.Contains(parts[1], Organization+"/"+Repository) || !strings.Contains(parts[1], "удаление не выполняется") || !strings.Contains(parts[2], "не подтверждает Matrix identity") {
 		t.Fatal("review scope/association limit missing")
 	}
 	var compact bytes.Buffer
-	if err := json.Compact(&compact, []byte(parts[4])); err != nil || !bytes.Equal(compact.Bytes(), payload) {
+	if err := json.Compact(&compact, []byte(parts[5])); err != nil || !bytes.Equal(compact.Bytes(), payload) {
 		t.Fatal("full review differs from signed bytes", err)
 	}
 	if p.Prompt(digest[:]) == "" || p.Prompt(make([]byte, 32)) != "" {

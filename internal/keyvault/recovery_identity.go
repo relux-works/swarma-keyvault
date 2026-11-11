@@ -1,10 +1,5 @@
 package keyvault
 
-import (
-	"errors"
-	"os"
-)
-
 // RecoveryPlan contains public names only. Advisory inventory is rechecked
 // under the mutation lock after the user's exact identity confirmation.
 type RecoveryPlan struct {
@@ -31,29 +26,47 @@ func recordRecoveryPlan(r RecoveryRecord) RecoveryPlan {
 	return recoveryPlan(RecoveryRequest{NostrIdentity: r.purposeService(r.Nostr), NamecoinIdentity: r.purposeService(r.Namecoin), Version: r.Version, NostrVersion: r.Nostr.Version, NamecoinVersion: r.Namecoin.Version})
 }
 
+// RecoveryPlanner has only metadata inventory and a shared lock. It has no
+// helper, randomness, terminal, private-data or mutation interface.
+type RecoveryPlanner struct {
+	inventory RecoveryInventory
+	lock      interface{ LockReadOnly() (func(), error) }
+}
+
+func NewRecoveryPlanner(inventory RecoveryInventory, lock interface{ LockReadOnly() (func(), error) }) *RecoveryPlanner {
+	return &RecoveryPlanner{inventory: inventory, lock: lock}
+}
+
 func (m *RecoveryManager) Plan(q RecoveryRequest) (RecoveryPlan, error) {
+	lock, _ := m.lock.(interface{ LockReadOnly() (func(), error) })
+	return NewRecoveryPlanner(m.backend, lock).Plan(q)
+}
+
+func (p *RecoveryPlanner) Plan(q RecoveryRequest) (RecoveryPlan, error) {
 	var zero RecoveryPlan
+	if q.Service != "" {
+		return zero, recoveryRefuse("invalid_address")
+	}
 	q, err := normalizeRecoveryIdentities(q)
 	if err != nil {
 		return zero, err
 	}
-	if m.backend == nil {
+	if p == nil || p.inventory == nil {
 		return zero, recoveryRefuse("unavailable")
 	}
-	// Never call the creating Locker.Lock from a pre-confirmation plan.
-	if l, ok := m.lock.(interface{ LockExisting() (func(), error) }); ok {
-		release, err := l.LockExisting()
-		if err == nil {
-			defer release()
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return zero, recoveryRefuse("lock_unavailable")
-		}
+	if p.lock == nil {
+		return zero, recoveryRefuse("lock_unavailable")
 	}
-	groups, err := m.backend.RecoveryList()
+	release, err := p.lock.LockReadOnly()
+	if err != nil {
+		return zero, recoveryRefuse("lock_unavailable")
+	}
+	defer release()
+	groups, err := p.inventory.RecoveryList()
 	if err != nil {
 		return zero, err
 	}
-	keys, err := m.backend.List()
+	keys, err := p.inventory.List()
 	if err != nil {
 		return zero, err
 	}
@@ -96,7 +109,7 @@ func (m *RecoveryManager) Plan(q RecoveryRequest) (RecoveryPlan, error) {
 	if err := validateRecoveryRequest(q); err != nil {
 		return zero, err
 	}
-	if err := m.preflight(q); err != nil {
+	if err := recoveryPreflight(p.inventory, q); err != nil {
 		return zero, err
 	}
 	return recoveryPlan(q), nil

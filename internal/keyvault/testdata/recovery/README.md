@@ -34,3 +34,15 @@ never imports custody code or handles actual private material. Its malformed
 responses, timeout and request marker exercise private-pipe admission/refusal.
 Code-signing controls use copies of this public fixture, including intentional
 missing-runtime, wrong-hash and debug-entitlement plants.
+
+## Frozen v1 compatibility fixture
+
+`v1-public-record.json` and `v1-public-ciphertext.json` were emitted by the
+v0.1.0 implementation at `5e876b2e9ff10c584209ef7e3f08d3f10114d51c` using its
+existing published mnemonic fixture and synthetic wrapping scalars 1 and 2.
+These are public test authorities. They must never hold funds or real identities.
+The retained files constrain the original metadata bytes, paired cipher schema,
+binding and software unwrap-to-signature path across later versions. The fixture
+contains ciphertext and public metadata only. Its tests establish software
+compatibility under known-public toy wrapping keys. Native custody, code-identity
+ACLs and hardware enforcement require their separate qualified lane.

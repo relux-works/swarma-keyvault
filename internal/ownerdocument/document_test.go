@@ -80,11 +80,11 @@ func TestExactBytesAndOwnership(t *testing.T) {
 				t.Fatal("changed source accepted")
 			}
 			der := fixtureSignature(t, want[:])
-			if err := p.Verify(der); err != nil {
+			if err := p.Verify(der, []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))); err != nil {
 				t.Fatal(err)
 			}
 			changed := prepared(t, document+"!")
-			if changed.Verify(der) != ErrSignature {
+			if changed.Verify(der, []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))) != ErrSignature {
 				t.Fatal("tampered document verified")
 			}
 			if p.Prompt(want[:]) == "" {
@@ -191,12 +191,33 @@ func TestStrictPublicAndSignature(t *testing.T) {
 	sig, _ := keyvault.ParseSignature(der, keyvault.FormatSignatureDERLowS)
 	high, _ := asn1.Marshal(struct{ R, S *big.Int }{sig.R, new(big.Int).Sub(elliptic.P256().Params().N, sig.S)})
 	for _, invalid := range [][]byte{nil, {1, 2, 3}, append(bytes.Clone(der), 0), high, bytes.Repeat([]byte{0}, 64)} {
-		if p.Verify(invalid) != ErrSignature {
+		if p.Verify(invalid, []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))) != ErrSignature {
 			t.Fatal("malformed/high-S/non-DER signature verified")
 		}
 	}
-	if p.Verify(der) != nil {
+	if p.Verify(der, []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))) != nil {
 		t.Fatal("positive neighbor refused")
+	}
+}
+
+// A detached signature under one public key remains the same signed bytes,
+// while a different configured address fails its trusted out-of-band pin.
+func TestVerifyConfiguredAddressAssociation(t *testing.T) {
+	p := prepared(t, "Exact")
+	pin := []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))
+	signature := fixtureSignature(t, p.digest[:])
+	if err := p.Verify(signature, pin); err != nil {
+		t.Fatal("trusted original address failed", err)
+	}
+	other := ownerAddress
+	other.Service = "second-owner"
+	p.address = other
+	if err := p.Verify(signature, pin); err != ErrOwnerPin {
+		t.Fatal("configured address silently changed under a trusted pin", err)
+	}
+	secondPin := []byte(ownerkey.PublicPin(other, fixturePublic(t)))
+	if err := p.Verify(signature, secondPin); err != nil {
+		t.Fatal("explicitly enrolled second address failed", err)
 	}
 }
 
@@ -269,7 +290,7 @@ func TestSyntheticReviewConfirmSignVerifyOrder(t *testing.T) {
 		return raw, nil
 	})
 	der, err := p.signWithReview(context.Background(), m, r, func() ([]byte, error) { return bytes.Clone(p.document), nil })
-	if err != nil || p.Verify(der) != nil {
+	if err != nil || p.Verify(der, []byte(ownerkey.PublicPin(ownerAddress, fixturePublic(t)))) != nil {
 		t.Fatal("synthetic signature failed", err)
 	}
 	events = append(events, "public-verify")

@@ -107,7 +107,8 @@ service only for v1. V2 never falls back to the top-level service for a missing
 purpose service. Each record schema accepts only its matching ciphertext
 schema; reading an old record performs no migration or rewrapping.
 
-Restore reads exactly 24 words once, with echo disabled, and compares all three
+Restore validates all three canonical public pins before requesting private input.
+It reads exactly 24 words once, with echo disabled, and compares all three
 retained public pins **before creating a wrapping key or storing an item**.
 This catches a different valid mnemonic as well as checksum errors. A BIP-39
 checksum alone misses some word errors. Another Mac restores the same public
@@ -119,12 +120,14 @@ Removal is a separate, exact operation:
 
 ```sh
 mac-keyvault nostr delete example/nostr --version 1 --expected-npub OLD_NPUB
-mac-keyvault recovery delete qualification --namecoin-identity qualification-wallet --version 1 --expected-group-id PUBLIC_GROUP_ID
+mac-keyvault recovery delete qualification --version 1 --expected-group-id PUBLIC_GROUP_ID
 ```
 
-Choose KEEP by default when retaining an old backup. An explicit removal must
-identify both purpose identities, one item and its retained public pin; an incorrect identity or pin or a definite
-pre-effect refusal preserves it. Deleting half a pair is not supported. The vault never reads the old
+Choose KEEP by default when retaining an old backup. An explicit removal names
+the Nostr anchor, group generation and retained public group pin. The vault
+loads that exact record and asks the owner to confirm both stored identities.
+An incorrect identity or pin or a definite pre-effect refusal preserves it.
+Deleting half a pair is not supported. The vault never reads the old
 private value to remove it. A lost/nonzero response can follow a native effect;
 the process returns exit 1 and `recovery_outcome_unknown` when the native
 mutation cannot be confirmed. In JSON, `ok=false` and that error accompany
@@ -159,7 +162,10 @@ If you set disposable names with `--qualification-nostr-identity` and
 `--qualification-namecoin-identity`, supply both and use unused names.
 
 The command checks its embedded manifest and code pins and reads the actual
-public inventory. It shows both actual and disposable targets, the exact
+public inventory through its in-process metadata-only planner. It acquires the
+same lock as the vault and releases it before either identity retype. It executes
+no vault binary during this pre-confirmation phase. The planner exposes no
+mutation, signing or private-data operation. It shows both actual and disposable targets, the exact
 installation files and vault lock path before asking you to retype the two
 identities separately. It then installs a new private release directory under
 `~/Library/Application Support/swarma-keyvault/bin/`; an existing destination
@@ -190,7 +196,9 @@ go run ./tools/recoverybuild --out /absolute/new/ignored/build-directory --seed-
 
 It builds the hardened vault/helper first, then the restricted qualification
 binary and the manifest, then the seed utility with the exact manifest and
-artifact pins. `SHA256SUMS` covers the shipped executables and manifest;
+artifact pins. The manifest records `public_planner_source_head` equal to
+`source_head`; the utility embeds that same source pin and refuses a mismatch.
+`SHA256SUMS` covers the shipped executables and manifest;
 `build.log` is local build evidence, not a release asset. The manifest does
 not include the utility’s hash; the outer checksum list does. The builder
 does not install or exercise custody.

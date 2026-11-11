@@ -12,6 +12,7 @@ import (
 
 	"github.com/relux-works/swarma-keyvault/internal/grantissuer"
 	"github.com/relux-works/swarma-keyvault/internal/grants"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer, sign bool) int {
@@ -75,7 +76,8 @@ func runA2ACertificate(args []string, stdin io.Reader, stdout, stderr io.Writer,
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if n, err := io.WriteString(stderr, prepared.Review()); err != nil || n != len(prepared.Review()) {
+	review := "Owner key pin: " + ownerkey.PublicPin(ownerConfig.Address, ownerDER) + prepared.Review()
+	if n, err := io.WriteString(stderr, review); err != nil || n != len(review) {
 		return 1
 	}
 	return writeA2AOutput(stdout, prepared.Payload())

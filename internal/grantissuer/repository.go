@@ -113,7 +113,7 @@ func (p *Prepared) Sign(manager *keyvault.Manager, review io.Writer) ([]byte, er
 		if key.Address != address || key.Store != keyvault.StoreEnclave || !key.UserPresence || key.Extraction != keyvault.ExtractionNone || !bytes.Equal(key.SPKI, p.public) {
 			return ErrOwnerKeyMismatch
 		}
-		text := p.plan.Review()
+		text := "Owner key pin: " + ownerkey.PublicPin(address, p.public) + p.plan.Review()
 		if n, err := io.WriteString(review, text); err != nil {
 			return err
 		} else if n != len(text) {

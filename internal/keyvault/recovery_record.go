@@ -14,6 +14,7 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcutil/base58"
+	"github.com/btcsuite/btcd/btcutil/bech32"
 )
 
 const recoveryAlgorithm = "kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM"
@@ -128,23 +129,54 @@ func validateRecoveryRecord(r RecoveryRecord) error {
 	if c.Purpose != "namecoin" || c.Path != "m/84'/7'/0'" || c.Algorithm != "bip32-secp256k1" || c.Presence != "biometry-any" || c.PublicKey != "" || c.NPub != "" {
 		return recoveryRefuse("invalid_record")
 	}
-	if len(c.Origin) != 20 || c.Origin[0] != '[' || c.Origin[9:] != "/84h/7h/0h]" || !lowerHex(c.Origin[1:9], 4) {
-		return recoveryRefuse("invalid_record")
-	}
-	raw := base58.Decode(c.XPub)
-	if len(raw) != 82 || base58.Encode(raw) != c.XPub || !bytes.Equal(raw[:4], []byte{4, 0x88, 0xb2, 0x1e}) || raw[4] != 3 || binary.BigEndian.Uint32(raw[9:13]) != 0x80000000 {
-		return recoveryRefuse("invalid_record")
-	}
-	h := sha256.Sum256(raw[:78])
-	check := sha256.Sum256(h[:])
-	if !bytes.Equal(raw[78:], check[:4]) {
-		return recoveryRefuse("invalid_record")
-	}
-	if _, err := btcec.ParsePubKey(raw[45:78]); err != nil {
+	if !validRecoveryNamecoinPins(c.XPub, c.Origin) {
 		return recoveryRefuse("invalid_record")
 	}
 	if validateWrapping(n.WrappingPoint, n.WrappingFingerprint) != nil || validateWrapping(c.WrappingPoint, c.WrappingFingerprint) != nil || bytes.Equal(n.WrappingPoint, c.WrappingPoint) {
 		return recoveryRefuse("invalid_record")
+	}
+	return nil
+}
+
+func validRecoveryNamecoinPins(xpub, origin string) bool {
+	if len(origin) != 20 || origin[0] != '[' || origin[9:] != "/84h/7h/0h]" || !lowerHex(origin[1:9], 4) {
+		return false
+	}
+	if len(xpub) != 111 {
+		return false
+	}
+	raw := base58.Decode(xpub)
+	if len(raw) != 82 || base58.Encode(raw) != xpub || !bytes.Equal(raw[:4], []byte{4, 0x88, 0xb2, 0x1e}) || raw[4] != 3 || binary.BigEndian.Uint32(raw[9:13]) != 0x80000000 {
+		return false
+	}
+	h := sha256.Sum256(raw[:78])
+	check := sha256.Sum256(h[:])
+	if !bytes.Equal(raw[78:], check[:4]) {
+		return false
+	}
+	_, err := btcec.ParsePubKey(raw[45:78])
+	return err == nil
+}
+
+// ValidateRestorePins checks canonical public inputs before any owner or vault
+// operation. Create separately compares the pins with the derived public keys.
+func (q RecoveryRequest) ValidateRestorePins() error {
+	if q.ExpectedNPub == "" || q.ExpectedXPub == "" || q.ExpectedOrigin == "" {
+		return recoveryRefuse("public_pins_required")
+	}
+	if len(q.ExpectedNPub) != 63 || !validRecoveryNamecoinPins(q.ExpectedXPub, q.ExpectedOrigin) {
+		return recoveryRefuse("invalid_public_pins")
+	}
+	hrp, words, err := bech32.Decode(q.ExpectedNPub)
+	if err != nil || hrp != "npub" {
+		return recoveryRefuse("invalid_public_pins")
+	}
+	public, err := bech32.ConvertBits(words, 5, 8, false)
+	if err != nil {
+		return recoveryRefuse("invalid_public_pins")
+	}
+	if canonical, err := NostrNPub(public); err != nil || canonical != q.ExpectedNPub {
+		return recoveryRefuse("invalid_public_pins")
 	}
 	return nil
 }

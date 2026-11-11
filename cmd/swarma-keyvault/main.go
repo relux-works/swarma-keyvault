@@ -8,10 +8,11 @@ import (
 	"os"
 
 	"github.com/relux-works/swarma-keyvault/internal/grants"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
-const prepareUsage = "swarma-keyvault grants prepare --plan FILE|- --owner-mxid MXID --issuer-spki-der FILE"
-const localPrepareUsage = "swarma-keyvault grants local-prepare --plan FILE|- --owner-mxid MXID --issuer-spki-der FILE --requester-spki-der FILE"
+const prepareUsage = "swarma-keyvault grants prepare --plan FILE|- --issuer-spki-der FILE" + ownerIdentityUsage
+const localPrepareUsage = "swarma-keyvault grants local-prepare --plan FILE|- --issuer-spki-der FILE --requester-spki-der FILE" + ownerIdentityUsage
 
 type onceString struct {
 	value string
@@ -96,11 +97,11 @@ func runPrepare(args []string, stdin io.Reader, stdout, stderr io.Writer, local 
 		usageText = localPrepareUsage
 	}
 	usage := func() int { _, _ = fmt.Fprintln(stderr, usageText); return 2 }
-	var plan, owner, spki, requester onceString
+	var plan, spki, requester onceString
 	flags := flag.NewFlagSet("grants prepare", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	ownerOptions := addOwnerFlags(flags)
 	flags.Var(&plan, "plan", "explicit canonical draft file, or - for stdin")
-	flags.Var(&owner, "owner-mxid", "exact owner Matrix account")
 	flags.Var(&spki, "issuer-spki-der", "explicit public P-256 SPKI DER file")
 	if local {
 		flags.Var(&requester, "requester-spki-der", "explicit requester public P-256 DER file")
@@ -112,7 +113,11 @@ func runPrepare(args []string, stdin io.Reader, stdout, stderr io.Writer, local 
 		}
 		return usage()
 	}
-	if (local && (!requester.set || requester.value == "" || requester.value == "-")) || flags.NArg() != 0 || !plan.set || !owner.set || !spki.set || plan.value == "" || owner.value == "" || spki.value == "" || spki.value == "-" {
+	if (local && (!requester.set || requester.value == "" || requester.value == "-")) || flags.NArg() != 0 || !plan.set || !spki.set || plan.value == "" || spki.value == "" || spki.value == "-" {
+		return usage()
+	}
+	owner, err := ownerOptions.config()
+	if err != nil {
 		return usage()
 	}
 	draft, err := readInput(plan.value, stdin, 65536)
@@ -133,9 +138,9 @@ func runPrepare(args []string, stdin io.Reader, stdout, stderr io.Writer, local 
 			_, _ = fmt.Fprintln(stderr, "cannot read bounded requester SPKI DER")
 			return 1
 		}
-		prepared, err = grants.PrepareLocalRepositoryCertificate(draft, owner.value, public, requesterPublic)
+		prepared, err = grants.PrepareLocalRepositoryCertificate(draft, owner.Principal, public, requesterPublic)
 	} else {
-		prepared, err = grants.PrepareRepositoryCertificate(draft, owner.value, public)
+		prepared, err = grants.PrepareRepositoryCertificate(draft, owner.Principal, public)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
@@ -143,7 +148,8 @@ func runPrepare(args []string, stdin io.Reader, stdout, stderr io.Writer, local 
 	}
 	// A failed review sink must not release even an unsigned payload. Neither
 	// stream is a transactional store or an authenticated signing boundary.
-	if n, err := io.WriteString(stderr, prepared.Review); err != nil || n != len(prepared.Review) {
+	review := "Owner key pin: " + ownerkey.PublicPin(owner.Address, public) + prepared.Review
+	if n, err := io.WriteString(stderr, review); err != nil || n != len(review) {
 		return 1
 	}
 	if n, err := stdout.Write(prepared.Payload); err != nil || n != len(prepared.Payload) {

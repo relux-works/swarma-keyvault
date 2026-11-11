@@ -18,13 +18,19 @@ type RecoveryTerminal interface {
 	ReadMnemonic() ([]byte, error)
 }
 
+// RecoveryInventory exposes only public records for advisory planning.
+type RecoveryInventory interface {
+	List() ([]NostrRecord, error)
+	RecoveryList() ([]RecoveryRecord, error)
+}
+
 // RecoveryBackend exposes public metadata and ciphertext only. Native custody
 // creates hardware wrapping keys in the paired, verified helper. A mutation
 // error is uncertain unless the backend returns RecoveryNotAppliedError, which
 // guarantees no effect (including a definite atomic-add duplicate).
 type RecoveryBackend interface {
+	RecoveryInventory
 	NostrBackend
-	RecoveryList() ([]RecoveryRecord, error)
 	RecoveryStore(RecoveryRecord, []byte) error
 	RecoveryDelete(RecoveryRecord) error
 	NostrDelete(NostrRecord) error
@@ -76,11 +82,15 @@ func validateRecoveryRequest(r RecoveryRequest) error {
 }
 
 func (m *RecoveryManager) preflight(q RecoveryRequest) error {
+	return recoveryPreflight(m.backend, q)
+}
+
+func recoveryPreflight(inventory RecoveryInventory, q RecoveryRequest) error {
 	group, _ := nostrAddress(q.Service, "recovery", q.Version)
 	nostr, _ := nostrAddress(q.NostrIdentity, "nostr", q.NostrVersion)
 	namecoin, _ := nostrAddress(q.NamecoinIdentity, "namecoin", q.NamecoinVersion)
 	wanted := map[string]bool{group: true, nostr: true, namecoin: true}
-	groups, err := m.backend.RecoveryList()
+	groups, err := inventory.RecoveryList()
 	if err != nil {
 		return err
 	}
@@ -92,7 +102,7 @@ func (m *RecoveryManager) preflight(q RecoveryRequest) error {
 			return recoveryRefuse("duplicate")
 		}
 	}
-	keys, err := m.backend.List()
+	keys, err := inventory.List()
 	if err != nil {
 		return err
 	}
@@ -117,14 +127,16 @@ func (m *RecoveryManager) Create(q RecoveryRequest, terminal RecoveryTerminal, r
 	if validateRecoveryRequest(q) != nil {
 		return zero, recoveryRefuse("invalid_address")
 	}
-	if terminal == nil || m.backend == nil || m.helper == nil || m.lock == nil || m.random == nil {
-		return zero, recoveryRefuse("unavailable")
-	}
-	if restore && (q.ExpectedNPub == "" || q.ExpectedXPub == "" || q.ExpectedOrigin == "") {
-		return zero, recoveryRefuse("public_pins_required")
+	if restore {
+		if err := q.ValidateRestorePins(); err != nil {
+			return zero, err
+		}
 	}
 	if !restore && (q.ExpectedNPub != "" || q.ExpectedXPub != "" || q.ExpectedOrigin != "") {
 		return zero, recoveryRefuse("invalid_arguments")
+	}
+	if terminal == nil || m.backend == nil || m.helper == nil || m.lock == nil || m.random == nil {
+		return zero, recoveryRefuse("unavailable")
 	}
 	// Creating the lock/prerequisites is an effect, so confirm first.
 	if err := terminal.ConfirmIdentities(recoveryPlan(q)); err != nil {
@@ -291,14 +303,14 @@ func (m *RecoveryManager) Describe(service string, version int) (RecoveryRecord,
 }
 
 type RecoveryDeleteRequest struct {
-	NostrIdentity, NamecoinIdentity string
-	Version                         int
-	ExpectedGroupID                 string
+	NostrIdentity   string
+	Version         int
+	ExpectedGroupID string
 }
 
 func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTerminal) (RecoveryRecord, error) {
 	var zero RecoveryRecord
-	if ValidateName("service", CodeInvalidService, q.NostrIdentity) != nil || ValidateName("service", CodeInvalidService, q.NamecoinIdentity) != nil || q.Version < 1 || q.Version > 2147483647 {
+	if ValidateName("service", CodeInvalidService, q.NostrIdentity) != nil || q.Version < 1 || q.Version > 2147483647 {
 		return zero, recoveryRefuse("invalid_address")
 	}
 	if !lowerHex(q.ExpectedGroupID, 16) || m.lock == nil || m.backend == nil {
@@ -308,7 +320,7 @@ func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTermi
 	if err != nil {
 		return zero, err
 	}
-	if r.GroupID != q.ExpectedGroupID || r.purposeService(r.Namecoin) != q.NamecoinIdentity {
+	if r.GroupID != q.ExpectedGroupID {
 		return zero, recoveryRefuse("public_pin_mismatch")
 	}
 	before, _ := json.Marshal(r)

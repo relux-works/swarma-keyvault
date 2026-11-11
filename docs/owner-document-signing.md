@@ -19,13 +19,29 @@ the public pin before release. There is no new grant, envelope, domain prefix,
 canonicalization or external signature format. A document signature confers no
 platform authority and does not select a grantee or draft delegation text.
 
+
+Verification requires an independently enrolled address-to-SPKI association in
+`--owner-key-pin FILE`. The bounded regular file contains this exact ASCII line,
+including its final LF, with the full lowercase SHA-256 of the enrolled public DER:
+
+```text
+key/SERVICE/grants-owner-v1@N sha256:64_LOWERCASE_HEX_DIGITS
+```
+
+The verifier compares that line with the supplied address and public DER before
+signature verification. Obtain it from the trusted enrollment independently of
+the document, detached signature and their sender. Changing the CLI address while
+reusing another address's association refuses. The document and detached signature
+bytes retain their existing representation. The public review displays this same
+association.
+
 ## Public operations
 
 Inert syntax for an independently accepted build and public synthetic inputs:
 
 ```text
 swarma-keyvault owner-document review --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N
-swarma-keyvault owner-document verify --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N --signature FILE
+swarma-keyvault owner-document verify --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N --signature FILE --owner-key-pin FILE
 swarma-keyvault owner-document sign --document FILE --owner-spki-der FILE --owner-key SERVICE/grants-owner-v1 --owner-key-version N
 ```
 

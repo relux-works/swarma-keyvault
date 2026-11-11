@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
+
+	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 	"reflect"
 	"strings"
 	"testing"
@@ -78,7 +81,7 @@ func TestActualMutationAndReadback(t *testing.T) {
 					}
 					return "ACL-ONE", nil
 				},
-				run: func(binary string, args ...string) ([]byte, int) {
+				run: func(binary string, args ...string) invocation {
 					if binary != "/pinned/vault" {
 						t.Fatal("runner changed the binary")
 					}
@@ -90,21 +93,21 @@ func TestActualMutationAndReadback(t *testing.T) {
 						}
 						switch mode {
 						case "same-public-fixture":
-							return successReply(t, "recovery", fixtureRecord(t, target)), 0
+							return invocation{raw: successReply(t, "recovery", fixtureRecord(t, target)), exit: 0, started: true}
 						case "lost":
-							return []byte("unexpected terminal material"), -1
+							return invocation{raw: []byte("unexpected terminal material"), exit: -1, started: true}
 						case "wrong-target":
 							other := r
 							other.Namecoin.Service = "swapped"
-							return successReply(t, "recovery", other), 0
+							return invocation{raw: successReply(t, "recovery", other), exit: 0, started: true}
 						}
-						return successReply(t, "recovery", r), 0
+						return invocation{raw: successReply(t, "recovery", r), exit: 0, started: true}
 					case "recovery/pub":
 						current := r
 						if mode == "wrong-readback" {
 							current.GroupID = strings.Repeat("02", 16)
 						}
-						return successReply(t, "recovery", current), 0
+						return invocation{raw: successReply(t, "recovery", current), exit: 0, started: true}
 					case "nostr/pub":
 						format := args[len(args)-1]
 						value := r.Nostr.PublicKey
@@ -114,10 +117,10 @@ func TestActualMutationAndReadback(t *testing.T) {
 						if mode == "bad-export" {
 							value = "unexpected private marker"
 						}
-						return successReply(t, "nostr", map[string]any{"format": format, "public_key": value}), 0
+						return invocation{raw: successReply(t, "nostr", map[string]any{"format": format, "public_key": value}), exit: 0, started: true}
 					default:
 						t.Fatalf("unexpected command %s/%s", args[1], args[2])
-						return nil, -1
+						return invocation{raw: nil, exit: -1, started: true}
 					}
 				},
 			}
@@ -153,7 +156,7 @@ func (errorWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 func TestMutationUnconfirmedPublicReference(t *testing.T) {
 	target := publicTarget{"north", "south", 3, 5, 7}
 	good := fixtureRecord(t, target)
-	for _, mode := range []string{"exact", "wrong-target", "bad-op", "bad-exit", "private-field"} {
+	for _, mode := range []string{"exact", "wrong-target", "bad-op", "bad-exit", "private-field", "broken-writer"} {
 		t.Run(mode, func(t *testing.T) {
 			ref := good
 			u := unknownRecovery{"unknown", "generate", ref}
@@ -177,8 +180,14 @@ func TestMutationUnconfirmedPublicReference(t *testing.T) {
 				raw = bytes.Replace(raw, []byte(`"group_id":`), []byte(`"secret":"do not expose","group_id":`), 1)
 			}
 			var out bytes.Buffer
-			_, err = (workflow{out: &out}).mutationReply(raw, code, target, "generate")
-			if err == nil || err.Error() != unknownMutation {
+			w := workflow{out: &out}
+			want := unknownMutation
+			if mode == "broken-writer" {
+				w.out = errorWriter{}
+				want = "recovery_outcome_unknown_public_reference_unavailable_do_not_retry_or_delete"
+			}
+			_, err = w.mutationReply(invocation{raw: raw, exit: code, started: true}, target, "generate")
+			if err == nil || err.Error() != want {
 				t.Fatal("lost stop classification", err)
 			}
 			if mode == "exact" && !strings.HasPrefix(out.String(), "UNCONFIRMED public reference;") || mode != "exact" && out.Len() != 0 {
@@ -228,8 +237,8 @@ func TestConfirmBothIdentities(t *testing.T) {
 	}
 }
 
-// Only the expected duplicate class is treated as a known no-op. Arbitrary
-// child diagnostics cannot be forwarded through the utility.
+// Exact no-effect replies preserve their classes. The same apparent failure
+// after dispatch or with contradictory exit/status remains uncertain.
 func TestMutationRefusalClasses(t *testing.T) {
 	target := publicTarget{"north", "south", 1, 1, 1}
 	for _, tc := range []struct {
@@ -237,15 +246,53 @@ func TestMutationRefusalClasses(t *testing.T) {
 		exit, status int
 	}{
 		{"recovery_duplicate", "recovery_duplicate_no_change", 3, 0},
+		{"recovery_identity_confirmation_failed", "recovery_identity_confirmation_failed", 3, 0},
+		{"recovery_generation_exhausted", "recovery_generation_exhausted", 3, 0},
+		{"recovery_lock_unavailable", "recovery_lock_unavailable", 3, 0},
+		{"recovery_identity_confirmation_failed", unknownMutation, 3, -1},
+		{"recovery_identity_confirmation_failed", unknownMutation, 1, 0},
 		{"security", unknownMutation, 1, -25293},
 		{"recovery_duplicate", unknownMutation, 1, 0},
 		{"recovery_duplicate", unknownMutation, 4, 0},
 	} {
 		var out bytes.Buffer
 		w := workflow{out: &out}
-		_, err := w.mutationReply(failedReply(t, "recovery", tc.code, tc.status), tc.exit, target, "generate")
+		_, err := w.mutationReply(invocation{raw: failedReply(t, "recovery", tc.code, tc.status), exit: tc.exit, started: true}, target, "generate")
 		if err == nil || err.Error() != tc.want || out.Len() != 0 {
 			t.Fatal("wrong refusal class", err)
+		}
+	}
+	w := workflow{out: errorWriter{}}
+	for _, op := range []string{"generate", "restore"} {
+		for _, started := range []bool{false, true} {
+			_, err := w.mutationReply(invocation{exit: -1, started: started}, target, op)
+			want := "vault_child_not_started"
+			if started {
+				want = unknownMutation
+			}
+			if err == nil || err.Error() != want {
+				t.Fatal("failed start and lost child reply were conflated", err)
+			}
+		}
+	}
+}
+
+// The in-process planner preserves a definite exhaustion refusal. An opaque
+// inventory failure cannot become an actionable no-change policy code.
+func TestPlanGenerationExhaustion(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{&keyvault.Refusal{Code: "recovery_generation_exhausted"}, "recovery_generation_exhausted"},
+		{errors.New("private diagnostic"), "vault_plan_refused"},
+	} {
+		w := workflow{planner: plannerFunc(func(keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
+			return keyvault.RecoveryPlan{}, tc.err
+		})}
+		_, err := w.plan(Config{NostrIdentity: "north", NamecoinIdentity: "south"})
+		if err == nil || err.Error() != tc.want {
+			t.Fatal("incorrect advisory refusal", err)
 		}
 	}
 }

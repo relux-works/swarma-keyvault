@@ -17,11 +17,14 @@ const (
 type ArtifactPin struct{ SHA256, CDHash string }
 
 type Release struct {
-	Version, Source, ManifestSHA string
-	Vault, Helper, Foreign       ArtifactPin
+	Version, Source, PlannerSource, ManifestSHA string
+	Vault, Helper, Foreign                      ArtifactPin
 }
 
 func (r Release) validate() error {
+	if !hexValue(r.Source, 20) || r.PlannerSource != r.Source {
+		return refused("release_planner_source_mismatch")
+	}
 	if !hexValue(r.ManifestSHA, 32) {
 		return refused("release_manifest_pin_missing")
 	}
@@ -45,9 +48,10 @@ type installFile struct {
 }
 
 type installation struct {
-	paths   Paths
-	release Release
-	uid     uint32
+	paths     Paths
+	release   Release
+	uid       uint32
+	fileOwner func(string, os.FileInfo) (uint32, bool)
 }
 
 func (p installation) files() []installFile {

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault/signerclient"
 )
@@ -134,11 +136,11 @@ type Paths struct {
 func UserPaths(home, executable, artifactDirectory, version, sourceHead string) (Paths, error) {
 	var zero Paths
 	cleanAbs := func(s string) bool {
-		if !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" || len(s) > 2048 {
+		if !utf8.ValidString(s) || !filepath.IsAbs(s) || filepath.Clean(s) != s || s == "/" || len(s) > 2048 {
 			return false
 		}
-		for i := range len(s) {
-			if s[i] < 0x20 || s[i] > 0x7e {
+		for _, r := range s {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 				return false
 			}
 		}

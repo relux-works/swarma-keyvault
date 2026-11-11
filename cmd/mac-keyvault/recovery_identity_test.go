@@ -25,16 +25,16 @@ func (f *identityCLIProbe) Plan(q keyvault.RecoveryRequest) (keyvault.RecoveryPl
 // Both explicit identity flags reach the typed request unchanged. Missing,
 // mixed, duplicate and malformed identities must stop before factory/TTY use.
 func TestRecoveryIdentityCLIFlags(t *testing.T) {
-	oldB, oldM, oldT, oldL := newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, lockPath
+	oldB, oldM, oldT, oldL := newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock
 	t.Cleanup(func() {
-		newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, lockPath = oldB, oldM, oldT, oldL
+		newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock = oldB, oldM, oldT, oldL
 	})
 	f := &identityCLIProbe{}
 	constructed, opened := 0, 0
 	newRecoveryBackend = func() keyvault.RecoveryBackend { constructed++; return nil }
 	makeRecoveryManager = func(keyvault.RecoveryBackend, keyvault.Locker) recoveryOperations { return f }
 	newRecoveryTerminal = func() (ownerRecoveryTerminal, error) { opened++; return recoveryReceiptTerminal{}, nil }
-	lockPath = func() (string, error) { return t.TempDir() + "/lock", nil }
+	vaultLock = func() (keyvault.FileLock, error) { return keyvault.FileLock{Path: t.TempDir() + "/lock"}, nil }
 	invoke := func(args ...string) int {
 		var out, diagnostic bytes.Buffer
 		return run(append([]string{"--json", "recovery"}, args...), &out, &diagnostic)
@@ -69,6 +69,7 @@ func TestRecoveryIdentityCLIFlags(t *testing.T) {
 		{"plan", "--nostr-identity", "north", "--namecoin-identity", "south", "--nostr-version", "0"},
 		{"plan", "--nostr-identity", "north", "--namecoin-identity", "south", "--namecoin-version", "01"},
 		{"plan", "--nostr-identity", "north", "--namecoin-identity", "south", "--version", "1", "--version", "2"},
+		{"plan", "--service", "north"},
 		{"plan", "--service", "", "--nostr-identity", "north", "--namecoin-identity", "south"},
 	} {
 		beforeC, beforeO, beforeR := constructed, opened, len(f.requests)

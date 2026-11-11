@@ -27,6 +27,7 @@ const (
 	MaxLines         = 256
 	MaxLineScalars   = 160
 	MaxSPKIBytes     = 1024
+	MaxOwnerPinBytes = 192
 )
 
 var (
@@ -37,6 +38,7 @@ var (
 	ErrConfirmation      = errors.New("owner-document-not-confirmed: complete unchanged text must be confirmed")
 	ErrNativeUnavailable = errors.New("owner-document-native-unavailable: full-document AppKit/Secure Enclave review requires macOS and its matching native helper")
 	ErrSignature         = errors.New("owner-document-signature-invalid: exact document did not verify with strict low-S DER under the independent public pin")
+	ErrOwnerPin          = errors.New("owner-document-owner-pin: configured key address or public DER does not match the independent association")
 	ErrOutcomeUnknown    = errors.New("owner-document-outcome-unknown: private dispatch may have occurred; no signature released; do not retry")
 )
 
@@ -176,7 +178,8 @@ func (p *Prepared) Render(w io.Writer) error {
 	if p.document[len(p.document)-1] == '\n' {
 		lf = "present"
 	}
-	header := fmt.Sprintf("UNSIGNED exact UTF-8 document; %d bytes; terminal LF %s\nKey: %s\nSHA256: %x\nBEGIN DOCUMENT (next %d bytes)\n", len(p.document), lf, p.address, p.digest, len(p.document))
+	header := fmt.Sprintf("UNSIGNED exact UTF-8 document; %d bytes; terminal LF %s\nKey: %s\nOwner key pin: %sSHA256: %x\nBEGIN DOCUMENT (next %d bytes)\n",
+		len(p.document), lf, p.address, ownerkey.PublicPin(p.address, p.public), p.digest, len(p.document))
 	for _, part := range [][]byte{[]byte(header), bytes.Clone(p.document), []byte("\nEND DOCUMENT (separator LF above is not document data)\n")} {
 		if n, err := w.Write(part); err != nil {
 			return err
@@ -197,7 +200,14 @@ func (p *Prepared) Prompt(digest []byte) string {
 	return "sign exact UTF-8 document SHA256 " + hex.EncodeToString(p.digest[:])
 }
 
-func (p *Prepared) Verify(signatureDER []byte) error {
+func (p *Prepared) Verify(signatureDER, trustedOwnerPin []byte) error {
+	if p == nil || !bytes.Equal(trustedOwnerPin, []byte(ownerkey.PublicPin(p.address, p.public))) {
+		return ErrOwnerPin
+	}
+	return p.verifySignature(signatureDER)
+}
+
+func (p *Prepared) verifySignature(signatureDER []byte) error {
 	if p == nil || len(p.document) == 0 {
 		return ErrInput
 	}
@@ -280,7 +290,7 @@ func (p *Prepared) signNative(ctx context.Context, manager *keyvault.Manager, ch
 	if err != nil {
 		return nil, errors.Join(ErrOutcomeUnknown, err)
 	}
-	if err := p.Verify(der); err != nil {
+	if err := p.verifySignature(der); err != nil {
 		return nil, errors.Join(ErrOutcomeUnknown, err)
 	}
 	return der, nil

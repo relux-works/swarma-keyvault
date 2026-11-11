@@ -23,11 +23,11 @@ func (t *recoveryDeleteTerminal) ConfirmIdentities(p RecoveryPlan) error {
 	return nil
 }
 
-// Both identities and the group pin select one immutable public snapshot.
-// Missing/wrong B, absent terminal, mismatch/EOF and a changed snapshot cause
+// The Nostr anchor and group pin select a public snapshot with both identities.
+// Wrong pin, absent terminal, mismatch/EOF and a changed snapshot cause
 // no deletion. A matching unequal-identity positive removes only that group.
 func TestRecoveryDeleteBothIdentities(t *testing.T) {
-	for _, mode := range []string{"missing-b", "wrong-b", "wrong-pin", "no-terminal", "mismatch", "eof", "changed", "ok"} {
+	for _, mode := range []string{"wrong-pin", "no-terminal", "mismatch", "eof", "changed", "ok"} {
 		t.Run(mode, func(t *testing.T) {
 			m, f, _ := recoveryTestManager(t)
 			q := RecoveryRequest{NostrIdentity: "north", NamecoinIdentity: "south", Version: 1, NostrVersion: 2, NamecoinVersion: 3}
@@ -37,16 +37,11 @@ func TestRecoveryDeleteBothIdentities(t *testing.T) {
 			}
 			parent := filepath.Join(t.TempDir(), "absent")
 			m.lock = FileLock{Path: filepath.Join(parent, "lock")}
-			d := RecoveryDeleteRequest{NostrIdentity: "north", NamecoinIdentity: "south", Version: 1, ExpectedGroupID: r.GroupID}
+			d := RecoveryDeleteRequest{NostrIdentity: "north", Version: 1, ExpectedGroupID: r.GroupID}
 			term := &recoveryDeleteTerminal{}
 			var terminal RecoveryTerminal = term
 			want := "public_pin_mismatch"
 			switch mode {
-			case "missing-b":
-				d.NamecoinIdentity = ""
-				want = "invalid_address"
-			case "wrong-b":
-				d.NamecoinIdentity = "north"
 			case "wrong-pin":
 				d.ExpectedGroupID = "11111111111111111111111111111111"
 			case "no-terminal":
@@ -86,7 +81,7 @@ func TestRecoveryDeleteBothIdentities(t *testing.T) {
 			if err != nil || got.PurposeAccount(got.Nostr) != "north/nostr@2" || got.PurposeAccount(got.Namecoin) != "south/namecoin@3" || f.deletes != 1 || len(f.groups) != 0 || len(f.data) != 0 {
 				t.Fatal("confirmed deletion failed", err)
 			}
-			if term.identityConfirmation != 1 || len(term.plans) != 1 || term.plans[0].NamecoinRecord != "south/namecoin@3" {
+			if term.identityConfirmation != 1 || len(term.plans) != 1 || term.plans[0].NostrRecord != "north/nostr@2" || term.plans[0].NamecoinRecord != "south/namecoin@3" {
 				t.Fatal("confirmation lost one identity")
 			}
 		})

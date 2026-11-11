@@ -111,14 +111,16 @@ jobs:
           go mod verify
           go build -o "$fixture_bin/labcompose" ./tools/labcompose
           go build -o "$fixture_bin/labownnode" ./tools/labownnode
+          go build -o "$fixture_bin/candidate-swarma-keyvault" ./cmd/swarma-keyvault
           # Fake CLI transport only: avoid per-call race-runtime exit sleeps.
           # The actual wrapper and protocol tests remain in the full race suite.
           go test -c -o "$fixture_bin/fake-node-cli" ./lab/namecoinwrapper
-          for binary in swarma-keyvault labtestsigner labcompose labownnode fake-node-cli; do
+          for binary in swarma-keyvault labtestsigner labcompose labownnode candidate-swarma-keyvault fake-node-cli; do
             test -f "$fixture_bin/$binary" && test -x "$fixture_bin/$binary" && test -O "$fixture_bin/$binary"
             test ! -L "$fixture_bin/$binary"
           done
           echo "LAB_KEYVAULT_CLI=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
+          echo "LAB_CANDIDATE_KEYVAULT_CLI=$fixture_bin/candidate-swarma-keyvault" >> "$GITHUB_ENV"
           echo "KEYVAULT_BIN=$fixture_bin/swarma-keyvault" >> "$GITHUB_ENV"
           echo "LAB_TEST_SIGNER=$fixture_bin/labtestsigner" >> "$GITHUB_ENV"
           echo "LAB_COMPOSE=$fixture_bin/labcompose" >> "$GITHUB_ENV"

@@ -10,14 +10,14 @@ import (
 
 // Populated by the release packager after the matched pair is built and signed.
 // A source build with no release pins cannot start an attended setup.
-var releaseVersion, releaseSource, releaseManifestSHA string
+var releaseVersion, releaseSource, releasePlannerSource, releaseManifestSHA string
 var releaseVaultSHA, releaseVaultCDHash string
 var releaseHelperSHA, releaseHelperCDHash string
 var releaseForeignSHA, releaseForeignCDHash string
 
 func main() {
 	os.Exit(seedsetup.Run(os.Args[1:], seedsetup.Release{
-		Version: releaseVersion, Source: releaseSource, ManifestSHA: releaseManifestSHA,
+		Version: releaseVersion, Source: releaseSource, PlannerSource: releasePlannerSource, ManifestSHA: releaseManifestSHA,
 		Vault:   seedsetup.ArtifactPin{SHA256: releaseVaultSHA, CDHash: releaseVaultCDHash},
 		Helper:  seedsetup.ArtifactPin{SHA256: releaseHelperSHA, CDHash: releaseHelperCDHash},
 		Foreign: seedsetup.ArtifactPin{SHA256: releaseForeignSHA, CDHash: releaseForeignCDHash},

@@ -1,7 +1,7 @@
 # Offline lab fixture prerequisites
 
 The full `go test -race ./...` suite includes subprocess controls in
-`lab/namecoinwrapper` and `tools/labownnode`. They require five separately built
+`lab/namecoinwrapper` and `tools/labownnode`. They require six separately built
 executables. Missing fixtures cause **NOT RUN** diagnostics and a nonzero suite
 exit; those lanes have not passed. Do not use `-skip`, package exclusions or
 `t.Skip` to turn a missing fixture into a green full-suite result. Hosted CI
@@ -10,13 +10,14 @@ continues to require these fixtures and runs every Linux-buildable package.
 | Variable | Required executable and source |
 | --- | --- |
 | `LAB_KEYVAULT_CLI` | Independent configurable verifier, commit `12b3ffac1993cc5b35074b569018b4db7c9bbd82`, tree `a553906c37721d8f2adbdb1051cf1cef0eb54c49` |
+| `LAB_CANDIDATE_KEYVAULT_CLI` | `cmd/swarma-keyvault` built from the candidate for the wrapper docking check |
 | `LAB_TEST_SIGNER` | Explicit-owner synthetic lab signer, commit `1045aac3ea204722aaaf0e60dac69eb8f622a7fb`, tree `b129a24428cdf5f2cc56fa5d9f27749c4a12065a` |
 | `LAB_COMPOSE` | `tools/labcompose` built from the candidate |
 | `LAB_OWN_NODE` | `tools/labownnode` built from the candidate |
 | `LAB_NODE_FIXTURE_CLI` | Non-race `go test -c` binary for candidate `lab/namecoinwrapper` |
 
 `KEYVAULT_BIN` aliases the independent verifier for existing CLI controls.
-The candidate's default verifier cannot replace the pinned configurable one.
+The pinned verifier and candidate verifier exercise independent source builds.
 These are inert offline controls with synthetic custody and public node replies;
 they do not qualify native custody, a live node or an installed route.
 
@@ -80,14 +81,16 @@ go -C third_party/chainhash mod download
 go -C third_party/chainhash mod verify
 go build -o "$fixture_bin/labcompose" ./tools/labcompose
 go build -o "$fixture_bin/labownnode" ./tools/labownnode
+go build -o "$fixture_bin/candidate-swarma-keyvault" ./cmd/swarma-keyvault
 # Avoid a race-runtime exit sleep for every one-shot fake CLI call.
 # The actual wrapper, bridge and protocol controls run in the race parent.
 go test -c -o "$fixture_bin/fake-node-cli" ./lab/namecoinwrapper
-for binary in swarma-keyvault labtestsigner labcompose labownnode fake-node-cli; do
+for binary in swarma-keyvault labtestsigner labcompose labownnode candidate-swarma-keyvault fake-node-cli; do
   test -f "$fixture_bin/$binary" && test -x "$fixture_bin/$binary"
   test -O "$fixture_bin/$binary" && test ! -L "$fixture_bin/$binary"
 done
 export LAB_KEYVAULT_CLI="$fixture_bin/swarma-keyvault"
+export LAB_CANDIDATE_KEYVAULT_CLI="$fixture_bin/candidate-swarma-keyvault"
 export KEYVAULT_BIN="$LAB_KEYVAULT_CLI"
 export LAB_TEST_SIGNER="$fixture_bin/labtestsigner"
 export LAB_COMPOSE="$fixture_bin/labcompose"

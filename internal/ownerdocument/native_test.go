@@ -120,6 +120,7 @@ func nativeManagerFor(t *testing.T, address keyvault.Address) (*keyvault.Manager
 	return m, store, f
 }
 
+// Synthetic native dispatch preserves the exact full text and configured key through review, confirmation and public signature verification.
 func TestNativeTypedDispatchExactBytesOrder(t *testing.T) {
 	for _, text := range []string{"Exact without terminal LF", strings.Repeat("Русский полный текст.\n", 60)} {
 		t.Run(fmt.Sprint(len(text)), func(t *testing.T) {
@@ -127,7 +128,7 @@ func TestNativeTypedDispatchExactBytesOrder(t *testing.T) {
 			m, _, f := nativeManagerFixture(t)
 			checks := 0
 			der, err := p.signNative(context.Background(), m, func() error { checks++; return nil })
-			if err != nil || p.Verify(der) != nil {
+			if err != nil || p.Verify(der, []byte(ownerkey.PublicPin(p.address, p.public))) != nil {
 				t.Fatal("typed native fixture failed", err)
 			}
 			f.events = append(f.events, "public-verify")
@@ -218,7 +219,7 @@ func TestNativeTypedDispatchConfiguredAddress(t *testing.T) {
 	}
 	m, _, peer := nativeManagerFor(t, address)
 	der, err := p.signNative(context.Background(), m, func() error { return nil })
-	if err != nil || p.Verify(der) != nil || peer.calls != 1 || peer.last.Document.Label != address.Label() ||
+	if err != nil || p.Verify(der, []byte(ownerkey.PublicPin(p.address, p.public))) != nil || peer.calls != 1 || peer.last.Document.Label != address.Label() ||
 		!strings.HasSuffix(peer.last.Document.Reason, " with second-owner/grants-owner-v1 v23") {
 		t.Fatal("configured key did not bind typed review and signature", err)
 	}

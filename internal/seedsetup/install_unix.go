@@ -27,19 +27,28 @@ func ownerOf(info os.FileInfo) (uint32, bool) {
 	return st.Uid, true
 }
 
+// The runtime always uses OS ownership. Tests may project filesystem ownership
+// for two synthetic accounts without changing any real account or file owner.
+func (p installation) owner(path string, info os.FileInfo) (uint32, bool) {
+	if p.fileOwner != nil {
+		return p.fileOwner(path, info)
+	}
+	return ownerOf(info)
+}
+
 // Parent walking refuses symlinks and writable foreign components. Allow root
 // and current-user ancestors, since the shared home base is system-owned.
-func checkDirectoryChain(dir string, uid uint32) error {
+func (p installation) checkDirectoryChain(dir string) error {
 	for path := dir; ; path = filepath.Dir(path) {
 		s, err := os.Lstat(path)
 		if err != nil {
 			return refused("directory_chain_missing")
 		}
-		owner, ok := ownerOf(s)
+		owner, ok := p.owner(path, s)
 		// A root-owned sticky ancestor protects its existing children's
 		// names; the selected directory itself may never be shared/writable.
 		stickyAncestor := path != dir && owner == 0 && s.Mode()&os.ModeSticky != 0
-		if !s.IsDir() || s.Mode().Perm()&0022 != 0 && !stickyAncestor || !ok || owner != 0 && owner != uid {
+		if !s.IsDir() || s.Mode().Perm()&0022 != 0 && !stickyAncestor || !ok || owner != 0 && owner != p.uid {
 			return refused("directory_chain_unsafe")
 		}
 		if filepath.Dir(path) == path {
@@ -48,7 +57,7 @@ func checkDirectoryChain(dir string, uid uint32) error {
 	}
 }
 
-func optionalOwned(path string, uid uint32, directory bool, mode os.FileMode) (bool, error) {
+func (p installation) optionalOwned(path string, directory bool, mode os.FileMode) (bool, error) {
 	s, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -56,8 +65,8 @@ func optionalOwned(path string, uid uint32, directory bool, mode os.FileMode) (b
 	if err != nil {
 		return false, refused("private_path_unavailable")
 	}
-	owner, ok := ownerOf(s)
-	if !ok || owner != uid || s.Mode().Perm() != mode || s.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
+	owner, ok := p.owner(path, s)
+	if !ok || owner != p.uid || s.Mode().Perm() != mode || s.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
 		directory && !s.IsDir() || !directory && !s.Mode().IsRegular() {
 		return false, refused("private_path_unsafe")
 	}
@@ -71,8 +80,8 @@ func absent(path string) error {
 	return nil
 }
 
-func openAsset(path string, uid uint32) (*os.File, error) {
-	if err := checkDirectoryChain(filepath.Dir(path), uid); err != nil {
+func (p installation) openAsset(path string) (*os.File, error) {
+	if err := p.checkDirectoryChain(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
@@ -85,8 +94,8 @@ func openAsset(path string, uid uint32) (*os.File, error) {
 		f.Close()
 		return nil, refused("release_artifact_unavailable")
 	}
-	owner, ok := ownerOf(s)
-	if !s.Mode().IsRegular() || s.Size() < 1 || s.Size() > maxAssetSize || !ok || owner != uid ||
+	owner, ok := p.owner(path, s)
+	if !s.Mode().IsRegular() || s.Size() < 1 || s.Size() > maxAssetSize || !ok || owner != p.uid ||
 		s.Mode().Perm()&0022 != 0 || s.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
 		f.Close()
 		return nil, refused("release_artifact_unsafe")
@@ -104,7 +113,7 @@ func hashBounded(r io.Reader, want string) error {
 }
 
 func (p installation) verifyFile(path string, spec installFile, run runner) error {
-	f, err := openAsset(path, p.uid)
+	f, err := p.openAsset(path)
 	if err != nil {
 		return err
 	}
@@ -115,20 +124,20 @@ func (p installation) verifyFile(path string, spec installFile, run runner) erro
 	if spec.code == "" {
 		return nil
 	}
-	if _, status := run("/usr/bin/codesign", "--verify", "--strict", path); status != 0 {
+	if reply := run("/usr/bin/codesign", "--verify", "--strict", path); !reply.started || reply.exit != 0 {
 		return refused("release_artifact_signature")
 	}
-	raw, status := run("/usr/bin/codesign", "-d", "-r-", path)
+	reply := run("/usr/bin/codesign", "-d", "-r-", path)
 	want := "# designated => cdhash H\"" + spec.code + "\""
 	count := 0
-	for _, line := range strings.Split(string(raw), "\n") {
+	for _, line := range strings.Split(string(reply.raw), "\n") {
 		if line == want {
 			count++
 		} else if strings.HasPrefix(line, "# designated =>") {
 			return refused("release_artifact_code_identity")
 		}
 	}
-	if status != 0 || count != 1 {
+	if !reply.started || reply.exit != 0 || count != 1 {
 		return refused("release_artifact_code_identity")
 	}
 	opened, openedErr := f.Stat()
@@ -140,7 +149,7 @@ func (p installation) verifyFile(path string, spec installFile, run runner) erro
 }
 
 func (p installation) checkDestinations() error {
-	if err := checkDirectoryChain(filepath.Dir(p.paths.Root), p.uid); err != nil {
+	if err := p.checkDirectoryChain(filepath.Dir(p.paths.Root)); err != nil {
 		return err
 	}
 	// Home need not be private to read/search, but it belongs to this OS user.
@@ -148,12 +157,12 @@ func (p installation) checkDestinations() error {
 	if err != nil {
 		return refused("home_unavailable")
 	}
-	owner, ok := ownerOf(s)
+	owner, ok := p.owner(p.paths.Home, s)
 	if !ok || owner != p.uid || !s.IsDir() || s.Mode().Perm()&0022 != 0 {
 		return refused("home_ownership")
 	}
 	for _, dir := range p.installParents() {
-		if _, err := optionalOwned(dir, p.uid, true, 0700); err != nil {
+		if _, err := p.optionalOwned(dir, true, 0700); err != nil {
 			return err
 		}
 	}
@@ -168,15 +177,15 @@ func (p installation) checkLockPaths() error {
 		filepath.Dir(p.paths.Lock) != p.paths.LockParents[1] {
 		return refused("invalid_lock_paths")
 	}
-	if err := checkDirectoryChain(filepath.Dir(p.paths.LockParents[0]), p.uid); err != nil {
+	if err := p.checkDirectoryChain(filepath.Dir(p.paths.LockParents[0])); err != nil {
 		return err
 	}
 	for _, dir := range p.paths.LockParents {
-		if _, err := optionalOwned(dir, p.uid, true, 0700); err != nil {
+		if _, err := p.optionalOwned(dir, true, 0700); err != nil {
 			return err
 		}
 	}
-	_, err := optionalOwned(p.paths.Lock, p.uid, false, 0600)
+	_, err := p.optionalOwned(p.paths.Lock, false, 0600)
 	return err
 }
 
@@ -195,7 +204,7 @@ func (p installation) preflight(run runner) error {
 func (p installation) installFile(spec installFile, run runner) error {
 	source := filepath.Join(p.paths.ArtifactDirectory, spec.relative)
 	dest := filepath.Join(p.paths.InstallDirectory, spec.relative)
-	src, err := openAsset(source, p.uid)
+	src, err := p.openAsset(source)
 	if err != nil {
 		return err
 	}
@@ -223,7 +232,7 @@ func (p installation) installFile(spec installFile, run runner) error {
 	if syncErr != nil || closeErr != nil {
 		return refused("install_copy_no_retry")
 	}
-	f, err := openAsset(dest, p.uid)
+	f, err := p.openAsset(dest)
 	if err != nil {
 		return err
 	}
@@ -235,7 +244,7 @@ func (p installation) installFile(spec installFile, run runner) error {
 	if hashErr != nil {
 		return refused("install_integrity_no_retry")
 	}
-	if exists, err := optionalOwned(dest, p.uid, false, spec.mode); !exists || err != nil {
+	if exists, err := p.optionalOwned(dest, false, spec.mode); !exists || err != nil {
 		return refused("installed_artifact_custody")
 	}
 	return p.verifyFile(dest, spec, run)
@@ -246,7 +255,7 @@ func (p installation) install(run runner) error {
 		return err
 	}
 	for _, path := range p.installParents() {
-		exists, err := optionalOwned(path, p.uid, true, 0700)
+		exists, err := p.optionalOwned(path, true, 0700)
 		if err != nil {
 			return err
 		}
@@ -269,29 +278,29 @@ func (p installation) install(run runner) error {
 	return nil
 }
 
-func checkCappedOutput(stdout, stderr *capped, code int, allowStderr bool) ([]byte, int) {
+func checkCappedOutput(stdout, stderr *capped, code int, allowStderr bool) invocation {
 	if stdout.full || stderr.full || !allowStderr && stderr.Len() != 0 {
 		clear(stdout.Bytes())
 		clear(stderr.Bytes())
-		return nil, -1
+		return invocation{exit: -1, started: true}
 	}
 	if allowStderr {
-		return bytes.Join([][]byte{stdout.Bytes(), stderr.Bytes()}, []byte("\n")), code
+		return invocation{raw: bytes.Join([][]byte{stdout.Bytes(), stderr.Bytes()}, []byte("\n")), exit: code, started: true}
 	}
-	return stdout.Bytes(), code
+	return invocation{raw: stdout.Bytes(), exit: code, started: true}
 }
 
 func execute(ctx context.Context, p installation, w workflow, c Config, ids Identities) error {
 	if err := p.preflight(w.run); err != nil {
 		return err
 	}
-	actual, err := w.plan(p.sourceVault(), c)
+	actual, err := w.plan(c)
 	if err != nil {
 		return err
 	}
 	// Disposable means a new exact slot; even if caller chose a previously used
 	// qualification identity, never select a different generation for it.
-	qual, err := w.plan(p.sourceVault(), Config{NostrIdentity: ids.QualificationNostr, NamecoinIdentity: ids.QualificationNamecoin, Version: 1, NostrVersion: 1, NamecoinVersion: 1})
+	qual, err := w.plan(Config{NostrIdentity: ids.QualificationNostr, NamecoinIdentity: ids.QualificationNamecoin, Version: 1, NostrVersion: 1, NamecoinVersion: 1})
 	if err != nil {
 		return err
 	}

@@ -47,8 +47,8 @@ var (
 	newBackend = func() keyvault.Backend {
 		return keyvault.RoutedBackend{Keychain: keyvault.NewSecurityStore(), Enclave: describedEnclave(keyvault.DefaultEnclaveStore())}
 	}
-	lockPath = keyvault.DefaultLockPath
-	now      = time.Now
+	vaultLock = keyvault.DefaultFileLock
+	now       = time.Now
 )
 
 func main() {
@@ -328,11 +328,11 @@ func requireNoArguments(command string, rest []string) error {
 }
 
 func newManager() (*keyvault.Manager, error) {
-	path, err := lockPath()
+	lock, err := vaultLock()
 	if err != nil {
 		return nil, fmt.Errorf("lock path: %w", err)
 	}
-	manager := keyvault.NewManager(newBackend(), keyvault.FileLock{Path: path}, localOrigin())
+	manager := keyvault.NewManager(newBackend(), lock, localOrigin())
 	// One clock for created stamps, the validity gate of sign and the
 	// operations describe prints.
 	manager.SetClock(now)
