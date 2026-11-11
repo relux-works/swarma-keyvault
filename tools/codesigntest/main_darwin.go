@@ -71,6 +71,9 @@ func fixtureMode(mode string) bool {
 }
 
 func supervise(mode string) (result error) {
+	if err := codesigntest.CheckHostHealth(); err != nil {
+		return err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -119,6 +122,9 @@ func openLane() (*codesigntest.Lane, string, error) {
 }
 
 func worker(mode string) (result error) {
+	if err := codesigntest.CheckHostHealth(); err != nil {
+		return err
+	}
 	if os.Getenv(codesigntest.OptInEnv) != "1" || os.Getenv("MAC_KEYVAULT_SKIP_KEYCHAIN") != "1" {
 		return errors.New("native fixtures require KEYVAULT_CODESIGN_TESTS=1 and MAC_KEYVAULT_SKIP_KEYCHAIN=1")
 	}
@@ -202,6 +208,9 @@ func (r runner) command(dir, optIn, binary string, args ...string) *exec.Cmd {
 }
 
 func (r runner) build(name, pkg string, flags ...string) (string, error) {
+	if err := codesigntest.CheckHostHealth(); err != nil {
+		return "", err
+	}
 	path := filepath.Join(r.path, name+".test")
 	args := append([]string{"test", "-c", "-p", "1", "-o", path}, flags...)
 	args = append(args, "./"+pkg)
@@ -215,6 +224,9 @@ func (r runner) build(name, pkg string, flags ...string) (string, error) {
 }
 
 func (r runner) test(path, pkg, selection, optIn string, confined bool) ([]byte, error) {
+	if err := codesigntest.CheckHostHealth(); err != nil {
+		return nil, err
+	}
 	binary := path
 	args := []string{"-test.run=" + selection, "-test.parallel=1", "-test.count=1", "-test.timeout=10m", "-test.v"}
 	if confined {

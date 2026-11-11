@@ -85,12 +85,18 @@ and the three native KEK code-inspector fixtures. Run those fixtures on macOS
 with cgo, by themselves, from the repository root:
 
 ```sh
+test ! -e "$HOME/Library/Application Support/host-health/exec-degraded" || exit 1
 CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
 MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
 The runner uses the account's registered home and requires a physical path
-whose components are directories. One exclusive lock covers that account's
+whose components are directories. Before starting its worker and each new
+build or test executable, it checks the fixed host-watch flag at
+`~/Library/Application Support/host-health/exec-degraded` with an in-process
+stat. A present flag, including malformed contents, or an inspection error
+refuses new work. The runner leaves the flag and any retained files in place.
+One exclusive lock covers that account's
 checkouts. Run the lane under one designated account on a Mac. Other accounts
 use independent lanes. The runner compiles and runs both test packages
 serially under exec-level Keychain confinement. It checks the default skips

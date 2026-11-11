@@ -24,6 +24,28 @@ const (
 
 var ErrBusy = errors.New("codesign test lane is busy")
 
+// CheckHostHealth refuses new fixture work while host-watch reports degraded
+// execution. The fixed path uses the registered account home, like the lane.
+func CheckHostHealth() error {
+	home, err := AccountHome()
+	if err != nil {
+		return err
+	}
+	return checkHostHealth(home)
+}
+
+func checkHostHealth(home string) error {
+	path := filepath.Join(home, "Library", "Application Support", "host-health", "exec-degraded")
+	_, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot check host-watch exec-degraded: %w", err)
+	}
+	return errors.New("host-watch exec-degraded is present; codesign fixture work cannot start")
+}
+
 // StateDir resolves a fixed location in the real account home and verifies
 // its parents without following Library or Application Support symlinks.
 func StateDir(prepare bool) (string, error) {
