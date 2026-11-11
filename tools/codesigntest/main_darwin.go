@@ -272,10 +272,8 @@ func (r runner) confined(name, pkg, selection string, tests ...string) error {
 		}
 	}
 	if name == "recovery" {
-		for _, mode := range []string{"hardened", "no-runtime", "wrong-hash", "debug-entitlement"} {
-			if !bytes.Contains(out, []byte("--- PASS: TestRecoveryActualChildCodeBoundary/"+mode+" (")) {
-				return fmt.Errorf("recovery native identity mode %s did not pass", mode)
-			}
+		if err := codesigntest.CheckRecoveryEvidence(out, r.path); err != nil {
+			return err
 		}
 	}
 	if name == "kek" && !bytes.Contains(out, []byte("exact trust refusal and zero attested facts verified")) {

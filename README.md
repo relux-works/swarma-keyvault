@@ -89,24 +89,26 @@ CGO_ENABLED=1 go build -p 1 -o .temp/keyvault-codesigntest ./tools/codesigntest
 MAC_KEYVAULT_SKIP_KEYCHAIN=1 KEYVAULT_CODESIGN_TESTS=1 .temp/keyvault-codesigntest run
 ```
 
-The runner uses the account's registered home and holds one exclusive lock
-across that account's checkouts. Run the lane under one designated account on
-a Mac. Other macOS accounts use independent lanes. It serially compiles and runs the two test packages under
-exec-level Keychain confinement. It checks that the same test executables skip
-the fixtures with opt-in disabled, then builds each public helper once and
-retains the copies. The combined lane compiles two distinct fixture families,
-the recovery pipe helper and the KEK socket client. It exercises public test code and uses no installed keys.
+The runner uses the account's registered home and requires a physical path
+whose components are directories. One exclusive lock covers that account's
+checkouts. Run the lane under one designated account on a Mac. Other accounts
+use independent lanes. The runner compiles and runs both test packages
+serially under exec-level Keychain confinement. It checks the default skips
+with the same test executables, then compiles one recovery pipe helper and
+one KEK socket client and retains their copies. It checks native recovery
+status and request receipts independently of the subtest verdicts.
 
-The runner prints the retained run path and process group. The private directory
+The runner prints the retained run path and process group. The private
 `~/Library/Application Support/swarma-keyvault-codesigntest/test-lane/` holds
-at most one run tree at a time, with up to 24 executable files from the fixed fixture matrix plus small public fixture
-and state files. Go's ordinary build cache is separate. The next opt-in run or
-the explicit command below removes an eligible earlier routine tree under the
-same lock. Cleanup requires at least ten minutes since the prior process group's exit
-was verified. A reboot establishes exit for a previous boot, and the runner
-starts the retention period when it first records that boundary. Unknown state
-keeps the tree interlocked. Cleanup records the authorized directory identity
-outside the tree so a retry can resume an interrupted removal.
+at most one run tree, with up to 24 executable files from the fixed fixture
+matrix plus small public fixture and state files. Go's ordinary build cache
+is separate. The next opt-in run or the explicit cleanup command removes an
+eligible routine tree under the same lock. The retention period begins when
+the runner first verifies process-group exit, including exit established by
+a reboot. Cleanup requires ten minutes of retention and rechecks same-boot
+group liveness. Unknown state keeps the tree interlocked. Cleanup records the
+authorized directory identity and run metadata outside the tree so a retry
+can resume an interrupted removal.
 
 ```sh
 .temp/keyvault-codesigntest cleanup run-REPLACE_WITH_REPORTED_ID

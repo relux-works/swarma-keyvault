@@ -33,7 +33,7 @@ func (l *Lane) cleanup(name string, observed bool, now time.Time, gone func(int)
 	raw, err := readState(l.dir, approval)
 	switch {
 	case err == nil:
-		return l.resumeCleanup(path, approval, now, raw, remove)
+		return l.resumeCleanup(path, approval, now, raw, gone, remove)
 	case !os.IsNotExist(err):
 		return err
 	}
@@ -74,12 +74,12 @@ func (l *Lane) cleanup(name string, observed bool, now time.Time, gone func(int)
 	if err := writeState(filepath.Join(l.dir, approval), raw); err != nil {
 		return err
 	}
-	return l.resumeCleanup(path, approval, now, raw, remove)
+	return l.resumeCleanup(path, approval, now, raw, gone, remove)
 }
 
 // The sidecar survives an interrupted removal and binds the approved decision
 // to one directory inode. A replacement directory never inherits approval.
-func (l *Lane) resumeCleanup(path, approval string, now time.Time, raw []byte, remove func(string) error) error {
+func (l *Lane) resumeCleanup(path, approval string, now time.Time, raw []byte, gone func(int) (bool, error), remove func(string) error) error {
 	var record cleanupRecord
 	if err := json.Unmarshal(raw, &record); err != nil ||
 		record.Name != filepath.Base(path) || record.Run.Boot == "" ||
@@ -95,6 +95,20 @@ func (l *Lane) resumeCleanup(path, approval string, now time.Time, raw []byte, r
 		return errors.New("retained cleanup directory identity changed")
 	case err != nil && !os.IsNotExist(err):
 		return err
+	}
+	if ino != 0 {
+		current, err := readRun(path)
+		switch {
+		case err == nil && !record.Run.matches(current):
+			return errors.New("retained cleanup run metadata changed")
+		case err != nil && !os.IsNotExist(err):
+			return fmt.Errorf("retained cleanup run metadata is unknown: %w", err)
+		}
+		if record.Run.Boot == l.boot {
+			if err := requireGroupGone(record.Run.Group, gone); err != nil {
+				return err
+			}
+		}
 	}
 	if err := healthy(l.dir); err != nil {
 		return err

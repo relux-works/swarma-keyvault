@@ -144,16 +144,27 @@ func checkHeldLock(dir string, fd int) error {
 		inherited.Dev != current.Dev || inherited.Ino != current.Ino {
 		return errors.New("codesign fixture requires the inherited lane lock")
 	}
-	probe, err := Lock(dir)
-	if err == nil {
-		probe.Close()
-		return errors.New("codesign fixture parent did not hold the lane lock")
-	}
-	if !errors.Is(err, ErrBusy) {
+	probe, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
 		return err
 	}
-	// The independent descriptor found an existing lock. Only the inherited
-	// open description can take it again without contending with that holder.
+	defer probe.Close()
+	var opened syscall.Stat_t
+	if err := syscall.Fstat(int(probe.Fd()), &opened); err != nil || !validLock(&opened) ||
+		opened.Dev != inherited.Dev || opened.Ino != inherited.Ino {
+		return errors.New("codesign fixture lock changed during admission")
+	}
+	// A shared probe only contends with an exclusive lock. A free or
+	// shared-only file is refused without touching the inherited lock.
+	err = syscall.Flock(int(probe.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		return errors.New("codesign fixture parent did not hold an exclusive lane lock")
+	}
+	if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+		return err
+	}
+	// The exclusive lock already exists. A separate open description
+	// still contends, while the inherited holding description succeeds.
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		return fmt.Errorf("codesign fixture did not inherit the held lane lock: %w", err)
 	}

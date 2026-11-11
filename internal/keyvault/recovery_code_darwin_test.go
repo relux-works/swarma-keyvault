@@ -78,6 +78,7 @@ func TestRecoveryActualChildCodeBoundary(t *testing.T) {
 				if refusal, ok := err.(*Refusal); ok {
 					childStatus = refusal.Status
 				}
+				t.Logf("%s%s status=%d accepted=%t", codesigntest.RecoveryObservationPrefix, mode, childStatus, err == nil)
 				return err
 			}}
 			codesigntest.NativeAttempt(t, "execute recovery identity fixture")

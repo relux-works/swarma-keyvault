@@ -289,7 +289,7 @@ func TestRetainedInterlock(t *testing.T) {
 	}
 }
 
-// A deletion failure after the cleanup decision leaves a resumable tombstone.
+// A deletion failure after the cleanup decision leaves resumable authorization.
 func TestCleanupResumes(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	lane := openTestLane(t, dir, "boot")
@@ -313,7 +313,7 @@ func TestCleanupResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 	lane = openTestLane(t, dir, "boot")
-	if err := lane.Cleanup(name, false, now); err != nil {
+	if err := lane.cleanup(name, false, now, func(int) (bool, error) { return true, nil }, os.RemoveAll); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, cleanupPrefix+name+".json")); !os.IsNotExist(err) {
@@ -396,8 +396,8 @@ func TestCleanupRefusesUnrecognizedIdentity(t *testing.T) {
 	}
 }
 
-// Admission distinguishes the inherited held description from a free lock
-// or an independent descriptor on the same inode.
+// Admission distinguishes the inherited exclusive description from a free
+// or shared lock and an independent descriptor on the same inode.
 func TestAdmissionRequiresHeldLock(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	lane := openTestLane(t, dir, "boot")
@@ -411,6 +411,24 @@ func TestAdmissionRequiresHeldLock(t *testing.T) {
 	defer independent.Close()
 	if err := checkHeldLock(dir, int(independent.Fd())); err == nil || !strings.Contains(err.Error(), "parent did not hold") {
 		t.Fatalf("unlocked descriptor = %v", err)
+	}
+	if err := syscall.Flock(int(independent.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkHeldLock(dir, int(independent.Fd())); err == nil || !strings.Contains(err.Error(), "did not hold an exclusive") {
+		t.Fatalf("shared descriptor = %v", err)
+	}
+	peer, err := os.Open(filepath.Join(dir, "lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sharedErr := syscall.Flock(int(peer.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	peer.Close()
+	if sharedErr != nil {
+		t.Fatalf("shared lock was changed during refusal: %v", sharedErr)
+	}
+	if err := syscall.Flock(int(independent.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
 	}
 	lane = openTestLane(t, dir, "boot")
 	if err := checkHeldLock(dir, int(lane.ChildLock().Fd())); err != nil {

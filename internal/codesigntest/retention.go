@@ -25,6 +25,17 @@ type runRecord struct {
 	Certificate bool
 }
 
+func (r runRecord) matches(other runRecord) bool {
+	return r.Boot == other.Boot && r.Group == other.Group &&
+		r.Started.Equal(other.Started) && r.Observed == other.Observed &&
+		r.Certificate == other.Certificate
+}
+
+type exitRecord struct {
+	Run runRecord
+	At  time.Time
+}
+
 type Lane struct {
 	dir  string
 	boot string
@@ -141,22 +152,26 @@ func (l *Lane) ObserveExit(group int, now time.Time) error {
 }
 
 func (l *Lane) exitBoundary(path string, record runRecord, now time.Time, gone func(int) (bool, error)) (time.Time, error) {
-	raw, err := readState(path, "exited")
-	if err == nil {
-		exited, err := time.Parse(time.RFC3339Nano, string(raw))
-		if err != nil || exited.Before(record.Started) || exited.After(now) {
-			return time.Time{}, errors.New("invalid process exit record")
-		}
-		return exited, nil
-	}
-	if !os.IsNotExist(err) {
-		return time.Time{}, err
-	}
-	// A previous boot cannot leave live processes in this boot.
+	// Recheck even when an earlier timestamp is present. A previous boot
+	// cannot have live descendants in the current boot.
 	if record.Boot == l.boot {
 		if err := requireGroupGone(record.Group, gone); err != nil {
 			return time.Time{}, err
 		}
+	}
+	raw, err := readState(path, "exited")
+	if err == nil {
+		var exited exitRecord
+		if err := json.Unmarshal(raw, &exited); err != nil || !record.matches(exited.Run) ||
+			exited.At.Before(record.Started) || exited.At.After(now) {
+			return time.Time{}, errors.New("invalid process exit record")
+		}
+		return exited.At, nil
+	}
+	if !os.IsNotExist(err) {
+		return time.Time{}, err
+	}
+	if record.Boot == l.boot {
 		raw, err := readState(path, "finished")
 		if err != nil {
 			return time.Time{}, errors.New("no known finish")
@@ -166,7 +181,11 @@ func (l *Lane) exitBoundary(path string, record runRecord, now time.Time, gone f
 			return time.Time{}, errors.New("invalid finish record")
 		}
 	}
-	return now, writeState(filepath.Join(path, "exited"), []byte(now.UTC().Format(time.RFC3339Nano)))
+	raw, err = json.Marshal(exitRecord{Run: record, At: now.UTC()})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return now, writeState(filepath.Join(path, "exited"), raw)
 }
 
 func requireGroupGone(group int, gone func(int) (bool, error)) error {

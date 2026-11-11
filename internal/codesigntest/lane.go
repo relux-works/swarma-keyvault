@@ -55,12 +55,25 @@ func AccountHome() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsAbs(account.HomeDir) {
-		return "", errors.New("codesign lane requires an absolute account home")
+	return validateAccountHome(account.HomeDir)
+}
+
+func validateAccountHome(home string) (string, error) {
+	if !filepath.IsAbs(home) || filepath.Clean(home) != home {
+		return "", errors.New("codesign lane requires a clean absolute account home")
 	}
-	home, err := filepath.EvalSymlinks(account.HomeDir)
-	if err != nil {
-		return "", err
+	// Check the original path rather than a symlink-resolved alias. Walking
+	// from the root means Lstat never follows an already accepted component.
+	component := string(filepath.Separator)
+	for _, name := range strings.Split(strings.TrimPrefix(home, component), component) {
+		component = filepath.Join(component, name)
+		info, err := os.Lstat(component)
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("account home path has a non-directory or symlink: %s", component)
+		}
 	}
 	if err := ownedDir(home, false); err != nil {
 		return "", err
