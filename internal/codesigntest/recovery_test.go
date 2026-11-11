@@ -20,7 +20,7 @@ func TestRecoveryEvidenceRequiresStatusAndReceipt(t *testing.T) {
 		"--- PASS: TestRecoveryActualChildCodeBoundary/no-runtime (0.00s)\n" +
 		"--- PASS: TestRecoveryActualChildCodeBoundary/wrong-hash (0.00s)\n" +
 		"--- PASS: TestRecoveryActualChildCodeBoundary/debug-entitlement (0.00s)\n"
-	run := t.TempDir()
+	run := filepath.Join(t.TempDir(), "qa[lab]", "run-fixture")
 	root := filepath.Join(run, "identity-fixture")
 	for _, mode := range []string{"hardened", "no-runtime", "wrong-hash", "debug-entitlement"} {
 		if err := os.MkdirAll(filepath.Join(root, mode), 0700); err != nil {
@@ -59,4 +59,28 @@ func TestRecoveryEvidenceRequiresStatusAndReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(statuses+passes, "admitted recovery fixture did not record request receipt")
+}
+
+// The runner looks for each base below the exact parent path. A bracketed
+// parent works, and missing or duplicate bases still fail the build count.
+func TestFixtureBaseLookupUsesLiteralPath(t *testing.T) {
+	run := filepath.Join(t.TempDir(), "qa[lab]", "run-fixture")
+	for _, prefix := range []string{"recovery-base-", "kek-base-"} {
+		path := filepath.Join(run, prefix+"one")
+		if err := os.MkdirAll(path, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := FindSingleFixtureDir(run, prefix); err != nil || got != path {
+			t.Fatalf("fixture base = %q, %v", got, err)
+		}
+	}
+	if _, err := FindSingleFixtureDir(run, "missing-base-"); err == nil || !strings.Contains(err.Error(), "missing retained fixture") {
+		t.Fatalf("missing base = %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(run, "kek-base-two"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FindSingleFixtureDir(run, "kek-base-"); err == nil || !strings.Contains(err.Error(), "multiple retained fixtures") {
+		t.Fatalf("duplicate base = %v", err)
+	}
 }

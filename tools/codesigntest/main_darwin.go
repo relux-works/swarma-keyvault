@@ -279,9 +279,8 @@ func (r runner) confined(name, pkg, selection string, tests ...string) error {
 	if name == "kek" && !bytes.Contains(out, []byte("exact trust refusal and zero attested facts verified")) {
 		return errors.New("confined KEK case did not verify its trust refusal")
 	}
-	entries, err := filepath.Glob(filepath.Join(r.path, name+"-base-*"))
-	if err != nil || len(entries) != 1 {
-		return fmt.Errorf("%s native fixtures did not build exactly one base executable", name)
+	if _, err := codesigntest.FindSingleFixtureDir(r.path, name+"-base-"); err != nil {
+		return fmt.Errorf("%s native fixture base: %w", name, err)
 	}
 	return nil
 }

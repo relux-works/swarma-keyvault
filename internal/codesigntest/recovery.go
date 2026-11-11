@@ -13,12 +13,9 @@ const RecoveryObservationPrefix = "codesigntest recovery observation: "
 // CheckRecoveryEvidence checks the actual native status reported by each child
 // verifier and the helper's own request receipt in the retained directory.
 func CheckRecoveryEvidence(out []byte, run string) error {
-	dirs, err := filepath.Glob(filepath.Join(run, "identity-*"))
-	if err != nil || len(dirs) != 1 {
-		return errors.New("expected one retained recovery identity directory")
-	}
-	if err := ownedDir(dirs[0], true); err != nil {
-		return err
+	identity, err := FindSingleFixtureDir(run, "identity-")
+	if err != nil {
+		return fmt.Errorf("retained recovery identity directory: %w", err)
 	}
 	for _, mode := range []string{"hardened", "no-runtime", "wrong-hash", "debug-entitlement"} {
 		if !bytes.Contains(out, []byte("--- PASS: TestRecoveryActualChildCodeBoundary/"+mode+" (")) {
@@ -34,7 +31,7 @@ func CheckRecoveryEvidence(out []byte, run string) error {
 		if bytes.Count(out, []byte(prefix)) != 1 || !bytes.Contains(out, []byte(want)) {
 			return fmt.Errorf("recovery native status for %s did not match its expected outcome", mode)
 		}
-		dir := filepath.Join(dirs[0], mode)
+		dir := filepath.Join(identity, mode)
 		if err := ownedDir(dir, true); err != nil {
 			return err
 		}

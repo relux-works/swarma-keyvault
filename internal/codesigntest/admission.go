@@ -203,3 +203,29 @@ func FixtureDir(t testing.TB, run, prefix string) string {
 	}
 	return dir
 }
+
+// FindSingleFixtureDir finds one retained directory by a literal name prefix.
+func FindSingleFixtureDir(run, prefix string) (string, error) {
+	entries, err := os.ReadDir(run)
+	if err != nil {
+		return "", err
+	}
+	var name string
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if name != "" {
+			return "", fmt.Errorf("multiple retained fixtures with prefix %q", prefix)
+		}
+		name = entry.Name()
+	}
+	if name == "" {
+		return "", fmt.Errorf("missing retained fixture with prefix %q", prefix)
+	}
+	path := filepath.Join(run, name)
+	if err := ownedDir(path, true); err != nil {
+		return "", err
+	}
+	return path, nil
+}
