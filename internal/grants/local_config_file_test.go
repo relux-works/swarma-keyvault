@@ -14,7 +14,7 @@ import (
 // accepted; malformed/extra fields, shared pins, relative paths and unsafe
 // file types/permissions cannot turn caller JSON into a trust enrollment.
 func TestLocalEnrollmentRefusals(t *testing.T) {
-	for _, mode := range []string{"unknown", "same-key", "owner", "relative-state", "relative-gh", "target", "padded-pin", "newline", "duplicate", "permissions", "symlink", "fifo", "directory", "oversize"} {
+	for _, mode := range []string{"unknown", "same-key", "missing-owner", "malformed-owner", "relative-state", "relative-gh", "target", "padded-pin", "newline", "duplicate", "permissions", "symlink", "fifo", "directory", "oversize"} {
 		t.Run(mode, func(t *testing.T) {
 			f := localTestFixture(t)
 			path := filepath.Join(t.TempDir(), "enrollment.json")
@@ -31,8 +31,10 @@ func TestLocalEnrollmentRefusals(t *testing.T) {
 				f.config["caller_pin"] = "x"
 			case "same-key":
 				f.config["requester_spki"] = f.config["owner_spki"]
-			case "owner":
-				f.config["owner_mxid"] = "@other:example.invalid"
+			case "missing-owner":
+				delete(f.config, "owner_mxid")
+			case "malformed-owner":
+				f.config["owner_mxid"] = "@owner:"
 			case "relative-state":
 				f.config["state_dir"] = "relative"
 			case "relative-gh":

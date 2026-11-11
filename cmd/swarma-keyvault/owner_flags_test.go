@@ -8,9 +8,10 @@ import (
 )
 
 const fixtureOwnerPrincipal = "@fixture-owner:example.invalid"
+const fixtureOwnerService = "north"
 
 func withFixtureOwnerArgs(args []string) []string {
-	return append(append([]string{}, args...), "--owner-mxid", fixtureOwnerPrincipal, "--owner-key", "fixture-owner/grants-owner-v1", "--owner-key-version", "1")
+	return append(append([]string{}, args...), "--owner-mxid", fixtureOwnerPrincipal, "--owner-key", fixtureOwnerService+"/grants-owner-v1", "--owner-key-version", "1")
 }
 
 // Configured owners produce distinct exact addresses. Required arguments have
@@ -53,7 +54,7 @@ func TestOwnerFlagsExplicitConfiguration(t *testing.T) {
 func TestIssueMissingOwnerBeforePayloadAndCustody(t *testing.T) {
 	args, _, store := issueCLIFixture(t)
 	base := append([]string{}, args[:len(args)-6]...)
-	for _, extra := range [][]string{nil, {"--owner-mxid", fixtureOwnerPrincipal}, {"--owner-mxid", fixtureOwnerPrincipal, "--owner-key", "fixture-owner/grants-owner-v2", "--owner-key-version", "1"}} {
+	for _, extra := range [][]string{nil, {"--owner-mxid", fixtureOwnerPrincipal}, {"--owner-mxid", fixtureOwnerPrincipal, "--owner-key", fixtureOwnerService + "/grants-owner-v2", "--owner-key-version", "1"}} {
 		var out, diagnostic bytes.Buffer
 		if code := run(append(append([]string{}, base...), extra...), mustNotRead{}, &out, &diagnostic); code != 2 || out.Len() != 0 || store.factories != 0 || store.signs != 0 {
 			t.Fatal("invalid owner reached payload/custody")

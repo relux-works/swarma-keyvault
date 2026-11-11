@@ -93,7 +93,7 @@ func TestA2ACertificateCLI(t *testing.T) {
 // Overflow, wrong scope/key and review sink failure prevent the relevant
 // private operation; denied signing is attempted once with no retry/fallback.
 func TestA2AIssueCLIRefusals(t *testing.T) {
-	for _, mode := range []string{"overflow", "scope", "pin", "short-review", "denied", "newline", "unknown-flag"} {
+	for _, mode := range []string{"overflow", "key-address-overflow", "scope", "pin", "short-review", "denied", "newline", "unknown-flag"} {
 		t.Run(mode, func(t *testing.T) {
 			args, c, store := a2aCLIFixture(t)
 			args[1] = "a2a-issue"
@@ -103,6 +103,13 @@ func TestA2AIssueCLIRefusals(t *testing.T) {
 			switch mode {
 			case "overflow":
 				c["subject"].(map[string]any)["account_mxid"] = "@" + strings.Repeat("a", 180) + ":example.invalid"
+			case "key-address-overflow":
+				for i, arg := range args {
+					if arg == "--owner-key" {
+						args[i+1] = strings.Repeat("a", 40) + "/grants-owner-v1"
+						break
+					}
+				}
 			case "scope":
 				c["entries"].([]any)[0].(map[string]any)["action"] = "repository.delete"
 			case "pin":
@@ -122,6 +129,9 @@ func TestA2AIssueCLIRefusals(t *testing.T) {
 			}
 			if code := run(args, bytes.NewReader(payload), &out, review); code == 0 || store.factories != wantFactories || store.signs != wantSigns || out.Len() != 0 {
 				t.Fatal(mode, code, store.factories, store.signs, out.String())
+			}
+			if mode == "key-address-overflow" && errout.String() != "complete presence reason exceeds the native display policy\n" {
+				t.Fatal("long valid address was not refused for the full presence reason", errout.String())
 			}
 		})
 	}

@@ -70,7 +70,7 @@ func issueCLIFixture(t *testing.T) ([]string, []byte, *cliIssueStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: "fixture-owner", Purpose: "grants-owner-v1", Version: 1,
+	rec := keyvault.Record{Schema: keyvault.SchemaVersion, Kind: keyvault.KindKey, Service: fixtureOwnerService, Purpose: "grants-owner-v1", Version: 1,
 		Algorithm: keyvault.AlgorithmECP256, Store: keyvault.StoreEnclave, UserPresence: true, Extraction: keyvault.ExtractionNone,
 		Usages: []string{"sign", "verify"}, Format: keyvault.Format{Public: keyvault.FormatPublicSPKIDER, Signature: keyvault.FormatSignatureDERLowS},
 		Created: keyvault.NewTime(time.Unix(1700000000, 0)), Origin: keyvault.Origin{User: "fixture", Host: "fixture", Tool: "fixture", Source: keyvault.SourceGenerated}, Meta: map[string]any{}}

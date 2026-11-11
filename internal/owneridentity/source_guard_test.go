@@ -126,6 +126,11 @@ func guardGo(path string, raw []byte) (string, error) {
 			if name == "Service" && value == "swarma-grants" && path == "internal/grantrequester/request.go" {
 				return
 			}
+			// The shared invariant test fixture deliberately injects an
+			// uppercase service that the production grammar refuses.
+			if name == "Service" && value == "TEST" && path == "internal/keyvault/recordtest/forgeries.go" {
+				return
+			}
 			record(e, "fixed identity-bearing field")
 		}
 	}
@@ -234,6 +239,15 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	}
 	if hit, err := guardGo("copy/probe.go", []byte(copied)); hit != "" || err != nil {
 		t.Fatal("parameterized source was refused", hit, err)
+	}
+	const forgery = "internal/keyvault/recordtest/forgeries.go"
+	known := strings.Replace(copied, "Service: service", `Service: "TEST"`, 1)
+	if hit, err := guardGo(forgery, []byte(known)); hit != "" || err != nil {
+		t.Fatal("uppercase refusal fixture was rejected by the guard", hit, err)
+	}
+	unknown := strings.Replace(known, `"TEST"`, `"unseen-person"`, 1)
+	if hit, err := guardGo(forgery, []byte(unknown)); err != nil || !strings.Contains(hit, "fixed identity-bearing field") {
+		t.Fatal("fixture exception admitted a different identity", hit, err)
 	}
 	if got := guardSwift([]byte(`let service = "a-hidden-person"`)); got != "fixed native identity-bearing field" {
 		t.Fatal("native identity plant was not detected", got)

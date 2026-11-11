@@ -109,8 +109,13 @@ func TestLinuxFamilyShape(t *testing.T) {
 // negative names a positive control present in the family.
 func TestPublisherEd25519FamilyShape(t *testing.T) {
 	ids := map[string]bool{}
-	for _, f := range []func() ([]Case, error){MacFamily, LinuxFamily} {
-		cs, err := f()
+	const owner = "owner:fixture-owner"
+	families := []func() ([]Case, error){
+		func() ([]Case, error) { return MacFamily(owner) },
+		func() ([]Case, error) { return LinuxFamily(owner, 1000) },
+	}
+	for _, family := range families {
+		cs, err := family()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +123,7 @@ func TestPublisherEd25519FamilyShape(t *testing.T) {
 			ids[c.ID] = true
 		}
 	}
-	p2, err := PublisherEd25519Family("owner:fixture-owner")
+	p2, err := PublisherEd25519Family(owner)
 	if err != nil {
 		t.Fatal(err)
 	}

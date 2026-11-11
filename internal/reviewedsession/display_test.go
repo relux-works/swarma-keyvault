@@ -71,6 +71,8 @@ func TestDigestCueAndFullReasonBinding(t *testing.T) {
 	}
 }
 
+// The configured address consumes part of the 200-scalar reason budget. Fit
+// optional text without shortening the exact address or the digest cue.
 func TestWholeReasonBudget(t *testing.T) {
 	d := testDigest()
 	base := titleFacts{profile: repository}
@@ -79,7 +81,7 @@ func TestWholeReasonBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	core, _ := base.core()
-	if got := 200 - utf8.RuneCountInString(short) + utf8.RuneCountInString(core); got != 119 {
+	if got := 200 - utf8.RuneCountInString(short) + utf8.RuneCountInString(core); got != 112 {
 		t.Fatal("title budget", got)
 	}
 	for _, length := range []int{199, 200, 201, 400} {

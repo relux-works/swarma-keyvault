@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/relux-works/swarma-keyvault/internal/grants"
 	"io"
 	"os"
 	"os/exec"
@@ -23,6 +22,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/grants"
 )
 
 const RegtestGenesis = "0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206"
@@ -62,8 +63,8 @@ type Policy struct {
 	// Network and Genesis are independently installed together. Mainnet never
 	// follows from an RPC chain claim, name, request or certificate.
 	Network, Genesis string
-	// ExpectedOwner is independent identity policy, never a name-record or
-	// payload value. Empty preserves the original Alexis test profile.
+	// ExpectedOwner is required from the installed policy. A name record
+	// or a signed payload cannot supply the expected owner.
 	ExpectedOwner                                string
 	OwnerName, RequesterName                     string
 	Account, Device, Deployment, Executor, Cycle string

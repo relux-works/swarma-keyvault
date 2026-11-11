@@ -239,7 +239,7 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	const at = "2026-11-07T14:00:00Z"
 	const certDomain = "swarma-grants/local-certificate/1"
 	const reqDomain = "swarma-grants/local-request/2"
-	subject := map[string]any{"account_mxid": "@agent-south:example.invalid", "device_id": "LAB-IVAN-AGENT"}
+	subject := map[string]any{"account_mxid": "@ivan-agent:example.invalid", "device_id": "LAB-IVAN-AGENT"}
 	audience := map[string]any{"deployment_id": "lab-thin-slice", "executor_id": "lab-verify-only"}
 	cycle := map[string]any{"cycle_id": "codex-dm", "runtime": "codex", "channel": "encrypted-dm"}
 	draft := map[string]any{"certificate_id": "lab-alexis-to-ivan-agent", "subject": subject, "audience": audience, "cycles": []any{cycle}, "not_before": at, "expires_at": "2026-11-09T14:00:00Z", "organization": "relux-works", "name": "matrix-grants-poc-261031"}
@@ -283,7 +283,7 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	if certDigest != digestFor(certDomain, prepared) {
 		t.Fatal("CLI exact digest disagreement")
 	}
-	certArgs := []string{"certificate", "--owner-mxid", fixtureOwnerPrincipal, "--payload", payloadPath, "--digest", certDigest, "--key", ownerKey, "--owner-spki", ownerFile, "--requester-spki", requesterFile}
+	certArgs := []string{"certificate", "--payload", payloadPath, "--digest", certDigest, "--key", ownerKey, "--owner-spki", ownerFile, "--requester-spki", requesterFile, "--owner-mxid", fixtureOwnerPrincipal}
 	certificate, _ := invoke("sign-prepared-certificate", tool, certArgs, 0, "")
 	requestRaw := jsonBytes(t, request)
 	save(t, requestPayloadPath, requestRaw)
@@ -297,7 +297,7 @@ func TestPreparedSignerUnchangedCLI(t *testing.T) {
 	save(t, configPath, jsonBytes(t, config))
 	save(t, certPath, certificate)
 	save(t, reqPath, signedRequest)
-	verifyArgs := []string{"grants", "verify", "--config", configPath, "--certificate", certPath, "--request", reqPath, "--at", at}
+	verifyArgs := []string{"grants", "verify", "--config", configPath, "--certificate", certPath, "--request", reqPath, "--at", at, "--owner-mxid", fixtureOwnerPrincipal}
 	verify := func(label, want string) { t.Helper(); invoke(label, kv, verifyArgs, 1, want) }
 	positive := func(label string) { t.Helper(); invoke(label, kv, verifyArgs, 0, `"verdict":"accepted"`) }
 	positive("valid-prepared-envelopes")

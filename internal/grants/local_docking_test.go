@@ -19,6 +19,8 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/grantrequester"
 	"github.com/relux-works/swarma-keyvault/internal/grants"
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
+	"github.com/relux-works/swarma-keyvault/internal/owneridentity"
+	"github.com/relux-works/swarma-keyvault/internal/ownerkey"
 )
 
 // These software keys exist only in memory. The backend refuses all mutation;
@@ -76,7 +78,8 @@ func dockingJSON(t *testing.T, v any) []byte {
 func TestLocalDocking(t *testing.T) {
 	for _, mode := range []string{"success", "invalid", "failure"} {
 		t.Run(mode, func(t *testing.T) {
-			owner := dockingKey(t, "alexis", "grants-owner-v1", true)
+			const ownerService = "fixture-owner"
+			owner := dockingKey(t, ownerService, ownerkey.GrantPurpose, true)
 			requester := dockingKey(t, "swarma-grants", "requester-local-v1", false)
 			start := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)
 			end := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
@@ -88,7 +91,11 @@ func TestLocalDocking(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			issuer, err := grantissuer.PrepareLocal(unsigned.Payload, owner.item.SPKI, requester.item.SPKI)
+			ownerConfig, err := owneridentity.New(dockingOwnerPrincipal, ownerService, ownerkey.GrantPurpose, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			issuer, err := grantissuer.PrepareLocal(ownerConfig, unsigned.Payload, owner.item.SPKI, requester.item.SPKI)
 			if err != nil {
 				t.Fatal(err)
 			}
