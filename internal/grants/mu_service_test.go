@@ -35,7 +35,7 @@ func muServiceRig(t *testing.T) (*muDock, map[string]any, string) {
 	t.Setenv("KEYVAULT_MU_A2A_DIR", a2aDir)
 	exe, _ := os.Executable()
 	exe, _ = filepath.EvalSymlinks(exe)
-	board, _ := script(t, `{"ok":true,"result":{"id":"TASK-261105-dockxx"}}`, 0)
+	board, _ := script(t, `{"ok":true,"result":{"id":"TASK-fixture-created"}}`, 0)
 	b64 := base64.RawURLEncoding.EncodeToString
 	cfg := map[string]any{
 		"type": "mu-receiver-config-1", "grant_root": g.root.id, "audience": muDockAud, "grants": []string{b64(g.grant)},
@@ -44,8 +44,8 @@ func muServiceRig(t *testing.T) (*muDock, map[string]any, string) {
 		"state_dir": state, "state_epoch": hex.EncodeToString(make([]byte, 31)) + "01",
 		"owner": "owner:fixture-primary", "room_scope": "swarma-space", "modules": []string{"swarma-keyvault"}, "paused": []string{},
 		"registry_owners": map[string]string{"@fixture-principal-5:example.invalid": "owner:fixture-3"}, "time_authority_seconds": 300,
-		"a2a":        map[string]any{"path": exe, "sha256": fileSHA(t, exe), "profile": "keyvault-gr", "identity": "keyvault.orch-altair", "config_dir": dir, "room": muDockRoom},
-		"task_board": map[string]any{"path": board, "sha256": fileSHA(t, board), "board_dir": dir, "parent": "STORY-261105-dock"},
+		"a2a":        map[string]any{"path": exe, "sha256": fileSHA(t, exe), "profile": "fixture-profile", "identity": "fixture-receiver", "config_dir": dir, "room": muDockRoom},
+		"task_board": map[string]any{"path": board, "sha256": fileSHA(t, board), "board_dir": dir, "parent": "STORY-fixture-parent"},
 	}
 	return g, cfg, a2aDir
 }
@@ -88,7 +88,7 @@ func TestMUServiceSitting(t *testing.T) {
 	g.request("$s1", "work.assign", "product", "swarma-platform", map[string]string{"module": "swarma-keyvault", "title": "Review"}, "sender assigns: review")
 	muEventRecord(t, a2aDir, g.events["$s1"])
 	out, err := svc.Execute(context.Background(), "$s1")
-	if err != nil || out.State != "succeeded" || !strings.Contains(string(out.Receipt), "TASK-261105-dockxx") {
+	if err != nil || out.State != "succeeded" || !strings.Contains(string(out.Receipt), "TASK-fixture-created") {
 		t.Fatal("in-scope request", out, err)
 	}
 	if _, err := svc.Execute(context.Background(), "$s1"); !errors.Is(err, ErrMUNonceHeld) {

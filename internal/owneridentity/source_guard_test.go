@@ -373,6 +373,44 @@ var fixtureMatrixLiteral = regexp.MustCompile(`[!@][a-zA-Z0-9._=/-]+:[a-zA-Z0-9.
 var fixtureProcessLabel = regexp.MustCompile(`(?i)\b(?:meta|keeper|orchestrator)\b`)
 
 var fixtureRole = regexp.MustCompile(`(?i)(?:^|[._-])(?:keeper|orch)(?:[._-]|$)`)
+var fixtureTransportIdentity = regexp.MustCompile(`^fixture-[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var fixtureBoardParent = regexp.MustCompile(`^(?:STORY|TASK)-fixture-[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+func fixtureConfigIdentityHit(container, field string, value any) bool {
+	var allowed *regexp.Regexp
+	switch container + "." + field {
+	case "a2a.identity", "a2a.profile":
+		allowed = fixtureTransportIdentity
+	case "task_board.parent":
+		allowed = fixtureBoardParent
+	default:
+		return false
+	}
+	text, ok := value.(string)
+	return !ok || !allowed.MatchString(text)
+}
+
+func fixtureGoConfigHit(entry *ast.KeyValueExpr) bool {
+	fields, ok := entry.Value.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	for _, element := range fields.Elts {
+		field, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		value, fixed := fixedValue(field.Value, 0)
+		var input any
+		if fixed {
+			input = value
+		}
+		if fixtureConfigIdentityHit(fieldName(entry.Key), fieldName(field.Key), input) {
+			return true
+		}
+	}
+	return false
+}
 
 // Fixture principals use reserved example domains and neutral local labels.
 // Recursion checks JSON strings and base64-encoded public fields as well as text.
@@ -380,7 +418,7 @@ func fixtureIdentityHit(raw string, depth int) bool {
 	if raw == "" || depth > 8 || len(raw) > 1<<20 {
 		return false
 	}
-	if fixtureProcessLabel.MatchString(raw) {
+	if fixtureProcessLabel.MatchString(raw) || fixtureRole.MatchString(raw) {
 		return true
 	}
 	for _, scope := range ownerScopeLiteral.FindAllString(raw, -1) {
@@ -397,27 +435,27 @@ func fixtureIdentityHit(raw string, depth int) bool {
 	}
 	var value any
 	if json.Unmarshal([]byte(raw), &value) == nil {
-		var walk func(any) bool
-		walk = func(v any) bool {
+		var walk func(any, string) bool
+		walk = func(v any, container string) bool {
 			switch x := v.(type) {
 			case string:
 				return fixtureIdentityHit(x, depth+1)
 			case []any:
 				for _, item := range x {
-					if walk(item) {
+					if walk(item, container) {
 						return true
 					}
 				}
 			case map[string]any:
 				for key, item := range x {
-					if fixtureIdentityHit(key, depth+1) || walk(item) {
+					if fixtureConfigIdentityHit(container, key, item) || fixtureIdentityHit(key, depth+1) || walk(item, key) {
 						return true
 					}
 				}
 			}
 			return false
 		}
-		if walk(value) {
+		if walk(value, "") {
 			return true
 		}
 	}
@@ -459,6 +497,9 @@ func TestMUFixtureIdentityBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		ast.Inspect(f, func(node ast.Node) bool {
+			if entry, ok := node.(*ast.KeyValueExpr); ok && fixtureGoConfigHit(entry) {
+				t.Errorf("transport fixture configuration boundary failed in %s", filepath.Base(path))
+			}
 			literal, ok := node.(*ast.BasicLit)
 			if ok && literal.Kind == token.STRING {
 				value, err := strconv.Unquote(literal.Value)
@@ -499,6 +540,8 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 		{"!fixture-room:example.invalid", false}, {"!fixture-room:outside.test", true},
 		{"owner:fixture-owner", false}, {"owner:example", false}, {"owner:account", true},
 		{"metadata", false}, {"keeper", true},
+		{"fixture-receiver", false}, {"sample.orch-node", true},
+		{"a2a.identity", false}, {"grant/1", false}, {"mac-keyvault", false},
 		{"@sample.keeper-node:example.invalid", true},
 	} {
 		raw, err := json.Marshal(map[string]string{"principal": tc.principal})
@@ -534,6 +577,60 @@ func TestMUFixtureScopeIncludesLibraries(t *testing.T) {
 	} {
 		if !files[path] {
 			t.Error("retained MU library fixture outside scan scope", path)
+		}
+	}
+}
+
+// Identity-bearing transport configuration fields admit neutral fixture names
+// in Go maps, JSON and encoded JSON. Arbitrary, malformed and role-qualified
+// values refuse; parent/profile protocol fields outside that config stay valid.
+func TestFixtureTransportConfigBoundaryPlants(t *testing.T) {
+	for _, field := range []struct {
+		container, name, positive string
+	}{
+		{"a2a", "identity", "fixture-receiver"},
+		{"a2a", "profile", "fixture-profile"},
+		{"task_board", "parent", "STORY-fixture-parent"},
+	} {
+		for _, tc := range []struct {
+			value     any
+			forbidden bool
+		}{
+			{field.positive, false}, {"sample.receiver-node", true},
+			{"sample.orch-node", true}, {"sample.keeper-node", true},
+			{"fixture-", true}, {"", true}, {nil, true}, {1, true},
+		} {
+			raw, err := json.Marshal(map[string]any{field.container: map[string]any{field.name: tc.value}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []string{string(raw), base64.RawURLEncoding.EncodeToString(raw)} {
+				if fixtureIdentityHit(value, 0) != tc.forbidden {
+					t.Fatal("transport fixture serialization verdict differs", field.name)
+				}
+			}
+			if text, ok := tc.value.(string); ok {
+				source := "map[string]any{" + strconv.Quote(field.container) + ": map[string]any{" + strconv.Quote(field.name) + ": " + strconv.Quote(text) + "}}"
+				expression, err := parser.ParseExpr(source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				found := false
+				ast.Inspect(expression, func(node ast.Node) bool {
+					if entry, ok := node.(*ast.KeyValueExpr); ok && fixtureGoConfigHit(entry) {
+						found = true
+					}
+					return true
+				})
+				if found != tc.forbidden {
+					t.Fatal("Go transport fixture verdict differs", field.name)
+				}
+			}
+		}
+	}
+	for _, raw := range []string{`{"type":"grant/1","parent":null}`, `{"profile":"mac-agent","parent":"sha256:fixture"}`} {
+		if fixtureIdentityHit(raw, 0) {
+			t.Fatal("product/protocol field refused outside transport configuration")
 		}
 	}
 }
