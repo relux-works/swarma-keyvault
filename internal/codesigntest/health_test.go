@@ -195,34 +195,78 @@ func TestHostHealthRechecksEachAction(t *testing.T) {
 	}
 }
 
-// An ambient HOME override cannot select a different health directory. The
-// fixture flag refuses there, while public admission uses the registered home.
-// This control never creates or modifies the real account's health flag.
+// Account resolution ignores ambient HOME without requiring the real health
+// flag to be absent. This control never inspects or modifies that flag.
 func TestHostHealthIgnoresEnvironmentHome(t *testing.T) {
 	registered, err := AccountHome()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkHostHealth(registered); err != nil {
-		t.Fatalf("registered account is unable to start work: %v", err)
-	}
-	home := t.TempDir()
-	dir := filepath.Join(home, "Library", "Application Support", "host-health")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "exec-degraded"), nil, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := checkHostHealth(home); err == nil {
-		t.Fatal("fixture flag did not refuse")
-	}
-	t.Setenv("HOME", home)
+	t.Setenv("HOME", t.TempDir())
 	if got, err := AccountHome(); err != nil || got != registered {
 		t.Fatalf("ambient HOME changed account resolution: %v", err)
 	}
-	calls := 0
-	if err := RunHealthy(func() error { calls++; return nil }); err != nil || calls != 1 {
-		t.Fatalf("public admission selected fixture HOME: %v, calls=%d", err, calls)
+}
+
+// Public wrappers follow the injected registered home with opposing ambient
+// health states. Degradation refuses before callbacks and leaves flags intact.
+// Resolution failures also refuse. Every health path here is a temporary fixture.
+func TestPublicHostHealthUsesRegisteredHome(t *testing.T) {
+	original := accountHomeForHealth
+	t.Cleanup(func() { accountHomeForHealth = original })
+	for _, degraded := range []bool{false, true} {
+		name := "canonical-healthy"
+		if degraded {
+			name = "canonical-degraded"
+		}
+		t.Run(name, func(t *testing.T) {
+			registered, ambient := t.TempDir(), t.TempDir()
+			flagHome := ambient
+			if degraded {
+				flagHome = registered
+			}
+			dir := filepath.Join(flagHome, "Library", "Application Support", "host-health")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			flag := filepath.Join(dir, "exec-degraded")
+			contents := []byte("temporary degraded fixture")
+			if err := os.WriteFile(flag, contents, 0600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("HOME", ambient)
+			resolutions := 0
+			accountHomeForHealth = func() (string, error) {
+				resolutions++
+				return registered, nil
+			}
+			checkErr := CheckHostHealth()
+			calls := 0
+			actionErr := errors.New("temporary action result")
+			runErr := RunHealthy(func() error { calls++; return actionErr })
+			if degraded {
+				if checkErr == nil || !strings.Contains(checkErr.Error(), "exec-degraded is present") || runErr == nil || !strings.Contains(runErr.Error(), "exec-degraded is present") || calls != 0 {
+					t.Fatalf("canonical degradation: check=%v, run=%v, calls=%d", checkErr, runErr, calls)
+				}
+			} else if checkErr != nil || runErr != actionErr || calls != 1 {
+				t.Fatalf("canonical healthy: check=%v, run=%v, calls=%d", checkErr, runErr, calls)
+			}
+			if resolutions != 2 {
+				t.Fatalf("public wrappers bypassed registered resolution: %d", resolutions)
+			}
+			if got, err := os.ReadFile(flag); err != nil || string(got) != string(contents) {
+				t.Fatalf("fixture flag changed: %q, %v", got, err)
+			}
+		})
 	}
+	t.Run("resolution-refused", func(t *testing.T) {
+		resolutionErr := errors.New("temporary account lookup failure")
+		accountHomeForHealth = func() (string, error) { return "", resolutionErr }
+		calls := 0
+		checkErr := CheckHostHealth()
+		runErr := RunHealthy(func() error { calls++; return nil })
+		if checkErr != resolutionErr || runErr != resolutionErr || calls != 0 {
+			t.Fatalf("resolution refusal: check=%v, run=%v, calls=%d", checkErr, runErr, calls)
+		}
+	})
 }

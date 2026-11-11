@@ -8,11 +8,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// Kept private so tests can exercise public admission with isolated account
+// homes. Production always resolves the registered account, never ambient HOME.
+var accountHomeForHealth = AccountHome
+
 // CheckHostHealth checks the fixed host-watch flag under the registered account
 // home. Every existing directory must be owned, physical and non-writable by
 // other users. Every present flag entry refuses work, including a symlink.
 func CheckHostHealth() error {
-	home, err := AccountHome()
+	home, err := accountHomeForHealth()
 	if err != nil {
 		return err
 	}
@@ -22,7 +26,7 @@ func CheckHostHealth() error {
 // RunHealthy rechecks admission immediately before an individual action. Flag
 // publication and action execution are separate operations.
 func RunHealthy(action func() error) error {
-	home, err := AccountHome()
+	home, err := accountHomeForHealth()
 	if err != nil {
 		return err
 	}
