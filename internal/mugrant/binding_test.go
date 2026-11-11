@@ -96,7 +96,7 @@ func TestGrantAttestationBinding(t *testing.T) {
 	pub := signerclient.Fingerprint(spkiOf(t, testPrivate(t, publisher.Key)))
 	r := g.Rendering()
 	for _, want := range []string{
-		fmt.Sprintf("grantee: %s (generation 1, from attestation %s)", metaMXID, agent.ContentID),
+		fmt.Sprintf("grantee: %s (generation 1, from attestation %s)", agentMXID, agent.ContentID),
 		"grantee key fingerprint (as mac-keyvault prints it): " + grantee,
 		fmt.Sprintf("revocation publisher key: %s (attestation %s)", publisher.Key, publisher.ContentID),
 		"revocation publisher key fingerprint (as mac-keyvault prints it): " + pub,
@@ -109,15 +109,17 @@ func TestGrantAttestationBinding(t *testing.T) {
 	_, otherRoot := testKey(t)
 	_, otherKey := testKey(t)
 	cases := map[string]func(*GrantSpec){
-		"mxid-mismatch":           func(s *GrantSpec) { s.SubjectMXID = "@other-agent:gr.relux.works" },
-		"agent-for-other-key":     func(s *GrantSpec) { s.SubjectAttestation = agentAttestation(t, s.Issuer, otherKey, metaMXID, nb, ex) },
-		"agent-by-other-root":     func(s *GrantSpec) { s.SubjectAttestation = agentAttestation(t, otherRoot, s.Subject, metaMXID, nb, ex) },
+		"mxid-mismatch":       func(s *GrantSpec) { s.SubjectMXID = "@fixture-principal-8:example.invalid" },
+		"agent-for-other-key": func(s *GrantSpec) { s.SubjectAttestation = agentAttestation(t, s.Issuer, otherKey, agentMXID, nb, ex) },
+		"agent-by-other-root": func(s *GrantSpec) {
+			s.SubjectAttestation = agentAttestation(t, otherRoot, s.Subject, agentMXID, nb, ex)
+		},
 		"publisher-by-other-root": func(s *GrantSpec) { s.PublisherAttestation = publisherAttestation(t, otherRoot, otherKey, nb, ex) },
 		"agent-window-short": func(s *GrantSpec) {
-			s.SubjectAttestation = agentAttestation(t, s.Issuer, s.Subject, metaMXID, nb, s.Expires.Add(-time.Second))
+			s.SubjectAttestation = agentAttestation(t, s.Issuer, s.Subject, agentMXID, nb, s.Expires.Add(-time.Second))
 		},
 		"agent-window-late": func(s *GrantSpec) {
-			s.SubjectAttestation = agentAttestation(t, s.Issuer, s.Subject, metaMXID, nb.Add(time.Second), ex)
+			s.SubjectAttestation = agentAttestation(t, s.Issuer, s.Subject, agentMXID, nb.Add(time.Second), ex)
 		},
 		"publisher-window-short": func(s *GrantSpec) {
 			s.PublisherAttestation = publisherAttestation(t, s.Issuer, otherKey, nb, s.Expires.Add(-time.Second))
@@ -129,8 +131,8 @@ func TestGrantAttestationBinding(t *testing.T) {
 			s.SubjectAttestation, s.PublisherAttestation = s.PublisherAttestation, s.SubjectAttestation
 		},
 		"agent-tampered": func(s *GrantSpec) {
-			s.SubjectAttestation = reidentified(t, s.SubjectAttestation, metaMXID, "@other-agent:gr.relux.works")
-			s.SubjectMXID = "@other-agent:gr.relux.works"
+			s.SubjectAttestation = reidentified(t, s.SubjectAttestation, agentMXID, "@fixture-principal-8:example.invalid")
+			s.SubjectMXID = "@fixture-principal-8:example.invalid"
 		},
 	}
 	for name, mutate := range cases {
@@ -175,8 +177,8 @@ func TestVerifyAttestationShape(t *testing.T) {
 	_, root := testKey(t)
 	_, subject := testKey(t)
 	nb := time.Date(2026, 11, 5, 13, 0, 0, 0, time.UTC)
-	wire := agentAttestation(t, root, subject, metaMXID, nb, nb.Add(time.Hour))
-	if a, err := VerifyMacAgentAttestation(wire, root); err != nil || a.Key != subject || a.MXID != metaMXID || a.Generation != 1 {
+	wire := agentAttestation(t, root, subject, agentMXID, nb, nb.Add(time.Hour))
+	if a, err := VerifyMacAgentAttestation(wire, root); err != nil || a.Key != subject || a.MXID != agentMXID || a.Generation != 1 {
 		t.Fatal("valid attestation refused", err)
 	}
 	if _, err := VerifyPublisherAttestation(wire, root); !errors.Is(err, ErrAttestation) {
@@ -238,7 +240,7 @@ func TestVerifyAttestationShape(t *testing.T) {
 	}
 	// A re-identified binding with the original signature: only the
 	// signature check refuses it.
-	if _, err := VerifyMacAgentAttestation(reidentified(t, wire, metaMXID, "@other-agent:gr.relux.works"), root); !errors.Is(err, ErrAttestation) {
+	if _, err := VerifyMacAgentAttestation(reidentified(t, wire, agentMXID, "@fixture-principal-8:example.invalid"), root); !errors.Is(err, ErrAttestation) {
 		t.Error("re-identified attestation admitted")
 	}
 	if _, err := VerifyMacAgentAttestation(bytes.Clone(wire), subject); !errors.Is(err, ErrAttestation) {

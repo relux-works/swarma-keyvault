@@ -19,7 +19,7 @@ func TestAttestationRendering(t *testing.T) {
 	k, subject := testKey(t)
 	spki := spkiOf(t, k)
 	nb, ex := time.Date(2026, 11, 5, 13, 0, 0, 0, time.UTC), time.Date(2027, 11, 6, 13, 0, 0, 0, time.UTC)
-	agent, _, err := BuildMacAgentAttestation(root, spki, metaMXID, 3, nb, ex)
+	agent, _, err := BuildMacAgentAttestation(root, spki, agentMXID, 3, nb, ex)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestAttestationRendering(t *testing.T) {
 		p     *Plan
 		extra []string
 	}{
-		"agent":     {agent, []string{"agent: " + metaMXID, "generation: 3", "profile mac-se-1"}},
+		"agent":     {agent, []string{"agent: " + agentMXID, "generation: 3", "profile mac-se-1"}},
 		"publisher": {publisher, []string{"profile grant-revocation-1"}},
 	} {
 		r, err := AttestationRendering(c.p)
@@ -90,7 +90,7 @@ func TestAttestationWindowEdge(t *testing.T) {
 		{time.Date(2027, 11, 6, 13, 0, 0, 0, time.UTC), true},  // exactly 366 days
 		{time.Date(2027, 11, 6, 13, 0, 1, 0, time.UTC), false}, // one second more
 	} {
-		_, _, errA := BuildMacAgentAttestation(root, spki, metaMXID, 1, nb, c.ex)
+		_, _, errA := BuildMacAgentAttestation(root, spki, agentMXID, 1, nb, c.ex)
 		_, _, errP := BuildPublisherAttestation(root, spki, nb, c.ex)
 		if (errA == nil) != c.admitted || (errP == nil) != c.admitted {
 			t.Error("window edge", c.ex, errA, errP)

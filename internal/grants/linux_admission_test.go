@@ -39,7 +39,7 @@ func newLinuxCombinedRigAt(t *testing.T, dir string) *linuxCombinedRig {
 	g.config = LinuxReceiverConfig{MUReceiverConfig: MUReceiverConfig{
 		Binding: MUBinding{Audience: d.config.Audience, GrantRoot: d.config.GrantRoot},
 		State:   MUStateConfig{Directory: dir, Epoch: sha256.Sum256([]byte("combined-fixture-epoch"))},
-		Owner:   "owner:alexis", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true},
+		Owner:   "owner:fixture-primary", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true},
 		RootRevocations: func() ([]MURevocation, error) { return nil, nil },
 		Signers:         map[string]bool{d.config.PublisherKey: true, d.config.AgentRevocationRoot: true},
 	}, PublisherKey: d.config.PublisherKey, AgentRevocationRoot: d.config.AgentRevocationRoot, RoomID: d.config.RoomID, ReceiverMXID: d.config.ReceiverMXID}

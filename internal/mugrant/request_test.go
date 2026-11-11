@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-const requestText = "Meta assigns: review the integrated multi-use grant solution"
+const requestText = "sender assigns: review the integrated multi-use grant solution"
 
 // Computed outside Go: printf '%s' "$requestText" | shasum -a 256
-const requestTextSHA = "2a00b04ba9f207e26dcb7016ed05025b32ee4b8c3ee5f5de819ad08947f7e9a9"
+const requestTextSHA = "bcc576a608f789ad2770804cfc914c0537a344969d02aef13f77578a4f4d17d8"
 
 func requestSpec(t *testing.T) RequestSpec {
 	t.Helper()
 	_, author := testKey(t)
 	return RequestSpec{
 		Author: author, AuthorAttestation: "sha256:" + strings.Repeat("ab", 32), Audience: "swarma-keyvault-receiver",
-		Room: "!room:gr.relux.works", To: "@keyvault.orch-altair:gr.relux.works",
+		Room: "!fixture-principal-3:example.invalid", To: "@fixture-principal-6:example.invalid",
 		Action: "work.assign", Target: Target{"product", "swarma-platform"},
 		Arguments: map[string]string{"module": "swarma-keyvault", "title": "Review the integrated multi-use grant solution"},
 		Text:      requestText, Nonce: bytes.Repeat([]byte{0x22}, 16),
@@ -76,8 +76,8 @@ func TestBuildRequestRefusals(t *testing.T) {
 		"kind-mismatch":    func(s *RequestSpec) { s.Target.Kind = "room-scope" },
 		"bad-author":       func(s *RequestSpec) { s.Author = "p256:AAAA" },
 		"bad-attestation":  func(s *RequestSpec) { s.AuthorAttestation = "att-1" },
-		"room-alias":       func(s *RequestSpec) { s.Room = "#swarma-keyvault:relux.works" },
-		"bad-recipient":    func(s *RequestSpec) { s.To = "altair" },
+		"room-alias":       func(s *RequestSpec) { s.Room = "#fixture-room:example.invalid" },
+		"bad-recipient":    func(s *RequestSpec) { s.To = "invalid-recipient" },
 		"empty-text":       func(s *RequestSpec) { s.Text = "" },
 		"long-text":        func(s *RequestSpec) { s.Text = strings.Repeat("x", MaxRequestText+1) },
 		"invalid-utf8":     func(s *RequestSpec) { s.Text = "\xff" },

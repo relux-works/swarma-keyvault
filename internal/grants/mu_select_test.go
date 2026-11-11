@@ -27,27 +27,27 @@ var muProductTarget = map[string]any{"kind": "product", "id": "swarma-platform"}
 // refuses; a covering grant for another subject is never selected; and a
 // malformed registry entry refuses instead of being skipped.
 func TestMUSelectGrant(t *testing.T) {
-	meta := muGrantRecord(t, "p256:meta", []any{"work.assign"}, []any{muProductTarget}, "a")
+	sender := muGrantRecord(t, "p256:sender", []any{"work.assign"}, []any{muProductTarget}, "a")
 	other := muGrantRecord(t, "p256:other", []any{"work.assign"}, []any{muProductTarget}, "b")
-	rooms := muGrantRecord(t, "p256:meta", []any{"room.membership"}, []any{map[string]any{"kind": "room-scope", "id": "swarma-space"}}, "c")
-	got, err := muSelectGrant([][]byte{other, meta, rooms}, "p256:meta", "work.assign", "product", "swarma-platform")
-	if err != nil || !bytes.Equal(got, meta) {
+	rooms := muGrantRecord(t, "p256:sender", []any{"room.membership"}, []any{map[string]any{"kind": "room-scope", "id": "swarma-space"}}, "c")
+	got, err := muSelectGrant([][]byte{other, sender, rooms}, "p256:sender", "work.assign", "product", "swarma-platform")
+	if err != nil || !bytes.Equal(got, sender) {
 		t.Fatal("single covering grant not selected", err)
 	}
-	second := muGrantRecord(t, "p256:meta", []any{"work.accept", "work.assign"}, []any{muProductTarget}, "d")
-	if _, err := muSelectGrant([][]byte{meta, second}, "p256:meta", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUAmbiguous) {
+	second := muGrantRecord(t, "p256:sender", []any{"work.accept", "work.assign"}, []any{muProductTarget}, "d")
+	if _, err := muSelectGrant([][]byte{sender, second}, "p256:sender", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUAmbiguous) {
 		t.Fatal("ambiguous selection not refused", err)
 	}
-	if _, err := muSelectGrant([][]byte{meta, second}, "p256:meta", "work.accept", "product", "swarma-platform"); err != nil {
+	if _, err := muSelectGrant([][]byte{sender, second}, "p256:sender", "work.accept", "product", "swarma-platform"); err != nil {
 		t.Fatal("unambiguous neighbour refused", err)
 	}
-	if _, err := muSelectGrant([][]byte{other, rooms}, "p256:meta", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUNoGrant) {
+	if _, err := muSelectGrant([][]byte{other, rooms}, "p256:sender", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUNoGrant) {
 		t.Fatal("foreign subject grant selected", err)
 	}
-	if _, err := muSelectGrant([][]byte{meta}, "p256:meta", "work.assign", "product", "other-platform"); !errors.Is(err, ErrMUNoGrant) {
+	if _, err := muSelectGrant([][]byte{sender}, "p256:sender", "work.assign", "product", "other-platform"); !errors.Is(err, ErrMUNoGrant) {
 		t.Fatal("uncovered target selected", err)
 	}
-	if _, err := muSelectGrant([][]byte{meta, []byte("{not json")}, "p256:meta", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUState) {
+	if _, err := muSelectGrant([][]byte{sender, []byte("{not json")}, "p256:sender", "work.assign", "product", "swarma-platform"); !errors.Is(err, ErrMUState) {
 		t.Fatal("malformed registry entry skipped", err)
 	}
 }

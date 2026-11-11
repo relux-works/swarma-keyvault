@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-const metaMXID = "@meta-keeper.keeper-sirius:gr.relux.works"
+const agentMXID = "@fixture-principal-7:example.invalid"
 
 func metaSpec(t *testing.T) GrantSpec {
 	t.Helper()
@@ -21,9 +21,9 @@ func metaSpec(t *testing.T) GrantSpec {
 	for _, a := range []string{"work.assign", "work.require", "work.contract", "work.prioritize", "work.land-order", "work.accept"} {
 		entries = append(entries, Entry{a, product})
 	}
-	entries = append(entries, Entry{"account.manage", Target{"account-scope", "owner:alexis"}}, Entry{"room.membership", Target{"room-scope", "swarma-space"}})
+	entries = append(entries, Entry{"account.manage", Target{"account-scope", "owner:fixture-primary"}}, Entry{"room.membership", Target{"room-scope", "swarma-space"}})
 	spec := GrantSpec{
-		Issuer: issuer, Subject: subject, SubjectMXID: metaMXID, Audience: "swarma-keyvault-receiver",
+		Issuer: issuer, Subject: subject, SubjectMXID: agentMXID, Audience: "swarma-keyvault-receiver",
 		Entries:   entries,
 		NotBefore: time.Date(2026, 11, 5, 13, 0, 0, 0, time.UTC), Expires: time.Date(2027, 11, 5, 13, 0, 0, 0, time.UTC),
 		Use: UseUntilExpiry, Nonce: bytes.Repeat([]byte{0x11}, 16),
@@ -32,7 +32,7 @@ func metaSpec(t *testing.T) GrantSpec {
 	return spec
 }
 
-// Claim: the Meta delegation builds a canonical grant/1 body with sorted
+// Claim: the sender delegation builds a canonical grant/1 body with sorted
 // actions, sorted typed targets, depth 0, no parent, A2 without presence and the
 // signed until_expiry policy in caveats/v2, and its Touch ID reason shows the
 // policy, grantee, MSK interval and all eight labels within 200 scalars.
@@ -50,7 +50,7 @@ func TestBuildMetaDelegation(t *testing.T) {
 		t.Fatal("actions", string(actions))
 	}
 	targets, _ := json.Marshal(b["targets"])
-	if string(targets) != `[{"id":"owner:alexis","kind":"account-scope"},{"id":"swarma-platform","kind":"product"},{"id":"swarma-space","kind":"room-scope"}]` {
+	if string(targets) != `[{"id":"owner:fixture-primary","kind":"account-scope"},{"id":"swarma-platform","kind":"product"},{"id":"swarma-space","kind":"room-scope"}]` {
 		t.Fatal("targets", string(targets))
 	}
 	caveats, _ := json.Marshal(b["caveats"])
@@ -64,12 +64,12 @@ func TestBuildMetaDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "до срока · " + metaMXID + " · 05.11.2026 16:00–05.11.2027 16:00 MSK · задачи, требования, контракты, приоритеты, посадки, приёмка, учётки, комнаты · SHA256 "
+	want := "до срока · " + agentMXID + " · 05.11.2026 16:00–05.11.2027 16:00 MSK · задачи, требования, контракты, приоритеты, посадки, приёмка, учётки, комнаты · SHA256 "
 	if !strings.HasPrefix(r, want) || utf8.RuneCountInString(r) > ReasonLimit || utf8.RuneCountInString(r) != utf8.RuneCountInString(want)+12 {
 		t.Fatal("reason", utf8.RuneCountInString(r), r)
 	}
 	rendering := g.Rendering()
-	for _, s := range []string{metaMXID, "until_expiry", "2026-11-05T13:00:00Z – 2027-11-05T13:00:00Z", "account.manage (create, rename, retire agent accounts) on account-scope/owner:alexis", "room.membership (invite to and remove from rooms) on room-scope/swarma-space", "work.accept (acceptance and return of work) on product/swarma-platform", g.Plan().ContentID(), "delegation depth: 0"} {
+	for _, s := range []string{agentMXID, "until_expiry", "2026-11-05T13:00:00Z – 2027-11-05T13:00:00Z", "account.manage (create, rename, retire agent accounts) on account-scope/owner:fixture-primary", "room.membership (invite to and remove from rooms) on room-scope/swarma-space", "work.accept (acceptance and return of work) on product/swarma-platform", g.Plan().ContentID(), "delegation depth: 0"} {
 		if !strings.Contains(rendering, s) {
 			t.Fatal("rendering misses", s)
 		}
@@ -106,7 +106,7 @@ func TestGrantIntervalCap(t *testing.T) {
 }
 
 // Claim: the vocabulary is a closed allowlist and the spec is checked field by
-// field; every refusal sits beside the valid Meta spec.
+// field; every refusal sits beside the valid sender spec.
 func TestGrantSpecRefusals(t *testing.T) {
 	cases := map[string]func(*GrantSpec){
 		"unknown-action":    func(s *GrantSpec) { s.Entries[0].Action = "repository.delete" },
@@ -115,7 +115,7 @@ func TestGrantSpecRefusals(t *testing.T) {
 		"empty-target-id":   func(s *GrantSpec) { s.Entries[0].Target.ID = "" },
 		"duplicate-entry":   func(s *GrantSpec) { s.Entries = append(s.Entries, s.Entries[0]) },
 		"no-entries":        func(s *GrantSpec) { s.Entries = nil },
-		"bad-mxid":          func(s *GrantSpec) { s.SubjectMXID = "meta-keeper" },
+		"bad-mxid":          func(s *GrantSpec) { s.SubjectMXID = "invalid-recipient" },
 		"self-grant":        func(s *GrantSpec) { s.Subject = s.Issuer },
 		"bad-subject-key":   func(s *GrantSpec) { s.Subject = "p256:AAAA" },
 		"short-nonce":       func(s *GrantSpec) { s.Nonce = s.Nonce[:15] },

@@ -39,11 +39,11 @@ func muServiceRig(t *testing.T) (*muDock, map[string]any, string) {
 	b64 := base64.RawURLEncoding.EncodeToString
 	cfg := map[string]any{
 		"type": "mu-receiver-config-1", "grant_root": g.root.id, "audience": muDockAud, "grants": []string{b64(g.grant)},
-		"agents":                []map[string]any{{"mxid": muDockMeta, "key": g.meta.id, "attestation": b64(g.att), "generation": 1}},
+		"agents":                []map[string]any{{"mxid": muDockSender, "key": g.sender.id, "attestation": b64(g.att), "generation": 1}},
 		"publisher_attestation": b64(g.pubAtt), "publisher_key": g.pub.id, "publisher_snapshot_path": snapPath, "root_revocations": []string{},
 		"state_dir": state, "state_epoch": hex.EncodeToString(make([]byte, 31)) + "01",
-		"owner": "owner:alexis", "room_scope": "swarma-space", "modules": []string{"swarma-keyvault"}, "paused": []string{},
-		"registry_owners": map[string]string{"@ivan-agent:relux.works": "owner:ivan"}, "time_authority_seconds": 300,
+		"owner": "owner:fixture-primary", "room_scope": "swarma-space", "modules": []string{"swarma-keyvault"}, "paused": []string{},
+		"registry_owners": map[string]string{"@fixture-principal-5:example.invalid": "owner:fixture-3"}, "time_authority_seconds": 300,
 		"a2a":        map[string]any{"path": exe, "sha256": fileSHA(t, exe), "profile": "keyvault-gr", "identity": "keyvault.orch-altair", "config_dir": dir, "room": muDockRoom},
 		"task_board": map[string]any{"path": board, "sha256": fileSHA(t, board), "board_dir": dir, "parent": "STORY-261105-dock"},
 	}
@@ -72,7 +72,7 @@ func muServiceFrom(t *testing.T, cfg map[string]any) (*MUService, error) {
 
 // Claim: the configured service runs the sitting through the pinned a2a
 // projection and the pinned task-board: an in-scope request creates a task
-// (receipt with element id), its replay refuses, and the Ivan-side
+// (receipt with element id), its replay refuses, and the secondary-owner
 // account.manage refuses before reservation. The service clock is set to
 // the fixture time; the snapshot is the fixture's fresh one.
 func TestMUServiceSitting(t *testing.T) {
@@ -85,7 +85,7 @@ func TestMUServiceSitting(t *testing.T) {
 	if err := svc.InitState(); err != nil {
 		t.Fatal(err)
 	}
-	g.request("$s1", "work.assign", "product", "swarma-platform", map[string]string{"module": "swarma-keyvault", "title": "Review"}, "Meta assigns: review")
+	g.request("$s1", "work.assign", "product", "swarma-platform", map[string]string{"module": "swarma-keyvault", "title": "Review"}, "sender assigns: review")
 	muEventRecord(t, a2aDir, g.events["$s1"])
 	out, err := svc.Execute(context.Background(), "$s1")
 	if err != nil || out.State != "succeeded" || !strings.Contains(string(out.Receipt), "TASK-261105-dockxx") {
@@ -94,7 +94,7 @@ func TestMUServiceSitting(t *testing.T) {
 	if _, err := svc.Execute(context.Background(), "$s1"); !errors.Is(err, ErrMUNonceHeld) {
 		t.Fatal("replay admitted", err)
 	}
-	g.request("$s2", "account.manage", "account-scope", "owner:alexis", map[string]string{"account": "@ivan-agent:relux.works"}, "retire an Ivan-side account")
+	g.request("$s2", "account.manage", "account-scope", "owner:fixture-primary", map[string]string{"account": "@fixture-principal-5:example.invalid"}, "retire a secondary-owner account")
 	muEventRecord(t, a2aDir, g.events["$s2"])
 	if _, err := svc.Execute(context.Background(), "$s2"); !errors.Is(err, ErrMUScope) {
 		t.Fatal("out-of-scope admitted", err)

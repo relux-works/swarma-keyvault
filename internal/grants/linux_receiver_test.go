@@ -75,11 +75,11 @@ func newLinuxRig(t *testing.T) *linuxRig {
 		t.Fatal(err)
 	}
 	c := LinuxReceiverConfig{MUReceiverConfig: MUReceiverConfig{Binding: MUBinding{Audience: muDockAud, GrantRoot: g.v.root}, State: MUStateConfig{Directory: dir, Epoch: sha256.Sum256([]byte("synthetic-epoch"))},
-		Signers: map[string]bool{g.v.publisher: true, "ed25519:synthetic-agent-revoker": true}, Owner: "owner:alexis", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, RootRevocations: func() ([]MURevocation, error) { return nil, nil }}, PublisherKey: g.v.publisher, AgentRevocationRoot: "ed25519:synthetic-agent-revoker", RoomID: muDockRoom, ReceiverMXID: muDockReceiver, AllowedRooms: map[string]bool{muDockRoom: true}}
+		Signers: map[string]bool{g.v.publisher: true, "ed25519:synthetic-agent-revoker": true}, Owner: "owner:fixture-primary", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, RootRevocations: func() ([]MURevocation, error) { return nil, nil }}, PublisherKey: g.v.publisher, AgentRevocationRoot: "ed25519:synthetic-agent-revoker", RoomID: muDockRoom, ReceiverMXID: muDockReceiver, AllowedRooms: map[string]bool{muDockRoom: true}}
 	if err := InitializeLinuxReceiverState(c.State, c.Binding, c.RootRevocations); err != nil {
 		t.Fatal(err)
 	}
-	reg := fakeRegistry{keys: map[string]string{}, owners: map[string]string{"@owned:example.invalid": "owner:alexis", "@foreign:example.invalid": "owner:ivan"}}
+	reg := fakeRegistry{keys: map[string]string{}, owners: map[string]string{"@owned:example.invalid": "owner:fixture-primary", "@foreign:example.invalid": "owner:fixture-3"}}
 	f := linuxEffectFunc(func(_ context.Context, _ MUDecision) ([]byte, error) {
 		g.calls.Add(1)
 		if g.fail {
@@ -239,8 +239,8 @@ func TestLinuxReceiverRechecksAndPolicy(t *testing.T) {
 		change func(*linuxRig, *MUEnvelopeEvent)
 		want   error
 	}{
-		"room":                        {func(g *linuxRig, e *MUEnvelopeEvent) { e.Room = "!other:invalid" }, ErrMUProjection},
-		"receiver":                    {func(g *linuxRig, e *MUEnvelopeEvent) { e.Receiver = "@other:invalid" }, ErrMUProjection},
+		"room":                        {func(g *linuxRig, e *MUEnvelopeEvent) { e.Room = "!fixture-principal-1:invalid" }, ErrMUProjection},
+		"receiver":                    {func(g *linuxRig, e *MUEnvelopeEvent) { e.Receiver = "@fixture-principal-9:invalid" }, ErrMUProjection},
 		"text-before-broken-envelope": {func(g *linuxRig, e *MUEnvelopeEvent) { e.Envelope = []byte("broken"); e.Text = []byte("a\r") }, ErrLinuxRequestText},
 		"paused-grant":                {func(g *linuxRig, e *MUEnvelopeEvent) { g.r.config.Paused[g.v.grant] = true }, ErrMUPaused},
 		"paused-module":               {func(g *linuxRig, e *MUEnvelopeEvent) { g.r.config.PausedModules["swarma-keyvault"] = true }, ErrMUPaused},
@@ -288,7 +288,7 @@ func TestLinuxReceiverOwnerAndRoomScope(t *testing.T) {
 			spec, s := linuxTestSpec(t)
 			spec.Action = action
 			spec.Target.Kind = "account-scope"
-			spec.Target.ID = "owner:alexis"
+			spec.Target.ID = "owner:fixture-primary"
 			spec.Arguments = map[string]string{"account": "@owned:example.invalid"}
 			if !allowed {
 				spec.Arguments["account"] = "@foreign:example.invalid"

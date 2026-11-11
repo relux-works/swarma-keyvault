@@ -52,16 +52,16 @@ func (k muKey) sign(t *testing.T, p *mugrant.Plan) []byte {
 }
 
 const (
-	muDockMeta     = "@meta-keeper.keeper-sirius:gr.relux.works"
-	muDockReceiver = "@keyvault.orch-altair:gr.relux.works"
-	muDockRoom     = "!room:gr.relux.works"
+	muDockSender   = "@fixture-principal-7:example.invalid"
+	muDockReceiver = "@fixture-principal-6:example.invalid"
+	muDockRoom     = "!fixture-principal-3:example.invalid"
 	muDockAud      = "swarma-keyvault-receiver"
 )
 
 type muDock struct {
 	t                  *testing.T
 	now                time.Time
-	root, meta, pub    muKey
+	root, sender, pub  muKey
 	grant, att, pubAtt []byte
 	attID              string
 	snapshot           []byte
@@ -72,10 +72,10 @@ type muDock struct {
 
 func newMUDock(t *testing.T) *muDock {
 	t.Helper()
-	g := &muDock{t: t, now: time.Date(2026, 11, 5, 18, 0, 0, 0, time.UTC), root: newMUKey(t), meta: newMUKey(t), pub: newMUKey(t), events: map[string]MUEnvelopeEvent{}}
+	g := &muDock{t: t, now: time.Date(2026, 11, 5, 18, 0, 0, 0, time.UTC), root: newMUKey(t), sender: newMUKey(t), pub: newMUKey(t), events: map[string]MUEnvelopeEvent{}}
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
-	ap, _, err := mugrant.BuildMacAgentAttestation(g.root.id, g.meta.spki, muDockMeta, 1, g.now.Add(-2*time.Hour), g.now.Add(60*24*time.Hour))
+	ap, _, err := mugrant.BuildMacAgentAttestation(g.root.id, g.sender.spki, muDockSender, 1, g.now.Add(-2*time.Hour), g.now.Add(60*24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +85,8 @@ func newMUDock(t *testing.T) *muDock {
 		t.Fatal(err)
 	}
 	g.pubAtt = g.root.sign(t, pp)
-	grant, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: g.root.id, Subject: g.meta.id, SubjectMXID: muDockMeta, SubjectAttestation: g.att, PublisherAttestation: g.pubAtt, Audience: muDockAud,
-		Entries:   []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: "swarma-platform"}}, {Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:alexis"}}},
+	grant, err := mugrant.BuildGrant(mugrant.GrantSpec{Issuer: g.root.id, Subject: g.sender.id, SubjectMXID: muDockSender, SubjectAttestation: g.att, PublisherAttestation: g.pubAtt, Audience: muDockAud,
+		Entries:   []mugrant.Entry{{Action: "work.assign", Target: mugrant.Target{Kind: "product", ID: "swarma-platform"}}, {Action: "account.manage", Target: mugrant.Target{Kind: "account-scope", ID: "owner:fixture-primary"}}},
 		NotBefore: g.now.Add(-time.Hour), Expires: g.now.Add(30 * 24 * time.Hour), Use: mugrant.UseUntilExpiry, Nonce: nonce})
 	if err != nil {
 		t.Fatal(err)
@@ -103,7 +103,7 @@ func newMUDock(t *testing.T) *muDock {
 		t.Fatal(err)
 	}
 	platform := NewMUPlatform(MUPlatformConfig{GrantRoot: g.root.id, Audience: muDockAud, Grants: [][]byte{g.grant},
-		Agents:    map[string]MUMacAgent{muDockMeta: {Key: g.meta.id, Attestation: g.att, Generation: 1}},
+		Agents:    map[string]MUMacAgent{muDockSender: {Key: g.sender.id, Attestation: g.att, Generation: 1}},
 		Publisher: g.pubAtt, PublisherKey: g.pub.id, Snapshot: func() ([]byte, error) { return g.snapshot, nil }, TimeAuthority: 5 * time.Minute},
 		func(id string) (MUEnvelopeEvent, error) {
 			e, ok := g.events[id]
@@ -112,9 +112,9 @@ func newMUDock(t *testing.T) *muDock {
 			}
 			return e, nil
 		})
-	reg := fakeRegistry{keys: map[string]string{muDockMeta: g.meta.id}, owners: map[string]string{"@agent-a:gr.relux.works": "owner:alexis", "@ivan-agent:relux.works": "owner:ivan"}}
+	reg := fakeRegistry{keys: map[string]string{muDockSender: g.sender.id}, owners: map[string]string{"@fixture-principal-4:example.invalid": "owner:fixture-primary", "@fixture-principal-5:example.invalid": "owner:fixture-3"}}
 	g.effect = &countingEffect{}
-	g.receiver = NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: "owner:alexis", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, Paused: map[string]bool{}},
+	g.receiver = NewMUReceiver(MUReceiverConfig{Binding: binding, State: state, Owner: "owner:fixture-primary", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, Paused: map[string]bool{}},
 		platform, reg, map[string]MUEffect{"work.assign": g.effect, "account.manage": g.effect})
 	g.receiver.now = func() time.Time { return g.now }
 	return g
@@ -128,20 +128,20 @@ func (g *muDock) publish(at time.Time, entries []mugrant.SnapshotEntry) {
 	g.snapshot = g.pub.sign(g.t, p)
 }
 
-// request signs a message/1 by Meta's key and registers its projection.
+// request signs a message/1 with the sender key and registers its projection.
 func (g *muDock) request(eventID, action, kind, id string, args map[string]string, text string) {
 	nonce := make([]byte, 16)
 	rand.Read(nonce)
-	r, err := mugrant.BuildRequest(mugrant.RequestSpec{Author: g.meta.id, AuthorAttestation: g.attID, Audience: muDockAud, Room: muDockRoom, To: muDockReceiver,
+	r, err := mugrant.BuildRequest(mugrant.RequestSpec{Author: g.sender.id, AuthorAttestation: g.attID, Audience: muDockAud, Room: muDockRoom, To: muDockReceiver,
 		Action: action, Target: mugrant.Target{Kind: kind, ID: id}, Arguments: args, Text: text, Nonce: nonce, IssuedAt: g.now.Add(-time.Second), Lifetime: 120 * time.Second})
 	if err != nil {
 		g.t.Fatal(err)
 	}
-	g.events[eventID] = MUEnvelopeEvent{Sender: muDockMeta, Receiver: muDockReceiver, Room: muDockRoom, EventID: eventID, Envelope: g.meta.sign(g.t, r.Plan()), Text: []byte(text)}
+	g.events[eventID] = MUEnvelopeEvent{Sender: muDockSender, Receiver: muDockReceiver, Room: muDockRoom, EventID: eventID, Envelope: g.sender.sign(g.t, r.Plan()), Text: []byte(text)}
 }
 
 func (g *muDock) handle(eventID string) (*MUOutcome, error) {
-	return g.receiver.Handle(context.Background(), MUEvent{SenderMXID: muDockMeta, RoomID: muDockRoom, EventID: eventID})
+	return g.receiver.Handle(context.Background(), MUEvent{SenderMXID: muDockSender, RoomID: muDockRoom, EventID: eventID})
 }
 
 func platformCode(err error) string {
@@ -157,12 +157,12 @@ func platformCode(err error) string {
 // the sitting sequence holds end to end: an in-scope work.assign under the
 // until_expiry grant succeeds, a second one with a fresh nonce succeeds, a
 // replay of the second refuses without a new effect, and account.manage on an
-// Ivan-side account refuses before reservation.
+// secondary-owner account refuses before reservation.
 func TestMUDockingSittingSequence(t *testing.T) {
 	g := newMUDock(t)
 	args := map[string]string{"module": "swarma-keyvault", "title": "Review the integrated solution"}
-	g.request("$in1", "work.assign", "product", "swarma-platform", args, "Meta assigns: review the integrated solution")
-	g.request("$in2", "work.assign", "product", "swarma-platform", args, "Meta assigns: second task")
+	g.request("$in1", "work.assign", "product", "swarma-platform", args, "sender assigns: review the integrated solution")
+	g.request("$in2", "work.assign", "product", "swarma-platform", args, "sender assigns: second task")
 	for _, id := range []string{"$in1", "$in2"} {
 		if out, err := g.handle(id); err != nil || out.State != "succeeded" {
 			t.Fatal("in-scope request refused", id, out, err)
@@ -171,7 +171,7 @@ func TestMUDockingSittingSequence(t *testing.T) {
 	if _, err := g.handle("$in2"); !errors.Is(err, ErrMUNonceHeld) || g.effect.calls != 2 {
 		t.Fatal("replay admitted", err, g.effect.calls)
 	}
-	g.request("$out", "account.manage", "account-scope", "owner:alexis", map[string]string{"account": "@ivan-agent:relux.works"}, "Meta retires an Ivan-side account")
+	g.request("$out", "account.manage", "account-scope", "owner:fixture-primary", map[string]string{"account": "@fixture-principal-5:example.invalid"}, "sender retires a secondary-owner account")
 	if _, err := g.handle("$out"); !errors.Is(err, ErrMUScope) || g.effect.calls != 2 {
 		t.Fatal("out-of-scope request not refused", err, g.effect.calls)
 	}

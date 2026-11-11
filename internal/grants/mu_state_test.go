@@ -26,7 +26,7 @@ func muFixture(t *testing.T) (MUStateConfig, MUBinding) {
 
 func muUse(once bool, grant, nonce string) MUUse {
 	return MUUse{Once: once, GrantRoot: "p256:root", GrantID: grant, Action: "work.assign", TargetKind: "product", TargetID: "swarma-platform",
-		Requester: "p256:meta", Nonce: nonce, Audience: "swarma-keyvault-receiver", RequestHash: sha256.Sum256([]byte(grant + nonce))}
+		Requester: "p256:sender", Nonce: nonce, Audience: "swarma-keyvault-receiver", RequestHash: sha256.Sum256([]byte(grant + nonce))}
 }
 
 func muOpen(t *testing.T, c MUStateConfig, b MUBinding) *muState {

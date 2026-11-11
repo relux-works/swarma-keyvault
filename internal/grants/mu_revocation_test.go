@@ -31,7 +31,7 @@ func TestMURevocationMonotonic(t *testing.T) {
 	fresh := NewMUReceiver(g.r.config, g.v, g.r.registry, g.r.effects)
 	fresh.now = g.r.now
 	g.v.decisions["$3"] = muWithSnapshot(muDecision("grant-U", "r3", "until_expiry"), "p256:pub")
-	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muMeta, EventID: "$3"}); !errors.Is(err, ErrMURollback) {
+	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muSender, EventID: "$3"}); !errors.Is(err, ErrMURollback) {
 		t.Fatal("union lost across reopen", err)
 	}
 	g.v.decisions["$4"] = muWithSnapshot(muDecision("grant-U", "r4", "until_expiry"), "p256:pub", x, y)
@@ -50,7 +50,7 @@ func TestMURevocationMonotonic(t *testing.T) {
 func TestMURevocationRootWins(t *testing.T) {
 	for name, rev := range map[string]MURevocation{
 		"grant":       {"record", "grant-U"},
-		"author-key":  {"key", "p256:meta"},
+		"author-key":  {"key", "p256:sender"},
 		"attestation": {"record", "sha256:att"},
 	} {
 		g := newMURig(t)
@@ -120,11 +120,11 @@ func TestMURevocationHighWater(t *testing.T) {
 	fresh := NewMUReceiver(g.r.config, g.v, g.r.registry, g.r.effects)
 	fresh.now = g.r.now
 	g.v.decisions["$4"] = mark(muWithSnapshot(muDecision("grant-U", "h4", "until_expiry"), "p256:pub"), at.Add(-time.Second))
-	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muMeta, EventID: "$4"}); !errors.Is(err, ErrMURollback) {
+	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muSender, EventID: "$4"}); !errors.Is(err, ErrMURollback) {
 		t.Fatal("high-water lost across reopen", err)
 	}
 	g.v.decisions["$5"] = mark(muWithSnapshot(muDecision("grant-U", "h5", "until_expiry"), "p256:pub"), at.Add(time.Second))
-	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muMeta, EventID: "$5"}); err != nil {
+	if _, err := fresh.Handle(nil2ctx(), MUEvent{SenderMXID: muSender, EventID: "$5"}); err != nil {
 		t.Fatal("newer snapshot refused", err)
 	}
 	if g.effect.calls != 3 {

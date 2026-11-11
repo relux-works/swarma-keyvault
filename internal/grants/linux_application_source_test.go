@@ -183,7 +183,7 @@ func TestLinuxApplicationSourceFinalAdmission(t *testing.T) {
 				case "wrong-uid":
 					a.UID++
 				case "wrong-mxid":
-					a.MXID = "@other:example.invalid"
+					a.MXID = "@fixture-principal-9:example.invalid"
 				case "inactive":
 					a.Active = false
 				case "changed-generation-final":

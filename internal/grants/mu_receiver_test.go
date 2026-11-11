@@ -48,12 +48,12 @@ func (e *countingEffect) Execute(ctx context.Context, d MUDecision) ([]byte, err
 	return []byte("created " + d.Arguments["title"]), nil
 }
 
-const muMeta = "@meta-keeper.keeper-sirius:gr.relux.works"
+const muSender = "@fixture-principal-7:example.invalid"
 
 var muNow = time.Date(2026, 11, 5, 15, 0, 0, 0, time.UTC)
 
 func muDecision(id, nonce, use string) MUDecision {
-	return MUDecision{GrantRoot: "p256:root", GrantID: id, Use: use, Author: "p256:meta", Audience: "swarma-keyvault-receiver", Nonce: nonce,
+	return MUDecision{GrantRoot: "p256:root", GrantID: id, Use: use, Author: "p256:sender", Audience: "swarma-keyvault-receiver", Nonce: nonce,
 		Action: "work.assign", TargetKind: "product", TargetID: "swarma-platform", Arguments: map[string]string{"module": "swarma-keyvault", "title": "t-" + nonce},
 		Expires: muNow.Add(24 * time.Hour), RequestHash: sha256.Sum256([]byte(id + nonce))}
 }
@@ -69,9 +69,9 @@ func newMURig(t *testing.T) *muRig {
 	t.Helper()
 	c, b := muFixture(t)
 	v := &fakeVNextVerifier{decisions: map[string]MUDecision{}, refusals: map[string]error{}}
-	reg := fakeRegistry{keys: map[string]string{muMeta: "p256:meta"}, owners: map[string]string{"@agent-a:gr.relux.works": "owner:alexis", "@ivan-agent:relux.works": "owner:ivan"}}
+	reg := fakeRegistry{keys: map[string]string{muSender: "p256:sender"}, owners: map[string]string{"@fixture-principal-4:example.invalid": "owner:fixture-primary", "@fixture-principal-5:example.invalid": "owner:fixture-3"}}
 	e := &countingEffect{}
-	r := NewMUReceiver(MUReceiverConfig{Binding: b, State: c, Owner: "owner:alexis", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, Paused: map[string]bool{}},
+	r := NewMUReceiver(MUReceiverConfig{Binding: b, State: c, Owner: "owner:fixture-primary", RoomScope: "swarma-space", Modules: map[string]bool{"swarma-keyvault": true}, Paused: map[string]bool{}},
 		v, reg, map[string]MUEffect{"work.assign": e, "account.manage": e, "room.membership": e})
 	r.now = func() time.Time { return muNow }
 	return &muRig{r: r, v: v, effect: e, state: c}
@@ -87,7 +87,7 @@ func (g *muRig) journal(t *testing.T) []byte {
 }
 
 func (g *muRig) handle(id string) (*MUOutcome, error) {
-	return g.r.Handle(context.Background(), MUEvent{SenderMXID: muMeta, RoomID: "!room:example.invalid", EventID: id, Envelope: []byte("env-" + id)})
+	return g.r.Handle(context.Background(), MUEvent{SenderMXID: muSender, RoomID: "!fixture-principal-3:example.invalid", EventID: id, Envelope: []byte("env-" + id)})
 }
 
 // Claim: an until_expiry grant admits two in-scope requests with distinct
@@ -125,50 +125,50 @@ func TestMUReceiverRefusalsBeforeReservation(t *testing.T) {
 		event MUEvent
 		want  error
 	}{
-		"sender-not-attested": {nil, MUEvent{SenderMXID: "@stranger:gr.relux.works", EventID: "$x"}, ErrMUSender},
+		"sender-not-attested": {nil, MUEvent{SenderMXID: "@fixture-principal-10:example.invalid", EventID: "$x"}, ErrMUSender},
 		"author-not-attested-key": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Author = "p256:copied"
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUSender},
-		"verifier-refusal": {func(g *muRig) { g.v.refusals["$x"] = errSignatureInvalid }, MUEvent{SenderMXID: muMeta, EventID: "$x"}, errSignatureInvalid},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUSender},
+		"verifier-refusal": {func(g *muRig) { g.v.refusals["$x"] = errSignatureInvalid }, MUEvent{SenderMXID: muSender, EventID: "$x"}, errSignatureInvalid},
 		"expired": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Expires = muNow
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUState},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUState},
 		"wrong-audience": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Audience = "other-receiver"
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUAudience},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUAudience},
 		"paused": {func(g *muRig) {
 			g.v.decisions["$x"] = muDecision("grant-U", "n1", "until_expiry")
 			g.r.config.Paused["grant-U"] = true
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUPaused},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUPaused},
 		"grant-widening": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Action = "grant.issue"
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUWidening},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUWidening},
 		"unknown-module": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Arguments["module"] = "unknown-module"
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUScope},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUScope},
 		"ivan-side-account": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
-			d.Action, d.TargetKind, d.TargetID = "account.manage", "account-scope", "owner:alexis"
-			d.Arguments = map[string]string{"account": "@ivan-agent:relux.works"}
+			d.Action, d.TargetKind, d.TargetID = "account.manage", "account-scope", "owner:fixture-primary"
+			d.Arguments = map[string]string{"account": "@fixture-principal-5:example.invalid"}
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUScope},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUScope},
 		"room-invitee-not-owner": {func(g *muRig) {
 			d := muDecision("grant-U", "n1", "until_expiry")
 			d.Action, d.TargetKind, d.TargetID = "room.membership", "room-scope", "swarma-space"
-			d.Arguments = map[string]string{"room": "!r:gr.relux.works", "account": "@ivan-agent:relux.works"}
+			d.Arguments = map[string]string{"room": "!fixture-principal-2:example.invalid", "account": "@fixture-principal-5:example.invalid"}
 			g.v.decisions["$x"] = d
-		}, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUScope},
-		"unknown-policy": {func(g *muRig) { g.v.decisions["$x"] = muDecision("grant-U", "n1", "unlimited") }, MUEvent{SenderMXID: muMeta, EventID: "$x"}, ErrMUState},
+		}, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUScope},
+		"unknown-policy": {func(g *muRig) { g.v.decisions["$x"] = muDecision("grant-U", "n1", "unlimited") }, MUEvent{SenderMXID: muSender, EventID: "$x"}, ErrMUState},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -192,11 +192,11 @@ func TestMUReceiverRefusalsBeforeReservation(t *testing.T) {
 func TestMUReceiverOwnerScopeAdmits(t *testing.T) {
 	g := newMURig(t)
 	acc := muDecision("grant-U", "a1", "until_expiry")
-	acc.Action, acc.TargetKind, acc.TargetID = "account.manage", "account-scope", "owner:alexis"
-	acc.Arguments = map[string]string{"account": "@agent-a:gr.relux.works"}
+	acc.Action, acc.TargetKind, acc.TargetID = "account.manage", "account-scope", "owner:fixture-primary"
+	acc.Arguments = map[string]string{"account": "@fixture-principal-4:example.invalid"}
 	room := muDecision("grant-U", "a2", "until_expiry")
 	room.Action, room.TargetKind, room.TargetID = "room.membership", "room-scope", "swarma-space"
-	room.Arguments = map[string]string{"room": "!r:gr.relux.works", "account": "@agent-a:gr.relux.works"}
+	room.Arguments = map[string]string{"room": "!fixture-principal-2:example.invalid", "account": "@fixture-principal-4:example.invalid"}
 	g.v.decisions["$acc"], g.v.decisions["$room"] = acc, room
 	for _, id := range []string{"$acc", "$room"} {
 		if _, err := g.handle(id); err != nil {

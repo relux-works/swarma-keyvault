@@ -39,7 +39,7 @@ func (k edTestKey) sign(t *testing.T, p *Plan) []byte {
 	return w
 }
 
-var testBinding = KeymakerBinding{UID: 1000, Generation: "generation-1", RegistrationNumber: 7, MasterEpoch: "epoch-1", Owner: "owner:alexis", Path: "agents/linux"}
+var testBinding = KeymakerBinding{UID: 1000, Generation: "generation-1", RegistrationNumber: 7, MasterEpoch: "epoch-1", Owner: "owner:fixture-primary", Path: "agents/linux"}
 
 const linuxTestMXID = "@linux-agent:interop.invalid"
 
@@ -95,8 +95,8 @@ func TestGrantLinuxGrantee(t *testing.T) {
 		"issued-after-attestation":  func(s *GrantSpec) { s.IssuedAt = s.IssuedAt.Add(20 * time.Hour) },
 		"uid-differs":               func(s *GrantSpec) { s.SubjectRegistry.UID = 1001 },
 		"registration-differs":      func(s *GrantSpec) { s.SubjectRegistry.RegistrationNumber = 8 },
-		"mxid-differs":              func(s *GrantSpec) { s.SubjectMXID = "@other:interop.invalid" },
-		"registry-mxid-differs":     func(s *GrantSpec) { s.SubjectRegistry.MXID = "@other:interop.invalid" },
+		"mxid-differs":              func(s *GrantSpec) { s.SubjectMXID = "@fixture-principal-9:interop.invalid" },
+		"registry-mxid-differs":     func(s *GrantSpec) { s.SubjectRegistry.MXID = "@fixture-principal-9:interop.invalid" },
 		"other-service-root":        func(s *GrantSpec) { s.ServiceRoot = other.id },
 		"no-registry":               func(s *GrantSpec) { s.SubjectRegistry = nil },
 		"no-issuance-time":          func(s *GrantSpec) { s.IssuedAt = time.Time{} },

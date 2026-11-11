@@ -368,16 +368,28 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	}
 }
 
+var fixtureMatrixLiteral = regexp.MustCompile(`[!@][a-zA-Z0-9._=/-]+:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
+
+var fixtureProcessLabel = regexp.MustCompile(`(?i)\b(?:meta|keeper|orchestrator)\b`)
+
 var fixtureRole = regexp.MustCompile(`(?i)(?:^|[._-])(?:keeper|orch)(?:[._-]|$)`)
 
 // Fixture principals use reserved example domains and neutral local labels.
 // Recursion checks JSON strings and base64-encoded public fields as well as text.
 func fixtureIdentityHit(raw string, depth int) bool {
-	if depth > 8 || len(raw) > 1<<20 {
+	if raw == "" || depth > 8 || len(raw) > 1<<20 {
 		return false
 	}
-	for _, principal := range matrixLiteral.FindAllString(raw, -1) {
-		local, domain, _ := strings.Cut(strings.TrimPrefix(principal, "@"), ":")
+	if fixtureProcessLabel.MatchString(raw) {
+		return true
+	}
+	for _, scope := range ownerScopeLiteral.FindAllString(raw, -1) {
+		if scope != "owner:example" && !strings.HasPrefix(scope, "owner:fixture-") {
+			return true
+		}
+	}
+	for _, principal := range fixtureMatrixLiteral.FindAllString(raw, -1) {
+		local, domain, _ := strings.Cut(strings.TrimLeft(principal, "@!"), ":")
 		example := strings.HasSuffix(domain, ".invalid") || domain == "example.com" || domain == "example.org" || domain == "example.net"
 		if !example || fixtureRole.MatchString(local) {
 			return true
@@ -418,14 +430,29 @@ func fixtureIdentityHit(raw string, depth int) bool {
 	return false
 }
 
+func muFixtureSources(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, pattern := range []string{
+		"../../cmd/swarma-keyvault/mu*_test.go",
+		"../../internal/mugrant/*_test.go",
+		"../../internal/grants/mu*_test.go",
+		"../../internal/grants/linux*_test.go",
+	} {
+		matched, err := filepath.Glob(pattern)
+		if err != nil || len(matched) == 0 {
+			t.Fatal("MU fixture family unavailable", pattern, err)
+		}
+		files = append(files, matched...)
+	}
+	return files
+}
+
 // Retained MU test literals and shipped public JSON examples admit only neutral
 // fixture principals, including decoded serialized fields. The source guard's
 // deliberate arbitrary-value plants remain a separate, bounded scope.
 func TestMUFixtureIdentityBoundary(t *testing.T) {
-	files, err := filepath.Glob("../../cmd/swarma-keyvault/mu*test.go")
-	if err != nil || len(files) == 0 {
-		t.Fatal("MU fixtures unavailable", err)
-	}
+	files := muFixtureSources(t)
 	for _, path := range files {
 		f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
@@ -469,6 +496,9 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 	}{
 		{"@reader:example.invalid", false}, {"@reader:interop.invalid", false},
 		{"@reader:example.org", false}, {"@reader:unreserved.test", true},
+		{"!fixture-room:example.invalid", false}, {"!fixture-room:outside.test", true},
+		{"owner:fixture-owner", false}, {"owner:example", false}, {"owner:account", true},
+		{"metadata", false}, {"keeper", true},
 		{"@sample.keeper-node:example.invalid", true},
 	} {
 		raw, err := json.Marshal(map[string]string{"principal": tc.principal})
@@ -479,6 +509,31 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 			if fixtureIdentityHit(value, 0) != tc.forbidden {
 				t.Fatal("fixture serialization control verdict differs")
 			}
+		}
+	}
+}
+
+// Every retained library witness belongs to the scanned family, regardless of
+// its current literal values. Removing a family from the collector fails here.
+func TestMUFixtureScopeIncludesLibraries(t *testing.T) {
+	files := map[string]bool{}
+	for _, path := range muFixtureSources(t) {
+		files[filepath.ToSlash(path)] = true
+	}
+	for _, path := range []string{
+		"../../internal/mugrant/attestation_test.go",
+		"../../internal/mugrant/binding_test.go",
+		"../../internal/mugrant/issuer_test.go",
+		"../../internal/mugrant/request_test.go",
+		"../../internal/mugrant/keymaker_test.go",
+		"../../internal/grants/mu_projection_test.go",
+		"../../internal/grants/mu_docking_test.go",
+		"../../internal/grants/mu_service_test.go",
+		"../../internal/grants/mu_receiver_test.go",
+		"../../internal/grants/linux_verifier_test.go",
+	} {
+		if !files[path] {
+			t.Error("retained MU library fixture outside scan scope", path)
 		}
 	}
 }

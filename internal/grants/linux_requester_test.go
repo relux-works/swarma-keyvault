@@ -118,7 +118,7 @@ func TestLinuxRequesterRefusesBeforeSigner(t *testing.T) {
 		"alias":                     func(s *mugrant.RequestSpec) { s.Room = "#alias:invalid" },
 		"missing-exact-attestation": func(s *mugrant.RequestSpec) { s.AuthorAttestation = "current" },
 		"wildcard":                  func(s *mugrant.RequestSpec) { s.Target.ID = "swarma-*" },
-		"two-qualifiers":            func(s *mugrant.RequestSpec) { s.Target.ID = "owner:a:b" },
+		"two-qualifiers":            func(s *mugrant.RequestSpec) { s.Target.ID = "owner:fixture-1:b" },
 		"wrong-kind":                func(s *mugrant.RequestSpec) { s.Target.Kind = "room-scope" },
 		"unknown-action":            func(s *mugrant.RequestSpec) { s.Action = "grant.issue" },
 		"fractional-lifetime":       func(s *mugrant.RequestSpec) { s.Lifetime = time.Second + 1 },

@@ -21,7 +21,7 @@ func TestAttestationReasons(t *testing.T) {
 		t.Fatal(err)
 	}
 	nb, ex := time.Date(2026, 11, 5, 17, 0, 0, 0, time.UTC), time.Date(2027, 11, 6, 17, 0, 0, 0, time.UTC)
-	const mxid = "@meta-keeper.keeper-sirius:gr.relux.works"
+	const mxid = "@fixture-principal-7:example.invalid"
 	p, _, err := BuildMacAgentAttestation(root, spki, mxid, 2, nb, ex)
 	if err != nil {
 		t.Fatal(err)

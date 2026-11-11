@@ -132,6 +132,8 @@ func TestDynamicDisplayRefusalsAndReversibleEscaping(t *testing.T) {
 	}
 }
 
+// Unsupported profiles and use policies refuse beside admitted grant/profile
+// controls whose rendered reason states the selected policy.
 func TestClosedProfilesAndPolicyTitles(t *testing.T) {
 	d := testDigest()
 	for _, p := range []profile{"", "mac-agent", "publisher", "publisher-ed25519", "linux", "grant", "repository-2"} {

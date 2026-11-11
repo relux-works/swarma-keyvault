@@ -111,7 +111,7 @@ func newLinuxVerifierDock(t *testing.T) *linuxVerifierDock {
 	g.service, g.serviceID = linuxVerifierEd(t)
 	g.revoker, g.revokerID = linuxVerifierEd(t)
 	g.agent, g.agentID = linuxVerifierEd(t)
-	a := LinuxRegistryAgent{Key: g.agentID, MXID: "@linux:example.invalid", UID: 1000, RegistrationNumber: 42, Generation: "gen-1", MasterEpoch: "epoch-1", Owner: "owner:alexis", Path: "agents/linux", Active: true}
+	a := LinuxRegistryAgent{Key: g.agentID, MXID: "@linux:example.invalid", UID: 1000, RegistrationNumber: 42, Generation: "gen-1", MasterEpoch: "epoch-1", Owner: "owner:fixture-primary", Path: "agents/linux", Active: true}
 	binding := a.binding()
 	delete(binding, "active")
 	g.attBody = map[string]any{"type": "attestation/1", "issuer": g.serviceID, "subject": map[string]any{"algorithm": "Ed25519", "key_id": g.agentID, "public_bytes": strings.TrimPrefix(g.agentID, "ed25519:")}, "key_class": "agent", "purpose": "swarma-msg", "roles": []any{"author"}, "actions": []any{"message.sign"}, "binding": binding, "iat": g.now.Add(-time.Hour).Format(time.RFC3339), "exp": g.now.Add(time.Hour).Format(time.RFC3339)}
@@ -232,14 +232,14 @@ func TestLinuxVerifierRegistryAdmission(t *testing.T) {
 		{"registry-unavailable", func(g *linuxVerifierDock) { g.fake.agentErr = errors.New("offline") }, "key_binding_unavailable"},
 		{"by-id-unavailable", func(g *linuxVerifierDock) { g.fake.attErr = errors.New("offline") }, "key_binding_unavailable"},
 		{"by-id-missing", func(g *linuxVerifierDock) { delete(g.fake.attestations, g.attID) }, "key_binding_unavailable"},
-		{"sender-substitution", func(g *linuxVerifierDock) { g.event.Sender = "@other:example.invalid" }, "mu-sender-not-attested"},
+		{"sender-substitution", func(g *linuxVerifierDock) { g.event.Sender = "@fixture-principal-9:example.invalid" }, "mu-sender-not-attested"},
 		{"inactive", func(g *linuxVerifierDock) { g.fake.agent.Active = false }, "key_binding_invalid"},
 		{"key-substitution", func(g *linuxVerifierDock) { g.fake.agent.Key = g.serviceID }, "key_binding_unavailable"},
 		{"uid-mismatch", func(g *linuxVerifierDock) { g.fake.agent.UID++ }, "key_binding_unavailable"},
 		{"registration-reused", func(g *linuxVerifierDock) { g.fake.agent.RegistrationNumber++ }, "key_binding_unavailable"},
 		{"generation-changed", func(g *linuxVerifierDock) { g.fake.agent.Generation = "gen-2" }, "key_binding_invalid"},
 		{"epoch-changed", func(g *linuxVerifierDock) { g.fake.agent.MasterEpoch = "epoch-2" }, "key_binding_invalid"},
-		{"owner-mismatch", func(g *linuxVerifierDock) { g.fake.agent.Owner = "owner:ivan" }, "key_binding_invalid"},
+		{"owner-mismatch", func(g *linuxVerifierDock) { g.fake.agent.Owner = "owner:fixture-3" }, "key_binding_invalid"},
 		{"path-mismatch", func(g *linuxVerifierDock) { g.fake.agent.Path = "other/path" }, "key_binding_invalid"},
 		{"expired-attestation-live-grant", func(g *linuxVerifierDock) { g.attBody["exp"] = g.now.Format(time.RFC3339); g.replaceAttestation() }, "key_binding_invalid"},
 		{"future-attestation", func(g *linuxVerifierDock) {
@@ -344,7 +344,7 @@ func TestLinuxVerifierTextAndProjection(t *testing.T) {
 	g := newLinuxVerifierDock(t)
 	g.event.Text = []byte("substituted text")
 	linuxVerifierWant(t, g, "message_text_mismatch")
-	for _, edit := range []func(*linuxVerifierDock){func(g *linuxVerifierDock) { g.event.Room = "#swarma-grant-revocation:example.invalid" }, func(g *linuxVerifierDock) { g.event.Receiver = "@other:example.invalid" }, func(g *linuxVerifierDock) { g.event.EventID = "bad" }} {
+	for _, edit := range []func(*linuxVerifierDock){func(g *linuxVerifierDock) { g.event.Room = "#swarma-grant-revocation:example.invalid" }, func(g *linuxVerifierDock) { g.event.Receiver = "@fixture-principal-9:example.invalid" }, func(g *linuxVerifierDock) { g.event.EventID = "bad" }} {
 		g := newLinuxVerifierDock(t)
 		edit(g)
 		linuxVerifierWant(t, g, ErrMUProjection.Error())
@@ -355,7 +355,7 @@ func TestLinuxVerifierTextAndProjection(t *testing.T) {
 	if _, err := p.Verify(ev, g.now); err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range []func(*MUEvent){func(e *MUEvent) { e.RoomID = "!other:example.invalid" }, func(e *MUEvent) { e.EventID = "$other" }, func(e *MUEvent) { e.SenderMXID = "@other:example.invalid" }, func(e *MUEvent) { e.Envelope = append(e.Envelope, ' ') }} {
+	for _, change := range []func(*MUEvent){func(e *MUEvent) { e.RoomID = "!fixture-principal-1:example.invalid" }, func(e *MUEvent) { e.EventID = "$other" }, func(e *MUEvent) { e.SenderMXID = "@fixture-principal-9:example.invalid" }, func(e *MUEvent) { e.Envelope = append(e.Envelope, ' ') }} {
 		bad := ev
 		change(&bad)
 		if _, err := p.Verify(bad, g.now); !errors.Is(err, ErrMUProjection) {
@@ -371,7 +371,7 @@ func TestLinuxVerifierIssuanceGate(t *testing.T) {
 	for _, identity := range []struct {
 		mxid     string
 		uid, reg int64
-	}{{"@other:example.invalid", 1000, 42}, {g.fake.agent.MXID, 1001, 42}, {g.fake.agent.MXID, 1000, 43}} {
+	}{{"@fixture-principal-9:example.invalid", 1000, 42}, {g.fake.agent.MXID, 1001, 42}, {g.fake.agent.MXID, 1000, 43}} {
 		if _, err := p.AdmitLinuxGrantee(g.agentID, g.attID, identity.mxid, identity.uid, identity.reg, g.now); linuxVerifierCode(err) != "key_binding_invalid" {
 			t.Fatal("issuance identity mismatch", err)
 		}
@@ -411,25 +411,25 @@ func TestLinuxVerifierMacProfile(t *testing.T) {
 	_, serviceID := linuxVerifierEd(t)
 	_, revokerID := linuxVerifierEd(t)
 	f := &linuxVerifierFake{snapshots: map[string]LinuxSnapshot{g.pub.id: {Wire: g.snapshot, Available: true, RollbackSafe: true}}, state: LinuxVerificationState{Now: g.now, AuthorityUntil: g.now.Add(time.Minute), Watermark: g.now, Trusted: true, Fresh: true, WatermarkAvailable: true, IDJournalAvailable: true, IDJournal: map[string][]byte{}, Assurance: linuxVerifierAssurance(t, "A2")}}
-	c := LinuxVerifierConfig{GrantRoot: g.root.id, ServiceRoot: serviceID, AgentRevocationRoot: revokerID, PublisherKey: g.pub.id, Publisher: g.pubAtt, Audience: muDockAud, RoomID: muDockRoom, ReceiverMXID: muDockReceiver, Grants: [][]byte{g.grant}, MacAgents: map[string]MUMacAgent{muDockMeta: {Key: g.meta.id, Attestation: g.att, Generation: 1}}}
+	c := LinuxVerifierConfig{GrantRoot: g.root.id, ServiceRoot: serviceID, AgentRevocationRoot: revokerID, PublisherKey: g.pub.id, Publisher: g.pubAtt, Audience: muDockAud, RoomID: muDockRoom, ReceiverMXID: muDockReceiver, Grants: [][]byte{g.grant}, MacAgents: map[string]MUMacAgent{muDockSender: {Key: g.sender.id, Attestation: g.att, Generation: 1}}}
 	p, err := NewLinuxVerifier(c, f, f, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	verified, err := p.VerifyProjectedWithSnapshots(g.events["$mac"], g.now)
 	d := verified.Decision
-	if err != nil || d.Author != g.meta.id || len(verified.SnapshotMarks) != 1 || !verified.SnapshotMarks[g.pub.id].Equal(g.now.Add(-5*time.Second)) {
+	if err != nil || d.Author != g.sender.id || len(verified.SnapshotMarks) != 1 || !verified.SnapshotMarks[g.pub.id].Equal(g.now.Add(-5*time.Second)) {
 		t.Fatal(verified, err)
 	}
 	// Mutating the source config after construction cannot replace pinned Mac evidence.
-	a := c.MacAgents[muDockMeta]
+	a := c.MacAgents[muDockSender]
 	a.Attestation[0] = '!'
 	a.Generation = 2
-	c.MacAgents[muDockMeta] = a
+	c.MacAgents[muDockSender] = a
 	if _, err := p.VerifyProjected(g.events["$mac"], g.now); err != nil {
 		t.Fatal("Mac config was not copied", err)
 	}
-	c.MacAgents[muDockMeta] = MUMacAgent{Key: g.meta.id, Attestation: p.config.MacAgents[muDockMeta].Attestation, Generation: 2}
+	c.MacAgents[muDockSender] = MUMacAgent{Key: g.sender.id, Attestation: p.config.MacAgents[muDockSender].Attestation, Generation: 2}
 	p, err = NewLinuxVerifier(c, f, f, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -440,14 +440,14 @@ func TestLinuxVerifierMacProfile(t *testing.T) {
 
 	// Whole-interval cover remains mandatory for Mac grantees. A currently
 	// valid short Mac attestation cannot authenticate this month-long grant.
-	short, _, err := mugrant.BuildMacAgentAttestation(g.root.id, g.meta.spki, muDockMeta, 1, g.now.Add(-time.Hour), g.now.Add(time.Hour))
+	short, _, err := mugrant.BuildMacAgentAttestation(g.root.id, g.sender.spki, muDockSender, 1, g.now.Add(-time.Hour), g.now.Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
 	g.att = g.root.sign(t, short)
 	g.attID = short.ContentID()
 	g.request("$mac-short", "work.assign", "product", "swarma-platform", map[string]string{"module": "swarma-keyvault"}, "short Mac attestation")
-	c.MacAgents[muDockMeta] = MUMacAgent{Key: g.meta.id, Attestation: g.att, Generation: 1}
+	c.MacAgents[muDockSender] = MUMacAgent{Key: g.sender.id, Attestation: g.att, Generation: 1}
 	p, err = NewLinuxVerifier(c, f, f, nil)
 	if err != nil {
 		t.Fatal(err)

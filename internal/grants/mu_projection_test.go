@@ -15,7 +15,7 @@ import (
 func muProjectionRecord(t *testing.T, mutate func(map[string]any)) []byte {
 	t.Helper()
 	env := []byte(`{"body":{"type":"message/1"},"id":"sha256:00","signatures":[],"version":"swarm-envelope/2"}`)
-	m := map[string]any{"type": "a2a.event-envelope-input/1", "sender_mxid": muDockMeta, "receiver_mxid": muDockReceiver,
+	m := map[string]any{"type": "a2a.event-envelope-input/1", "sender_mxid": muDockSender, "receiver_mxid": muDockReceiver,
 		"requested_room_id": muDockRoom, "requested_event_id": "$e", "returned_room_id": muDockRoom, "returned_event_id": "$e",
 		"envelope_base64": base64.RawURLEncoding.EncodeToString(env), "body_text_base64": base64.RawURLEncoding.EncodeToString([]byte("text"))}
 	if mutate != nil {
@@ -33,14 +33,14 @@ func muProjectionRecord(t *testing.T, mutate func(map[string]any)) []byte {
 // one LF) and refuses each deviation, beside the valid record.
 func TestMUProjectionParse(t *testing.T) {
 	e, err := ParseMUProjection(muProjectionRecord(t, nil), muDockRoom, "$e")
-	if err != nil || e.Sender != muDockMeta || e.Receiver != muDockReceiver || string(e.Text) != "text" {
+	if err != nil || e.Sender != muDockSender || e.Receiver != muDockReceiver || string(e.Text) != "text" {
 		t.Fatal("valid record refused", err)
 	}
 	cases := map[string]func(map[string]any){
 		"missing-field":  func(m map[string]any) { delete(m, "returned_room_id") },
 		"extra-field":    func(m map[string]any) { m["expected_sender"] = "x" },
 		"wrong-type":     func(m map[string]any) { m["type"] = "a2a.event-verification-input/1" },
-		"room-mismatch":  func(m map[string]any) { m["returned_room_id"] = "!other:gr.relux.works" },
+		"room-mismatch":  func(m map[string]any) { m["returned_room_id"] = "!fixture-principal-1:example.invalid" },
 		"event-mismatch": func(m map[string]any) { m["returned_event_id"] = "$other" },
 		"padded-base64":  func(m map[string]any) { m["body_text_base64"] = "dGV4dA==" },
 		// "dGV4dB" decodes to "text" only if non-zero trailing bits are ignored.
@@ -63,7 +63,7 @@ func TestMUProjectionParse(t *testing.T) {
 		}
 	}
 	// A duplicated member (here the sender) refuses, whichever value is last.
-	dup := bytes.Replace(good, []byte(`{"body_text_base64"`), []byte(`{"sender_mxid":"@other:gr.relux.works","body_text_base64"`), 1)
+	dup := bytes.Replace(good, []byte(`{"body_text_base64"`), []byte(`{"sender_mxid":"@fixture-principal-9:example.invalid","body_text_base64"`), 1)
 	if bytes.Equal(dup, good) {
 		t.Fatal("fixture")
 	}
