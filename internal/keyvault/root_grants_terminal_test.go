@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strconv"
 	"testing"
 )
@@ -187,10 +188,14 @@ func rootGrantsMapLines28(raw []byte) [][]byte {
 	return lines
 }
 
-// Claim: ONLY physical tty transport maps CR/LF/CRLF to one line, CR CR and
-// CRLF LF expose a blank/refusal, and CR inside a word cannot yield an accepted
-// phrase. Direct parser bare CR remains refused by the paired grammar control.
-// Limits: pure finite mapper, not actual tty/PTY/echo/restoration qualification.
+// Claim: the tty-byte mapper admits complete LF/CR/CRLF numbered fixtures.
+// Complete CRCR/LFCR/CRLFLF fixtures retain a blank line and refuse at that exact
+// line; an inside-word CR refuses the first fragment. Dropping a blank line or
+// stripping the inside-word CR makes these otherwise-complete inputs valid,
+// so EOF cannot hide those mapper violations. The private engine composition
+// returns no preparation and cannot seal after each intended refusal.
+// Limits: pure mapper/line I/O with public fixtures; no real tty/PTY, physical
+// keyboard-origin, echo, restoration, native wrapping or storage proof.
 func TestRootGrantsTerminal28Transport(t *testing.T) {
 	for _, ending := range [][]byte{{'\n'}, {'\r', '\n'}, {'\r'}} {
 		raw := bytes.Join(rootGrantsNumbered28([]byte(recoveryFixturePhrase), ending), nil)
@@ -206,12 +211,72 @@ func TestRootGrantsTerminal28Transport(t *testing.T) {
 		clear(phrase)
 		rootGrantsReturnedCleared28(t, f)
 	}
-	for _, raw := range [][]byte{[]byte("1. what\r\r2. bleak\n"), []byte("1. what\r\n\n2. bleak\n"), []byte("1. wh\rat\n")} {
-		f := &rootGrantsLines28{lines: rootGrantsMapLines28(raw)}
-		phrase, err := readRootGrantsNumbered(context.Background(), f)
-		if err == nil || phrase != nil {
-			t.Fatal("empty line/inside-word CR admitted a phrase")
-		}
-		rootGrantsReturnedCleared28(t, f)
+	validLines := rootGrantsNumbered28([]byte(recoveryFixturePhrase), []byte{'\n'})
+	validRaw := bytes.Join(validLines, nil)
+	cases := []struct {
+		name, code string
+		raw        []byte
+		reads      int
+		blank      bool
+	}{
+		{"CRCR", "invalid_word_number", bytes.Replace(validRaw, []byte{'\n'}, []byte{'\r', '\r'}, 1), 2, true},
+		{"LFCR", "invalid_word_number", bytes.Replace(validRaw, []byte{'\n'}, []byte{'\n', '\r'}, 1), 2, true},
+		{"CRLFLF", "invalid_word_number", bytes.Replace(validRaw, []byte{'\n'}, []byte{'\r', '\n', '\n'}, 1), 2, true},
+		{"inside-word-CR", "invalid_mnemonic", bytes.Replace(validRaw, []byte("1. what"), []byte("1. wh\rat"), 1), 1, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lines := rootGrantsMapLines28(tc.raw)
+			if len(lines) != 26 {
+				t.Fatal("complete fixture lost its extra terminator")
+			}
+			if tc.blank {
+				if !bytes.Equal(lines[0], validLines[0]) || !bytes.Equal(lines[1], []byte{'\n'}) {
+					t.Fatal("blank line was folded or moved")
+				}
+			} else if !bytes.Equal(lines[0], []byte("1. wh\n")) || !bytes.Equal(lines[1], []byte("at\n")) {
+				t.Fatal("inside-word CR was stripped or reordered")
+			}
+			if !reflect.DeepEqual(lines[2:], validLines[1:]) {
+				t.Fatal("remaining complete numbered fixture changed")
+			}
+			e := rootGrantsEngine28(t, context.Background())
+			f := &rootGrantsLines28{lines: lines}
+			view, err := rootGrantsPrepareLines28(e, f)
+			rootGrantsWantRefusal(t, err, tc.code)
+			if view != (RootGrantsPreparationPublic{}) || rootGrantsEnginePrepared28(e) != nil ||
+				f.reads != tc.reads || len(f.prompts) != tc.reads+1 {
+				t.Fatal("refusal did not stop at the intended grammar branch")
+			}
+			random := &rootGrantsRandom28{}
+			sealed, err := e.sealWithRandom(nil, nil, random)
+			rootGrantsWantRefusal(t, err, "operation_unavailable")
+			if !reflect.DeepEqual(sealed, rootGrantsEngineSealed{}) || random.calls != 0 {
+				t.Fatal("grammar refusal reached preparation/sealing")
+			}
+			rootGrantsReturnedCleared28(t, f)
+
+			// Bounded violation plant: dropping the preserved blank terminator
+			// (or stripping inside-word CR) must expose the COMPLETE valid
+			// phrase, not another refusal caused by a truncated fixture/EOF.
+			var mutant [][]byte
+			if tc.blank {
+				for _, line := range lines {
+					if !bytes.Equal(line, []byte{'\n'}) {
+						mutant = append(mutant, line)
+					}
+				}
+			} else {
+				mutant = rootGrantsMapLines28(bytes.ReplaceAll(tc.raw, []byte{'\r'}, nil))
+			}
+			control := &rootGrantsLines28{lines: mutant}
+			phrase, err := readRootGrantsNumbered(context.Background(), control)
+			if err != nil || !bytes.Equal(phrase, []byte(recoveryFixturePhrase)) || control.reads != 25 {
+				clear(phrase)
+				t.Fatal("violation control did not expose the complete valid phrase")
+			}
+			clear(phrase)
+			rootGrantsReturnedCleared28(t, control)
+		})
 	}
 }
