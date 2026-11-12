@@ -45,16 +45,35 @@ Preserve local output under `.temp/`.
 
 The initial custody target is macOS with Go 1.26.10 or later (go.mod selects
 go1.26.10; older installs download it or need it preinstalled), cgo and
-the Apple Command Line Tools. `go` builds the custody, KEK and grant CLI programs, `swiftc` builds the paired
-CryptoKit helper, and macOS `sandbox-exec` confines fake-backed test processes.
+the Apple Command Line Tools. `go` builds the custody, KEK and grant CLI programs;
+the native Swift package builds the paired CryptoKit helper. macOS `sandbox-exec`
+confines fake-backed test processes.
 From this directory, build only new local artifacts:
 
 ```sh
 mkdir -p .temp/build
 CGO_ENABLED=1 go build -trimpath -o .temp/build/mac-keyvault ./cmd/mac-keyvault
 CGO_ENABLED=1 go build -trimpath -o .temp/build/mac-keyvault-kek ./cmd/mac-keyvault-kek
-swiftc -O -o .temp/build/mac-keyvault-enclave cmd/mac-keyvault-enclave/main.swift
 ```
+
+The native package requires macOS 14 or later and Swift 6 tooling, with Swift 5
+language mode. Build an unqualified helper into a new absolute output directory:
+
+```sh
+go run ./tools/recoverybuild -native-helper-only -out "$PWD/.temp/native-helper-build"
+```
+
+The Go builder creates a fresh retained archive/header generation under `.temp/`,
+records the current source and paired hashes, then builds the genuine Swift package
+using that generation. Separate Swift scratch directories prevent concurrent
+builds from mixing their inputs. Existing outputs are never overwritten or
+removed; failed build generations remain for diagnosis. The receipt and source
+checks must pass before compilation and again before returning the helper.
+`KEYVAULT_NATIVE_ARCHIVE_DIR` is a narrowly validated root-relative package build
+input, not runtime authorization. The compatibility path
+`.temp/namecoin-native-archive` requires the same complete generated module and
+validated receipt; the old two-command unreceipted staging workflow is superseded.
+Compilation alone does not qualify code identity, Keychain access or owner presence.
 
 Keep the helper beside its matching CLI. These commands do not install, sign or
 replace existing binaries. Operating an installed broker additionally requires its
@@ -140,15 +159,67 @@ count and all owned children have exited, run
 That command checks the recorded observed mode, process group and health flag
 under the lock and removes the exact tree. Observed trees remain interlocked until explicit cleanup.
 
-For the recovery interface, build the hardened ad-hoc signed vault/helper pair
-from a clean committed checkout with
+For the recovery interface, build the matched certificate-signed vault/helper pair
+from a clean committed checkout in an attended terminal with
 `go run ./tools/recoverybuild --out /absolute/new/ignored/build-directory`.
 The new directory receives both artifacts, their public manifest and `build.log`;
-the tool performs no installation or key operation. The isolated unmodified
+the tool performs no installation or vault key operation. Signing selects the fixed
+Apple Development certificate and explicit role requirements in
+`internal/codesignpolicy`; it may require system authorization. The builder signs
+the helper first, links its actual CDHash into the vault, then verifies each
+artifact's strict signature, runtime flags, empty entitlements, exact role DR
+and complete leaf certificate fingerprints. Seed and public qualification
+executables use distinct fixed identifiers with the same certificate rule.
+The seed installer checks pinned file SHA256 and actual CDHash independently
+of the certificate DR. Certificate renewal requires a reviewed policy update;
+there is no ad-hoc release fallback. Pure parser tests do not establish native
+certificate or Keychain qualification. The isolated unmodified
 reference module runs with `go -C tools/recoveryreference test -race ./...`;
 `go -C tools/recoveryreference run .` emits only its fixed public fixtures.
 See [reference regeneration](tools/recoveryreference/README.md) and
 [recovery qualification](docs/recovery.md).
+
+The root-storage qualification protocol is restricted to the fixed
+`works.relux.mac-keyvault.root-acl-qualification.v1` namespace,
+`public-marker@1` account and public marker. The permanent helper entry
+`--root-grants-qualification-read` returns only a finite status for that item.
+The matched vault exposes `--json root-grants qualify-storage --case` with
+`create-project`, `read-project`, `foreign-read`, `helper-read` and
+`cleanup-created`. All cases after creation require the independently reviewed
+original `--receipt-sha256 HEX64`; creation refuses that flag. There is no
+namespace, reference, artifact-path or role override. The distinct foreign
+artifact admits only its fixed child request and historical fixed-digest check.
+Software tests do not establish native ACL refusal or root storage readiness.
+
+Prepare the unsigned qualification set from a clean, signed source checkout with
+`go run ./tools/recoverybuild --root-storage-qualification-only --out /absolute/existing/private/qualification/artifacts`.
+The qualification parent must already exist with mode `0700` under the OS
+account's home. The tool creates only a new `artifacts` directory and retains its
+matching archive/header generation, helper, owning and foreign executables,
+build log and unsigned receipt. It does not sign or execute the artifacts.
+Existing outputs and failed generations are retained without repair or retry.
+
+These commands run only from the matched `artifacts/mac-keyvault` layout under
+an existing private qualification directory. Sign and verify the exact artifacts
+before execution. Source and actual signed file/code pins must match; private
+recovery operations are not qualified by this public-marker build. Creation
+reserves immutable `created-item.pending` before its one possible add and
+publishes `created-item.json` exclusively after readback. The receipt holds the
+public test-item reference and full before/after ACL observations with mode
+`0600`; output contains status and digest only. Unknown or refused records cannot
+authorize later item access. A separate attended cleanup reserves immutable
+`cleanup.pending` before any delete, writes exclusive `cleanup.json`, and keeps
+both original creation files. A collision or uncertain outcome never triggers
+automatic retry, replacement, search or cleanup. These public test-item records
+grant no authority to create a root or inspect other items.
+
+Qualification receipt checks use directory descriptors, no-follow traversal,
+the OS account's home, finite owner/mode rules and publication without replacing
+an existing target. These checks do not inspect macOS extended filesystem ACLs:
+mode `0755` alone does not prove that another principal lacks an ACL-granted
+write or delete right. They also do not resist a process with the same UID or
+an owner who can replace local files. Independently reviewed receipt digests,
+artifact/native identity checks and attended cleanup remain separate boundaries.
 
 ## Nostr keys
 
@@ -173,6 +244,12 @@ qualification](docs/recovery.md). The release command `keyvault-seed` installs
 a pinned pair for the current macOS user and creates a pair for two explicitly
 chosen identities in an attended terminal. Namecoin spending and registration are outside
 this interface. Existing P-256 interfaces retain their contracts.
+
+Internal Namecoin request/PSBT validation and public journal persistence are
+under development; they are not yet a qualified signing command. See the
+[journal and focused test entry point](docs/namecoin-journal.md) for file,
+recovery and test limits, and [native source](docs/namecoin-native.md) for the
+remaining custody integration and qualification requirements.
 
 The multi-use grant interop vectors live in
 [`interop/multi-use-grants/`](interop/multi-use-grants/README.md). The confined
@@ -349,12 +426,12 @@ exact public DER, semantic address and generation, Secure Enclave store,
 user-presence requirement and non-extraction policy. No generic digest
 operation is exposed. Complete payload validation precedes store access.
 
-Build a separate native CLI with cgo and keep the matching Swift helper beside
-it; preserve installed binaries and existing ACL trust:
+Build a separate native CLI with cgo and build its matching Swift helper using
+the native package instructions above. Keep them together; preserve installed
+binaries and existing ACL trust:
 
 ```sh
 CGO_ENABLED=1 go build -trimpath -o .temp/build/swarma-keyvault ./cmd/swarma-keyvault
-swiftc -O -o .temp/build/mac-keyvault-enclave cmd/mac-keyvault-enclave/main.swift
 ```
 
 This command requires an independently accepted build, the separately provisioned

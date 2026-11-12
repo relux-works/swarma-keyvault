@@ -3,16 +3,20 @@
 package keyvault
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/relux-works/swarma-keyvault/internal/keyvault/testguard"
+	"github.com/relux-works/swarma-keyvault/internal/nativebuild"
 )
 
 // realEnclave builds mac-keyvault-enclave from source and returns a manager
@@ -28,8 +32,20 @@ func realEnclave(t *testing.T) (*Manager, *EnclaveStore) {
 	}
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "mac-keyvault-enclave")
-	if out, err := exec.Command(swiftc, "-O", "-o", helper, filepath.Join("..", "..", "cmd", "mac-keyvault-enclave", "main.swift")).CombinedOutput(); err != nil {
-		t.Fatalf("swiftc: %v\n%s", err, out)
+	_ = swiftc // Preserve the existing missing-tool skip; package setup errors fail.
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal("native package root unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	var buildLog bytes.Buffer
+	native, err := nativebuild.Build(ctx, nativebuild.Options{Root: root, GoTool: filepath.Join(runtime.GOROOT(), "bin", "go"), Log: &buildLog})
+	if err != nil {
+		t.Fatalf("native package build failed: %v\n%s", err, buildLog.Bytes())
+	}
+	if err := nativebuild.CopyHelper(native, helper); err != nil {
+		t.Fatal("native package helper copy failed")
 	}
 	store := NewEnclaveStore(filepath.Join(dir, "enclave"), ExecEnclaveHelper{Path: helper, Timeout: 15 * time.Second, InteractiveTimeout: 15 * time.Second})
 	store.NonInteractive = true

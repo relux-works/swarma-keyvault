@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
@@ -42,30 +43,48 @@ func installFixture(t *testing.T) (installation, runner) {
 		t.Fatal(err)
 	}
 	payloads := []string{"vault bytes", "helper bytes", "public manifest", "foreign bytes", "helper bytes"}
-	p := installation{paths: paths, release: release, uid: uint32(os.Getuid())}
+	p := installation{paths: paths, release: release, uid: uint32(os.Getuid()), certificateFile: func(string, codesignpolicy.Role) error { return nil }}
 	for i, f := range p.files() {
 		if err := os.WriteFile(filepath.Join(source, f.relative), []byte(payloads[i]), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// This is an injected inspection receipt. It never calls codesign.
+	// These injected command and certificate receipts prove orchestration and
+	// software admission only. No actual codesign, chain, DER or OS check runs.
 	return p, func(binary string, args ...string) invocation {
-		if binary != "/usr/bin/codesign" || len(args) != 3 {
+		if binary != "/usr/bin/codesign" || len(args) < 3 {
 			t.Fatalf("unexpected non-fixture inspection: %s", binary)
 		}
-		switch args[0] {
-		case "--verify":
-			return invocation{raw: nil, exit: 0, started: true}
-		case "-d":
-			raw, err := os.ReadFile(args[2])
-			if err != nil {
-				t.Fatal(err)
-			}
-			pins := map[string]ArtifactPin{"vault bytes": release.Vault, "helper bytes": release.Helper, "foreign bytes": release.Foreign}
-			return invocation{raw: []byte("# designated => cdhash H\"" + pins[string(raw)].CDHash + "\"\n"), exit: 0, started: true}
+		if args[0] == "--verify" {
+			return invocation{exit: 0, started: true}
 		}
-		t.Fatal("unexpected inspection")
-		return invocation{raw: nil, exit: -1, started: true}
+		if args[0] != "-d" {
+			t.Fatal("unexpected inspection")
+		}
+		raw, err := os.ReadFile(args[len(args)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		pins := map[string]ArtifactPin{"vault bytes": release.Vault, "helper bytes": release.Helper, "foreign bytes": release.Foreign}
+		roles := map[string]codesignpolicy.Role{"vault bytes": codesignpolicy.Vault, "helper bytes": codesignpolicy.Helper, "foreign bytes": codesignpolicy.Qualification}
+		pin, ok := pins[string(raw)]
+		if !ok {
+			t.Fatal("unknown fixture asset")
+		}
+		role := roles[string(raw)]
+		id, _ := codesignpolicy.Identifier(role)
+		switch args[1] {
+		case "-r-":
+			dr, _ := codesignpolicy.Requirement(role)
+			return invocation{raw: []byte(dr + "\n"), exit: 0, started: true}
+		case "--verbose=4":
+			return invocation{raw: []byte("Identifier=" + id + "\nTeamIdentifier=262RZ595FP\nCodeDirectory v=20500 size=700 flags=0x10000(runtime) hashes=1\nCDHash=" + pin.CDHash + "\n"), exit: 0, started: true}
+		case "--entitlements":
+			return invocation{exit: 0, started: true}
+		default:
+			t.Fatal("unexpected inspection")
+		}
+		return invocation{exit: -1, started: true}
 	}
 }
 
@@ -148,6 +167,14 @@ func TestPreflightUnsafeInputsNoWrites(t *testing.T) {
 			case "unsafe-install-parent":
 				if err := os.Mkdir(p.paths.Root, 0755); err != nil {
 					t.Fatal(err)
+				}
+				// Plant the forbidden permission explicitly: a restrictive
+				// inherited umask must not turn this negative into mode0700.
+				if err := os.Chmod(p.paths.Root, 0755); err != nil {
+					t.Fatal(err)
+				}
+				if st, err := os.Stat(p.paths.Root); err != nil || st.Mode().Perm() != 0755 {
+					t.Fatal("unsafe-mode plant not applied")
 				}
 				want = "private_path_unsafe"
 			}

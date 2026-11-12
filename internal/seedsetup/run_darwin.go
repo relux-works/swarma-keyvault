@@ -130,5 +130,8 @@ func command(parent context.Context, home, binary string, args ...string) invoca
 		return invocation{}
 	}
 	exit := childExit(ctx, cmd.Wait())
+	if binary == "/usr/bin/codesign" && len(args) == 5 && args[0] == "-d" && args[1] == "--entitlements" && args[2] == "-" && args[3] == "--xml" {
+		return checkEntitlementOutput(stdout, stderr, exit, args[4])
+	}
 	return checkCappedOutput(stdout, stderr, exit, binary == "/usr/bin/codesign")
 }

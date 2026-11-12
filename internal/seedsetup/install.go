@@ -3,6 +3,8 @@ package seedsetup
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
 )
 
 const (
@@ -12,8 +14,8 @@ const (
 	foreignDir   = "qualification"
 )
 
-// ArtifactPin authenticates both exact bytes and the signed macOS designated
-// requirement. Hashes originate in the release build, not in caller input.
+// ArtifactPin authenticates both exact bytes and the actual signed macOS code hash.
+// The fixed role certificate/designated requirement is verified separately. Hashes originate in the release build, not in caller input.
 type ArtifactPin struct{ SHA256, CDHash string }
 
 type Release struct {
@@ -52,6 +54,9 @@ type installation struct {
 	release   Release
 	uid       uint32
 	fileOwner func(string, os.FileInfo) (uint32, bool)
+	// Test-only projection of native certificate inspection; production uses the
+	// fixed Security.framework verifier and has no caller-selectable override.
+	certificateFile func(string, codesignpolicy.Role) error
 }
 
 func (p installation) files() []installFile {

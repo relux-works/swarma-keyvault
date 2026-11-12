@@ -1,32 +1,34 @@
 package main
 
 import (
+	"errors"
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
 	"strings"
 	"testing"
 )
 
-// Real codesign-shaped positive controls accept absent/empty entitlements.
-// Missing runtime, debug/runtime exceptions, false-valued unknown entitlement,
-// malformed/multiple identity fields and non-ad-hoc code all refuse.
-func TestArtifactPolicyPositiveAndForbiddenControls(t *testing.T) {
-	info := "CodeDirectory v=20500 size=20 flags=0x10002(adhoc,runtime) hashes=1\nSignature=adhoc\nCDHash=" + strings.Repeat("1", 40) + "\n"
-	for _, xml := range []string{"", `<?xml version="1.0"?><plist version="1.0"><dict/></plist>`} {
-		if _, err := checkArtifactInfo([]byte(info), []byte(xml)); err != nil {
-			t.Fatal("valid artifact refused")
+// Builder metadata admission uses the same fixed certificate policy as the
+// release verifier. Fixtures prove role/hash/entitlement refusals only; actual
+// certificate trust and signing remain attended native checks.
+func TestArtifactMetadataPolicy(t *testing.T) {
+	info := "Identifier=works.relux.keyvault\nTeamIdentifier=262RZ595FP\nCodeDirectory v=20500 size=700 flags=0x10000(runtime) hashes=1\nCDHash=" + strings.Repeat("1", 40) + "\n"
+	for _, ent := range []string{"", `<plist version="1.0"><dict/></plist>`} {
+		pin, err := checkArtifactInfo(codesignpolicy.Vault, []byte(info), []byte(ent))
+		if err != nil || pin != strings.Repeat("1", 40) {
+			t.Fatal("valid role metadata refused")
 		}
 	}
-	for _, bad := range []struct{ info, xml, want string }{
-		{strings.Replace(info, "0x10002", "0x2", 1), "", "ad-hoc hardened runtime required"},
-		{strings.Replace(info, "0x10002", "0x10000002", 1), "", "ad-hoc hardened runtime required"},
-		{strings.Replace(info, "Signature=adhoc", "Signature=other", 1), "", "unexpected code identity"},
-		{info + "CDHash=" + strings.Repeat("2", 40) + "\n", "", "unexpected code identity"},
-		{info, `<plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>`, "entitlements are not empty"},
-		{info, `<plist version="1.0"><dict><key>com.apple.security.cs.disable-library-validation</key><false/></dict></plist>`, "entitlements are not empty"},
-		{info, `<plist version="1.0"><dict/><dict/></plist>`, "entitlements are not empty"},
-		{info, `<plist version="1.0"><dict>`, "invalid entitlement document"},
+	for _, bad := range []string{
+		strings.Replace(info, "flags=0x10000(runtime)", "flags=0x10002(adhoc,runtime)", 1) + "Signature=adhoc\n",
+		strings.Replace(info, "flags=0x10000", "flags=0x0", 1),
+		strings.Replace(info, "Identifier=works.relux.keyvault\n", "Identifier=works.relux.keyvault.enclave\n", 1),
+		info + "CDHash=" + strings.Repeat("2", 40) + "\n",
 	} {
-		if _, err := checkArtifactInfo([]byte(bad.info), []byte(bad.xml)); err == nil || err.Error() != bad.want {
-			t.Fatalf("wanted %s; got %v", bad.want, err)
+		if pin, err := checkArtifactInfo(codesignpolicy.Vault, []byte(bad), nil); pin != "" || !errors.Is(err, codesignpolicy.ErrPolicy) {
+			t.Fatal("forbidden identity admitted")
 		}
+	}
+	if pin, err := checkArtifactInfo(codesignpolicy.Vault, []byte(info), []byte(`<plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>`)); pin != "" || !errors.Is(err, codesignpolicy.ErrPolicy) {
+		t.Fatal("entitled artifact admitted")
 	}
 }

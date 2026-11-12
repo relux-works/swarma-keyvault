@@ -3,12 +3,10 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,11 +14,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
+	"github.com/relux-works/swarma-keyvault/internal/nativebuild"
 )
 
 type artifact struct {
@@ -40,69 +39,18 @@ type manifest struct {
 	Vault  artifact `json:"vault"`
 }
 
-var hashPattern = regexp.MustCompile(`(?m)^CDHash=([a-f0-9]{40}|[a-f0-9]{64})$`)
-var flagPattern = regexp.MustCompile(`flags=0x([a-f0-9]+)\(`)
+// Signature validity and complete fixed-leaf readback are separate native checks.
+func checkArtifactInfo(role codesignpolicy.Role, info, entitlements []byte) (string, error) {
+	return codesignpolicy.CodeInfo(role, info, entitlements)
+}
 
-func checkArtifactInfo(info, entitlements []byte) (string, error) {
-	hashes := hashPattern.FindAllSubmatch(info, -1)
-	flags := flagPattern.FindAllSubmatch(info, -1)
-	if len(hashes) != 1 || len(flags) != 1 || !bytes.Contains(info, []byte("Signature=adhoc\n")) {
-		return "", errors.New("unexpected code identity")
+func signArtifact(ctx context.Context, log io.Writer, path string, role codesignpolicy.Role) error {
+	args, err := codesignpolicy.SigningArgs(role, path)
+	if err != nil {
+		return err
 	}
-	f, err := strconv.ParseUint(string(flags[0][1]), 16, 32)
-	if err != nil || f != 0x10002 {
-		return "", errors.New("ad-hoc hardened runtime required")
-	}
-	if len(bytes.TrimSpace(entitlements)) != 0 {
-		decoder := xml.NewDecoder(bytes.NewReader(entitlements))
-		depth := 0
-		dict := false
-		root := false
-		for {
-			token, err := decoder.Token()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return "", errors.New("invalid entitlement document")
-			}
-			switch v := token.(type) {
-			case xml.StartElement:
-				if v.Name.Space != "" {
-					return "", errors.New("entitlement namespace refused")
-				}
-				if depth == 0 {
-					if root {
-						return "", errors.New("multiple entitlement roots")
-					}
-					root = true
-					if len(v.Attr) != 1 || v.Attr[0].Name.Local != "version" || v.Attr[0].Value != "1.0" {
-						return "", errors.New("invalid plist version")
-					}
-				}
-				if depth == 1 && len(v.Attr) != 0 {
-					return "", errors.New("unexpected dict attributes")
-				}
-				if (depth == 0 && v.Name.Local != "plist") || (depth == 1 && (v.Name.Local != "dict" || dict)) || depth >= 2 {
-					return "", errors.New("entitlements are not empty")
-				}
-				if depth == 1 {
-					dict = true
-				}
-				depth++
-			case xml.EndElement:
-				depth--
-			case xml.CharData:
-				if len(bytes.TrimSpace(v)) != 0 {
-					return "", errors.New("unexpected entitlement text")
-				}
-			}
-		}
-		if depth != 0 || !dict {
-			return "", errors.New("empty entitlement dictionary required")
-		}
-	}
-	return string(hashes[0][1]), nil
+	_, err = command(ctx, log, "/usr/bin/codesign", args...)
+	return err
 }
 
 func command(ctx context.Context, log io.Writer, name string, args ...string) ([]byte, error) {
@@ -122,7 +70,7 @@ func command(ctx context.Context, log io.Writer, name string, args ...string) ([
 	return raw, err
 }
 
-func inspect(ctx context.Context, log io.Writer, path string) (artifact, error) {
+func inspect(ctx context.Context, log io.Writer, path string, role codesignpolicy.Role) (artifact, error) {
 	var a artifact
 	if _, err := command(ctx, log, "/usr/bin/codesign", "--verify", "--strict", path); err != nil {
 		return a, errors.New("artifact signature verification failed")
@@ -136,16 +84,23 @@ func inspect(ctx context.Context, log io.Writer, path string) (artifact, error) 
 	if err != nil {
 		return a, errors.New("artifact entitlement read failed")
 	}
-	pin, err := checkArtifactInfo(info, entitlements)
+	pin, err := checkArtifactInfo(role, info, entitlements)
 	if err != nil {
 		return a, err
+	}
+	requirement, err := command(ctx, log, "/usr/bin/codesign", "-d", "-r-", path)
+	if err != nil || codesignpolicy.RequirementReadback(role, requirement) != nil {
+		return a, errors.New("artifact designated requirement refused")
+	}
+	if err := codesignpolicy.CertificateFile(path, role); err != nil {
+		return a, errors.New("artifact certificate readback refused")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return a, err
 	}
 	sum := sha256.Sum256(raw)
-	return artifact{Path: path, SHA256: hex.EncodeToString(sum[:]), CDHash: pin, Flags: "0x10002 (adhoc,runtime)", Entitlements: "empty"}, nil
+	return artifact{Path: path, SHA256: hex.EncodeToString(sum[:]), CDHash: pin, Flags: "0x10000 (runtime)", Entitlements: "empty"}, nil
 }
 
 func build(out, seedVersion string) error {
@@ -186,13 +141,24 @@ func build(out, seedVersion string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := command(ctx, log, "/usr/bin/xcrun", "swiftc", "-O", "-o", helper, "cmd/mac-keyvault-enclave/main.swift"); err != nil {
+	root, err := os.Getwd()
+	if err != nil {
 		return err
 	}
-	if _, err := command(ctx, log, "/usr/bin/codesign", "-s", "-", "--force", "--options", "runtime", "--timestamp=none", helper); err != nil {
+	native, err := nativebuild.Build(ctx, nativebuild.Options{Root: root, GoTool: filepath.Join(runtime.GOROOT(), "bin", "go"), Log: log})
+	if err != nil {
 		return err
 	}
-	h, err := inspect(ctx, log, helper)
+	if err := nativebuild.CopyHelper(native, helper); err != nil {
+		return err
+	}
+	if err := nativebuild.WriteReceipt(native, filepath.Join(out, "native-build-receipt.json")); err != nil {
+		return err
+	}
+	if err := signArtifact(ctx, log, helper, codesignpolicy.Helper); err != nil {
+		return err
+	}
+	h, err := inspect(ctx, log, helper, codesignpolicy.Helper)
 	if err != nil {
 		return err
 	}
@@ -201,10 +167,10 @@ func build(out, seedVersion string) error {
 	if _, err := command(ctx, log, goTool, "build", "-trimpath", "-ldflags", link, "-o", vault, "./cmd/mac-keyvault"); err != nil {
 		return err
 	}
-	if _, err := command(ctx, log, "/usr/bin/codesign", "-s", "-", "--force", "--options", "runtime", "--timestamp=none", vault); err != nil {
+	if err := signArtifact(ctx, log, vault, codesignpolicy.Vault); err != nil {
 		return err
 	}
-	v, err := inspect(ctx, log, vault)
+	v, err := inspect(ctx, log, vault, codesignpolicy.Vault)
 	if err != nil {
 		return err
 	}
@@ -227,12 +193,30 @@ func build(out, seedVersion string) error {
 func main() {
 	out := flag.String("out", "", "new absolute output directory")
 	seedVersion := flag.String("seed-version", "", "build the complete attended seed release for this version")
+	nativeOnly := flag.Bool("native-helper-only", false, "build an unqualified native package helper only; no signing, custody or installation")
+	qualificationOnly := flag.Bool("root-storage-qualification-only", false, "build unsigned public-marker qualification artifacts only; no signing or execution")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "no positional arguments allowed")
 		os.Exit(2)
 	}
-	if err := build(*out, *seedVersion); err != nil {
+	var err error
+	if *qualificationOnly {
+		var selected []string
+		flag.Visit(func(f *flag.Flag) { selected = append(selected, f.Name) })
+		if err = validateRootQualificationFlags(*out, selected); err == nil {
+			err = buildRootQualification(context.Background(), *out)
+		}
+	} else if *nativeOnly {
+		if *seedVersion != "" {
+			err = errors.New("native helper build does not accept a seed version")
+		} else {
+			err = buildNativeHelper(*out)
+		}
+	} else {
+		err = build(*out, *seedVersion)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

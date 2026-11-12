@@ -52,6 +52,13 @@ var (
 )
 
 func main() {
+	entered := time.Now()
+	if rootQualificationChildAdmitted(recoveryQualificationOnly, os.Args[1:]) {
+		os.Exit(rootQualificationChildProcess(entered))
+	}
+	if recoveryQualificationOnly == "" && rootQualificationParentInvocation(os.Args[1:]) {
+		os.Exit(rootQualificationParentProcess(entered, os.Args[1:], os.Stdout))
+	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
@@ -232,6 +239,9 @@ func jsonToken(arg string) (value bool, ok bool) {
 var recoveryQualificationOnly string
 
 func qualificationInvocation(args []string) bool {
+	if rootQualificationChildInvocation(args) {
+		return true
+	}
 	return len(args) == 8 && args[0] == "--json" && args[1] == "nostr" && args[2] == "sign" &&
 		strings.HasSuffix(args[3], "/nostr") && args[4] == "--version" && args[5] == "1" &&
 		args[6] == "--digest" && args[7] == strings.Repeat("0", 64)
@@ -240,6 +250,15 @@ func qualificationInvocation(args []string) bool {
 func run(args []string, stdout, stderr io.Writer) int {
 	if recoveryQualificationOnly != "" && (recoveryQualificationOnly != "1" || !qualificationInvocation(args)) {
 		return (output{command: "nostr", json: wantsJSON(args), stdout: stdout, stderr: stderr}).fail(usagef("public qualification executable admits only its fixed digest check"))
+	}
+
+	if rootQualificationChildInvocation(args) {
+		return runRootQualificationChild(stdout)
+	}
+	// Owning native work requires actual main's original process deadline.
+	// In-process dispatch cannot silently become an untimed native operation.
+	if rootQualificationParentInvocation(args) {
+		return writeRootQualificationParent(stdout, args[4], "unqualified", "", exitRefused)
 	}
 
 	jsonMode := wantsJSON(args)

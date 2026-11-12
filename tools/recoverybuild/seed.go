@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
 )
 
 const publicQualifier = "qualification/mac-keyvault"
@@ -71,10 +73,10 @@ func buildSeedBundle(ctx context.Context, log io.Writer, goTool, out, version, h
 	if _, err := command(ctx, log, goTool, "build", "-trimpath", "-ldflags", link+" -X main.recoveryQualificationOnly=1", "-o", foreignPath, "./cmd/mac-keyvault"); err != nil {
 		return err
 	}
-	if _, err := command(ctx, log, "/usr/bin/codesign", "-s", "-", "--force", "--options", "runtime", "--timestamp=none", "--identifier", "works.relux.mac-keyvault.qualification-foreign", foreignPath); err != nil {
+	if err := signArtifact(ctx, log, foreignPath, codesignpolicy.Qualification); err != nil {
 		return err
 	}
-	foreign, err := inspect(ctx, log, foreignPath)
+	foreign, err := inspect(ctx, log, foreignPath, codesignpolicy.Qualification)
 	if err != nil {
 		return err
 	}
@@ -108,10 +110,10 @@ func buildSeedBundle(ctx context.Context, log io.Writer, goTool, out, version, h
 	if _, err := command(ctx, log, goTool, "build", "-trimpath", "-ldflags", flags, "-o", seed, "./cmd/keyvault-seed"); err != nil {
 		return err
 	}
-	if _, err := command(ctx, log, "/usr/bin/codesign", "-s", "-", "--force", "--options", "runtime", "--timestamp=none", seed); err != nil {
+	if err := signArtifact(ctx, log, seed, codesignpolicy.Seed); err != nil {
 		return err
 	}
-	s, err := inspect(ctx, log, seed)
+	s, err := inspect(ctx, log, seed, codesignpolicy.Seed)
 	if err != nil {
 		return err
 	}

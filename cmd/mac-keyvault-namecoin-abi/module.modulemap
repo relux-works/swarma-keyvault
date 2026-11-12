@@ -1,0 +1,4 @@
+module NamecoinArchiveABI [system] {
+    header "libkeyvault_namecoin.h"
+    export *
+}

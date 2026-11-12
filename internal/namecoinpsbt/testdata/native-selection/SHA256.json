@@ -1,0 +1,34 @@
+[
+  {
+    "name": "all-four-before-release-reservation.json",
+    "bytes": 1262,
+    "sha256": "c55494c9147d3c2965a16dc6b0e85e350711a728c27007aaeea793c708cd7aa7",
+    "mode": "all-four-before-release",
+    "slot": "A",
+    "phase": "reservation"
+  },
+  {
+    "name": "all-four-before-release-reveal.json",
+    "bytes": 2624,
+    "sha256": "ad8afb2a9c7ed519bfe96405c8b4de967fd041314e39dd0afae451160fd456dd",
+    "mode": "all-four-before-release",
+    "slot": "C",
+    "phase": "reveal"
+  },
+  {
+    "name": "two-stage-reservation.json",
+    "bytes": 1248,
+    "sha256": "3d65f535a3a21c46651b90088567afe908bd0e4368cb74aa7ae8f5af1352f07d",
+    "mode": "two-stage",
+    "slot": "A",
+    "phase": "reservation"
+  },
+  {
+    "name": "two-stage-reveal.json",
+    "bytes": 2602,
+    "sha256": "81d95f012c14e823e228cc432eb3816f204708747f512282753b3347d7e11237",
+    "mode": "two-stage",
+    "slot": "C",
+    "phase": "reveal"
+  }
+]

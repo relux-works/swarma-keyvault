@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/relux-works/swarma-keyvault/internal/codesignpolicy"
 	"golang.org/x/sys/unix"
 )
 
@@ -112,6 +113,21 @@ func hashBounded(r io.Reader, want string) error {
 	return nil
 }
 
+// Roles come only from the release's finite relative asset set, never from
+// a caller-supplied identifier, requirement, executable path or manifest field.
+func releaseArtifactRole(relative string) (codesignpolicy.Role, error) {
+	switch relative {
+	case vaultName:
+		return codesignpolicy.Vault, nil
+	case helperName, filepath.Join(foreignDir, helperName):
+		return codesignpolicy.Helper, nil
+	case filepath.Join(foreignDir, vaultName):
+		return codesignpolicy.Qualification, nil
+	default:
+		return 0, refused("release_artifact_code_identity")
+	}
+}
+
 func (p installation) verifyFile(path string, spec installFile, run runner) error {
 	f, err := p.openAsset(path)
 	if err != nil {
@@ -127,18 +143,29 @@ func (p installation) verifyFile(path string, spec installFile, run runner) erro
 	if reply := run("/usr/bin/codesign", "--verify", "--strict", path); !reply.started || reply.exit != 0 {
 		return refused("release_artifact_signature")
 	}
-	reply := run("/usr/bin/codesign", "-d", "-r-", path)
-	want := "# designated => cdhash H\"" + spec.code + "\""
-	count := 0
-	for _, line := range strings.Split(string(reply.raw), "\n") {
-		if line == want {
-			count++
-		} else if strings.HasPrefix(line, "# designated =>") {
-			return refused("release_artifact_code_identity")
-		}
+	role, err := releaseArtifactRole(spec.relative)
+	if err != nil {
+		return err
 	}
-	if !reply.started || reply.exit != 0 || count != 1 {
+	info := run("/usr/bin/codesign", "-d", "--verbose=4", path)
+	entitlements := run("/usr/bin/codesign", "-d", "--entitlements", "-", "--xml", path)
+	if !info.started || info.exit != 0 || !entitlements.started || entitlements.exit != 0 {
 		return refused("release_artifact_code_identity")
+	}
+	hash, err := codesignpolicy.CodeInfo(role, info.raw, entitlements.raw)
+	if err != nil || hash != spec.code {
+		return refused("release_artifact_code_identity")
+	}
+	reply := run("/usr/bin/codesign", "-d", "-r-", path)
+	if !reply.started || reply.exit != 0 || codesignpolicy.RequirementReadback(role, reply.raw) != nil {
+		return refused("release_artifact_code_identity")
+	}
+	certificate := p.certificateFile
+	if certificate == nil {
+		certificate = codesignpolicy.CertificateFile
+	}
+	if certificate(path, role) != nil {
+		return refused("release_artifact_certificate")
 	}
 	opened, openedErr := f.Stat()
 	current, currentErr := os.Lstat(path)
@@ -276,6 +303,17 @@ func (p installation) install(run runner) error {
 		}
 	}
 	return nil
+}
+
+// codesign writes entitlements to stdout and its one public executable label
+// to stderr. Keep the XML separate; do not discard arbitrary stderr or parse a
+// merged metadata/XML document as an empty entitlement dictionary.
+func checkEntitlementOutput(stdout, stderr *capped, code int, path string) invocation {
+	label := strings.TrimSpace(stderr.String())
+	if stdout.full || stderr.full || (label != "" && label != "Executable="+path) {
+		return invocation{exit: -1, started: true}
+	}
+	return invocation{raw: stdout.Bytes(), exit: code, started: true}
 }
 
 func checkCappedOutput(stdout, stderr *capped, code int, allowStderr bool) invocation {
