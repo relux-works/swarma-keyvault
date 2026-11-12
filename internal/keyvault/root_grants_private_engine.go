@@ -38,6 +38,7 @@ type rootGrantsEngineState struct {
 	input    rootGrantsEngineInput
 	phase    rootGrantsEnginePhase
 	prepared *rootGrantsPrepared
+	cleared  chan struct{}
 }
 
 func (rootGrantsPrivateEngine) Format(s fmt.State, _ rune) {
@@ -68,8 +69,16 @@ func newRootGrantsPrivateEngine(ctx context.Context, input rootGrantsEngineInput
 		return nil, recoveryRefuse("invalid_arguments")
 	}
 	input.pairMetadata = bytes.Clone(input.pairMetadata)
-	ctx, cancel := context.WithTimeout(ctx, rootGrantsAttemptLimit)
-	e := &rootGrantsPrivateEngine{state: &rootGrantsEngineState{mu: &sync.Mutex{}, ctx: ctx, cancel: cancel, input: input}}
+	ctx, budgetCancel, budgetError := rootGrantsInputBudget(ctx)
+	if budgetError != nil {
+		return nil, budgetError
+	}
+	// A phase-local cancel inherits the SAME deadline, without canceling the
+	// facade public-completion lifetime on successful sealing.
+	ctx, phaseCancel := context.WithCancel(ctx)
+	ctx = rootGrantsBudgetView(ctx)
+	cancel := func() { phaseCancel(); budgetCancel() }
+	e := &rootGrantsPrivateEngine{state: &rootGrantsEngineState{mu: &sync.Mutex{}, ctx: ctx, cancel: cancel, input: input, cleared: make(chan struct{})}}
 	// Abandoned handles are invalidated and prepared material cleared at the
 	// ORIGINAL whole-attempt deadline; no phase can renew that deadline.
 	context.AfterFunc(ctx, e.clearPrivate)
@@ -85,7 +94,10 @@ func (e *rootGrantsPrivateEngine) clearPrivate() {
 	defer s.mu.Unlock()
 	s.prepared.clear()
 	s.prepared = nil
-	s.phase = rootGrantsEngineClosed
+	if s.phase != rootGrantsEngineClosed {
+		s.phase = rootGrantsEngineClosed
+		close(s.cleared) // private completion witness for deadline/cancel cleanup
+	}
 }
 
 func (e *rootGrantsPrivateEngine) close() {
@@ -100,6 +112,10 @@ func (e *rootGrantsPrivateEngine) startInput() error {
 		return recoveryRefuse("operation_unavailable")
 	}
 	s := e.state
+	if s.ctx.Err() == context.DeadlineExceeded {
+		e.close()
+		return recoveryRefuse("timeout")
+	}
 	s.mu.Lock()
 	valid := s.phase == rootGrantsEngineNew
 	if valid {
@@ -141,6 +157,10 @@ func (e *rootGrantsPrivateEngine) finishInput(ownedPhrase []byte) (RootGrantsPre
 		return empty, recoveryRefuse("operation_unavailable")
 	}
 	s := e.state
+	if s.ctx.Err() == context.DeadlineExceeded {
+		e.close()
+		return empty, recoveryRefuse("timeout")
+	}
 	s.mu.Lock()
 	reading := s.phase == rootGrantsEngineReading
 	s.mu.Unlock()
@@ -195,6 +215,10 @@ func (e *rootGrantsPrivateEngine) sealWithRandom(point, deviceBlob []byte, rando
 		return empty, recoveryRefuse("operation_unavailable")
 	}
 	s := e.state
+	if s.ctx.Err() == context.DeadlineExceeded {
+		e.close()
+		return empty, recoveryRefuse("timeout")
+	}
 	s.mu.Lock()
 	if s.phase != rootGrantsEnginePrepared || s.prepared == nil {
 		s.mu.Unlock()

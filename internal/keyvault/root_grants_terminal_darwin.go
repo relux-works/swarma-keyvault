@@ -32,10 +32,14 @@ func readRootGrantsTTY(ctx context.Context) (phrase []byte, err error) {
 	if err = rootGrantsContextError(ctx); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, rootGrantsAttemptLimit)
+	ctx, cancel, budgetError := rootGrantsInputBudget(ctx)
+	if budgetError != nil {
+		return nil, budgetError
+	}
 	defer cancel()
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTSTP, syscall.SIGTTIN, syscall.SIGTTOU)
 	defer stop()
+	ctx = rootGrantsBudgetView(ctx) // retain timeout classification through signal context
 	fd, openError := unix.Open("/dev/tty", unix.O_RDWR|unix.O_NOCTTY|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 	if openError != nil {
 		return nil, recoveryRefuse("terminal_required")

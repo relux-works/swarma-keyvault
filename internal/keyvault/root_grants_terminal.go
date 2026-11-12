@@ -4,10 +4,7 @@ import (
 	"bytes"
 	"context"
 	"strconv"
-	"time"
 )
-
-const rootGrantsAttemptLimit = 120 * time.Second
 
 // Physical Return normalization belongs ONLY to the self-opened controlling
 // tty transport. Direct grammar callers still must supply LF/CRLF. This finite
@@ -66,13 +63,17 @@ func rootGrantsEnglishWord(word []byte) bool {
 }
 
 func readRootGrantsNumbered(ctx context.Context, terminal rootGrantsLineIO) ([]byte, error) {
+	ctx = rootGrantsBudgetView(ctx)
 	if err := rootGrantsContextError(ctx); err != nil {
 		return nil, err
 	}
 	if terminal == nil {
 		return nil, recoveryRefuse("terminal_required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, rootGrantsAttemptLimit)
+	ctx, cancel, budgetError := rootGrantsInputBudget(ctx)
+	if budgetError != nil {
+		return nil, budgetError
+	}
 	defer cancel()
 	phrase := make([]byte, 0, 512)
 	returned := false

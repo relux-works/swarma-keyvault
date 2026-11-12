@@ -45,7 +45,7 @@ the exact saved attributes. SIGKILL, host loss, OS restoration refusal, terminal
 recording and runtime/opaque-crypto copies are outside any erasure guarantee.
 Portable platforms refuse custody input rather than use stdin or a file.
 
-The engine retains one original120-second deadline across read, preparation,
+The engine retains one original900-second deadline across read, preparation,
 waiting and sealing. Duplicate phase calls invalidate the attempt. Both old
 public pins and origin are rederived/checked before any random/seal call; only
 public preparation is returned while the private scalar waits for the separately

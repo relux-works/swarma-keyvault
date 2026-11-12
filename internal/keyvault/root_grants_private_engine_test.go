@@ -57,7 +57,7 @@ func rootGrantsPreparedCleared28(t *testing.T, p *rootGrantsPrepared) {
 }
 
 // Claim: one bounded private attempt accepts both retained pins from published
-// numbered input, returns public preparation only, then seals once; same120s
+// numbered input, returns public preparation only, then seals once; same900s
 // deadline and opaque/shared-clear lifetime survive phases and copied handles.
 // Limits: fake public point/blob; no actual tty/native review/biometry or store.
 func TestRootGrantsPrivateEngine28Flow(t *testing.T) {
@@ -249,7 +249,7 @@ func TestRootGrantsPrivateEngine28BothPins(t *testing.T) {
 
 // Claim: abandonment cancellation clears a prepared handle without needing a
 // next phase, invalid config fails before a handle, and phase clocks cannot
-// extend120s. Limits: Go context/lifetime only, not actual tty/signal behavior.
+// extend900s. Limits: Go context/lifetime only, not actual tty/signal behavior.
 func TestRootGrantsPrivateEngine28DeadlineAndInputs(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	e := rootGrantsEngine28(t, ctx)
