@@ -238,16 +238,27 @@ final class NativeNamecoinJournalStorage {
         keychain = try Self.openAccountLoginKeychain()
     }
 
-    private static func openAccountLoginKeychain() throws -> SecKeychain {
-        var entry = passwd()
-        var found: UnsafeMutablePointer<passwd>?
+    // Copy pw_dir while getpwuid_r's backing buffer is borrowed. Only the
+    // resulting owned String crosses that lifetime; HOME is never consulted.
+    static func accountLoginKeychainPath() throws -> String {
         var buffer = [CChar](repeating: 0, count: 16384)
-        let status = buffer.withUnsafeMutableBufferPointer {
-            getpwuid_r(getuid(), &entry, $0.baseAddress, $0.count, &found)
+        let home: String = try buffer.withUnsafeMutableBufferPointer { bytes in
+            var entry = passwd()
+            var found: UnsafeMutablePointer<passwd>?
+            guard getpwuid_r(getuid(), &entry, bytes.baseAddress, bytes.count, &found) == 0,
+                  found != nil, entry.pw_uid == getuid(), let directory = entry.pw_dir,
+                  let owned = String(validatingUTF8: directory), owned.hasPrefix("/") else {
+                throw NativeJournalRefusal.operational
+            }
+            return owned
         }
-        guard status == 0, found != nil, let home = entry.pw_dir else { throw NativeJournalRefusal.operational }
-        // Public OS account path, never environment HOME or changed default.
-        let path = String(cString: home) + "/Library/Keychains/login.keychain-db"
+        let path = home + "/Library/Keychains/login.keychain-db"
+        guard path.utf8.count < Int(PATH_MAX) else { throw NativeJournalRefusal.operational }
+        return path
+    }
+
+    private static func openAccountLoginKeychain() throws -> SecKeychain {
+        let path = try accountLoginKeychainPath()
         var reference: SecKeychain?
         let opened = path.withCString { SecKeychainOpen($0, &reference) }
         guard opened == errSecSuccess, let login = reference else { throw nativeJournalReadFailure(opened) }

@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/user"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +21,22 @@ import (
 
 func signingFilesFixture(t *testing.T, mode, slot string) (SigningFiles, time.Time, string) {
 	t.Helper()
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	// Use the OS account home: writable ancestors such as /tmp are deliberately
+	// refused by the production reader. Only this new directory is mutated.
+	account, err := user.LookupId(strconv.Itoa(os.Getuid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := os.MkdirTemp(account.HomeDir, ".namecoin-psbt-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(owned); err != nil {
+			t.Error(err)
+		}
+	})
+	dir, err := filepath.EvalSymlinks(owned)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,7 +1,8 @@
-// Swift Testing SOURCE only. Build a test target with NamecoinJournalStorage.swift
-// and this file, excluding main.swift/operations and their UI/dispatch. No test
-// constructs NativeNamecoinJournalStorage or calls Keychain/code-identity/LA APIs.
+// The linked Swift Testing target exercises public model/memory controls by
+// default. The explicitly enabled native constructor control below additionally
+// needs an admitted signed runtime and an unlocked OS-account login Keychain.
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 import Testing
@@ -198,4 +199,45 @@ func nativeHelperRuntimeFlagsAdmitBothSupportedForms(_ flags: UInt32) {
                   UInt32(0x10010000), UInt32(0x10010002), UInt32.max])
 func nativeHelperRuntimeFlagsRefuseEveryListedOtherForm(_ flags: UInt32) {
     #expect(!nativeJournalAdmitsHelperCodeFlags(flags))
+}
+
+// The OS-account path survives the scratch-buffer borrow and subsequent
+// allocations. This public path control opens no Keychain and proves no custody.
+@Test func nativeAccountLoginPathOwnsItsBytes() throws {
+    let path = try NativeNamecoinJournalStorage.accountLoginKeychainPath()
+    let original = Array(path.utf8)
+    let scratch = [UInt8](repeating: 0xa5, count: 65536)
+    #expect(scratch.count == 65536)
+    #expect(Array(path.utf8) == original)
+    #expect(path.hasPrefix("/"))
+    #expect(path.hasSuffix("/Library/Keychains/login.keychain-db"))
+    #expect(path.utf8.count < Int(PATH_MAX))
+    #expect(try NativeNamecoinJournalStorage.accountLoginKeychainPath() == path)
+}
+
+// Attended native qualification must ENABLE and execute this real constructor
+// pair in an appropriately signed test process. A skipped test is NOT evidence.
+// The wrong pin refuses before Keychain opening; the matching pin then reaches
+// the actual login-Keychain open/status path. No item is queried or mutated and
+// no biometric or journal durability success is asserted.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["KEYVAULT_NATIVE_JOURNAL_TESTS"] == "1"))
+func nativeJournalAdapterConstructionRequiresActualCodePin() throws {
+    var code: SecCode?
+    let copied = SecCodeCopySelf(SecCSFlags(rawValue: 0), &code)
+    #expect(copied == errSecSuccess)
+    let running = try #require(code)
+    var information: CFDictionary?
+    let inspected = SecCodeCopySigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+    #expect(inspected == errSecSuccess)
+    let facts = try #require(information as? [String: Any])
+    let actualHash = try #require(facts[kSecCodeInfoUnique as String] as? Data)
+    #expect(!actualHash.isEmpty)
+    var wrongHash = actualHash
+    let first = try #require(wrongHash.indices.first)
+    wrongHash[first] ^= 1
+    let wrongSelection = try fixtureSelection(helperHash: wrongHash)
+    expectNativeRefusal(.mismatch) { _ = try NativeNamecoinJournalStorage(selection: wrongSelection) }
+    let selection = try fixtureSelection(helperHash: actualHash)
+    let adapter = try NativeNamecoinJournalStorage(selection: selection)
+    #expect(adapter.selection.metadata == selection.metadata)
 }

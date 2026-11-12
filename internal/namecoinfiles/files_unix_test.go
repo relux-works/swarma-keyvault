@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -14,7 +16,22 @@ import (
 
 func privateFixture(t *testing.T) (string, string) {
 	t.Helper()
-	base, err := filepath.EvalSymlinks(t.TempDir())
+	// Use the OS account home: writable ancestors such as /tmp are deliberately
+	// refused by the production reader. Only this new directory is mutated.
+	account, err := user.LookupId(strconv.Itoa(os.Getuid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := os.MkdirTemp(account.HomeDir, ".namecoin-files-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(owned); err != nil {
+			t.Error(err)
+		}
+	})
+	base, err := filepath.EvalSymlinks(owned)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,13 +73,16 @@ func TestPrivateInputSnapshotAndDirectoryCompatibility(t *testing.T) {
 	}
 }
 
-// Real symlink/hardlink/FIFO/permissions/ancestor violations reject without
-// modifying the selected input or writing an output. FIFO opens are nonblocking;
+// Symlink/hardlink/FIFO/permissions and unsafe ancestors, including writable
+// sticky directories, reject without modifying input or writing output. FIFO opens are nonblocking;
 // all mutations are isolated disposable fixtures, never real user state.
 func TestInputAndOutputFilesystemRefusals(t *testing.T) {
-	for _, kind := range []string{"symlink", "hardlink", "fifo", "mode", "ancestor", "relative", "traversal"} {
+	for _, kind := range []string{"symlink", "hardlink", "fifo", "mode", "ancestor", "sticky-ancestor", "relative", "traversal"} {
 		t.Run(kind, func(t *testing.T) {
 			base, path := privateFixture(t)
+			if raw, err := ReadInput(path, 64); err != nil || string(raw) != "public request fixture" {
+				t.Fatal("positive control refused", err)
+			}
 			selected := path
 			switch kind {
 			case "symlink":
@@ -86,6 +106,10 @@ func TestInputAndOutputFilesystemRefusals(t *testing.T) {
 			case "ancestor":
 				if os.Chmod(base, 0o770) != nil {
 					t.Fatal("fixture ancestor")
+				}
+			case "sticky-ancestor":
+				if os.Chmod(base, os.ModeSticky|0o777) != nil {
+					t.Fatal("fixture sticky ancestor")
 				}
 			case "relative":
 				selected = "request.json"

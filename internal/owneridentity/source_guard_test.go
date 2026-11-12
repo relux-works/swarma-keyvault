@@ -1,6 +1,7 @@
 package owneridentity
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"go/ast"
@@ -219,14 +220,27 @@ func guardGo(path string, raw []byte) (string, error) {
 	return hit, nil
 }
 
-func guardSwift(raw []byte) string {
+func guardSwift(raw []byte) string { return guardSwiftSource("", raw) }
+
+func guardSwiftSource(path string, raw []byte) string {
 	if literalIdentity("swift", string(raw)) {
 		return "fixed owner, account or home literal"
 	}
 	fixed := map[string]bool{}
-	for _, match := range swiftFixedAssignment.FindAllSubmatch(raw, -1) {
-		name := string(match[1])
-		if identityField(name) || strings.EqualFold(name, "label") {
+	for _, match := range swiftFixedAssignment.FindAllSubmatchIndex(raw, -1) {
+		name := string(raw[match[2]:match[3]])
+		// One immutable public protocol namespace, not an owner identity.
+		// Require the exact declaration and source; retain fallback detection.
+		lineStart := bytes.LastIndexByte(raw[:match[0]], '\n') + 1
+		lineEnd := bytes.IndexByte(raw[match[1]:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(raw)
+		} else {
+			lineEnd += match[1]
+		}
+		protocolService := path == "cmd/mac-keyvault-enclave/NamecoinJournalStorage.swift" &&
+			strings.TrimSpace(string(raw[lineStart:lineEnd])) == `static let service = "works.relux.mac-keyvault.namecoin-journal.v1"`
+		if (identityField(name) || strings.EqualFold(name, "label")) && !protocolService {
 			return "fixed native identity-bearing field"
 		}
 		fixed[name] = true
@@ -238,6 +252,50 @@ func guardSwift(raw []byte) string {
 		}
 	}
 	return ""
+}
+
+// Match the repository's Go and Swift test-file naming conventions. This is
+// source inventory, not a compiler or an identity data-flow enforcement boundary.
+func productionIdentitySource(path string) bool {
+	return filepath.Ext(path) == ".go" && !strings.HasSuffix(path, "_test.go") ||
+		filepath.Ext(path) == ".swift" && !strings.HasSuffix(path, "Tests.swift")
+}
+
+// The exact shipped namespace is compatible; changing its value, declaration,
+// source or adding a fixed owner/fallback still trips the same bounded scanner.
+func TestSwiftPublicProtocolNamespaceBoundary(t *testing.T) {
+	const path = "cmd/mac-keyvault-enclave/NamecoinJournalStorage.swift"
+	const declaration = `static let service = "works.relux.mac-keyvault.namecoin-journal.v1"`
+	for _, row := range []struct{ path, source, want string }{
+		{path, declaration, ""},
+		{path, "    " + declaration + "\n", ""},
+		{"copy/Storage.swift", declaration, "fixed native identity-bearing field"},
+		{path, strings.Replace(declaration, ".v1", ".v2", 1), "fixed native identity-bearing field"},
+		{path, strings.TrimPrefix(declaration, "static "), "fixed native identity-bearing field"},
+		{path, strings.Replace(declaration, "let ", "var ", 1), "fixed native identity-bearing field"},
+		{path, declaration + `; let owner = "fixture-person"`, "fixed native identity-bearing field"},
+		{path, declaration + "\n" + `let owner = "fixture-person"`, "fixed native identity-bearing field"},
+		{path, declaration + "\n" + `let chosen = suppliedService ?? service`, "fixed native identity fallback"},
+	} {
+		if got := guardSwiftSource(row.path, []byte(row.source)); got != row.want {
+			t.Errorf("namespace boundary: got %q, want %q", got, row.want)
+		}
+	}
+}
+
+// Test fixtures are excluded consistently in both languages; near-miss names
+// and production sources remain scanned rather than exempting a directory.
+func TestProductionIdentitySourceInventory(t *testing.T) {
+	for path, want := range map[string]bool{
+		"internal/example/main.go": true, "internal/example/main_test.go": false,
+		"cmd/example/Storage.swift": true, "cmd/example/StorageTests.swift": false,
+		"cmd/example/StorageTest.swift": true, "cmd/example/TestsStorage.swift": true,
+		"cmd/example/StorageTests.swift.go": true, "docs/example.md": false,
+	} {
+		if productionIdentitySource(path) != want {
+			t.Errorf("incorrect source inventory: %s", path)
+		}
+	}
 }
 
 // Actual production source, including the native review helper, must pass the
@@ -255,22 +313,22 @@ func TestNoFixedOwnerIdentityInSource(t *testing.T) {
 			}
 			return nil
 		}
-		if strings.HasSuffix(p, "_test.go") || filepath.Ext(p) != ".go" && filepath.Ext(p) != ".swift" {
+		if !productionIdentitySource(p) {
 			return nil
 		}
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		if filepath.Ext(p) == ".swift" {
-			if hit := guardSwift(raw); hit != "" {
-				t.Errorf("%s: %s", p, hit)
-			}
-			return nil
-		}
 		relative, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
+		}
+		if filepath.Ext(p) == ".swift" {
+			if hit := guardSwiftSource(filepath.ToSlash(relative), raw); hit != "" {
+				t.Errorf("%s: %s", p, hit)
+			}
+			return nil
 		}
 		hit, err := guardGo(filepath.ToSlash(relative), raw)
 		if hit != "" {

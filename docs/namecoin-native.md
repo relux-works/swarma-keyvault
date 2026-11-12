@@ -79,8 +79,11 @@ reset or generic unwrap operation is introduced.
 
 ## Journal integrity and replay model
 
-`internal/namecoinjournal` is a pure internal codec and state model. It has no
-filesystem or Keychain backend, no installed state selection and no native call.
+`internal/namecoinjournal` contains the internal codec/state model and Unix
+filesystem storage for durable journal frames, public descriptors and results.
+The filesystem backend holds checked directory descriptors and uses create-only
+writes and synchronization. Protected-anchor storage is a separate native
+Keychain adapter; the Go storage package does not select or call that adapter.
 Its local binary formats (`KVNA1`, `KVNF1`, `KVNS1`, `KVNT1`, each followed by a
 zero byte) are not facade wire formats. There is no JSON/PSBT endpoint for them.
 
@@ -120,7 +123,7 @@ memory/whole protected-store rollback remains outside these checks.
 A dispatched outpoint is fenced independently of the request ID. Complete signed
 results retain their exact hash; dispatched and explicitly unknown attempts both
 reconcile as UNKNOWN and cannot silently resume or release inputs. The pure model
-performs no ECDSA or result-signature verification. The future engine must durably
+performs no ECDSA or result-signature verification. The engine must durably
 persist/fsync the dispatched fence, update and read back the protected anchor,
 rederive account integrity and only then sign. It must verify and persist the
 complete result and final journal/anchor before reporting success. Partial writes,
@@ -156,22 +159,24 @@ paired-byte preservation. Those controls establish only their exercised pure
 contracts. Kernel tests separately exercise real sockets/processes when executed.
 Neither proves native owner presence, protected storage or usable signing.
 
-This source unit permits formatting and static diff checks only. Go builds/tests,
-Swift compilation, native executable runs and codesign require the separately
-serialized test-lane release. Codesign additionally requires immediately preceding
-host-watch confirmation and the retained opt-in runner. Native custody and
-owner-presence qualification remain separate attended operations after independent
-review. No unexecuted test is a passing result.
+Run software validation in the serialized, retained test lane described in the
+repository's test instructions. Native custody and owner-presence qualification
+are separate attended operations after independent review. Execute the Swift
+`malformedACKAndMissingEOFConsumeTheAttempt` control: Go archive tests alone do
+not detect a native ACK parser that accepts the right length but wrong bytes.
+The real journal constructor control also needs explicit enablement as described
+below. An unexecuted or skipped native test is not passing qualification evidence.
 
 
 ## Finite native storage adapter source
 
 `cmd/mac-keyvault-enclave/NamecoinJournalStorage.swift` implements a finite macOS
-adapter for the new journal item. It is source prepared for the linked custody
-helper, with no public dispatcher or exported C ABI. The current standalone build
-still compiles only `main.swift`; the linked build must explicitly include this
-file and `NamecoinJournalOperations.swift`. Source-list integration is separate
-from native qualification.
+adapter for the new journal item. The root `Package.swift` explicitly includes
+it and `NamecoinJournalOperations.swift` in `KeyvaultNativeCore`, with separate
+executable and Swift Testing targets. The native builder composes the matched Go
+C archive, generated versioned header and Swift sources. Internal archive bridges
+are implemented; no public Namecoin operation dispatcher is exposed. Linked
+source availability is separate from executed native qualification.
 
 The selection freezes the existing physical group, logical Namecoin account,
 public pin, policy, qualified helper CDHash and complete local linked sidecar.
@@ -262,16 +267,19 @@ the independently trusted account pin before accepting those account bytes.
 Storage/engine refusals propagate without being mislabeled as biometric errors,
 especially when an attempted mutation is UNKNOWN.
 
-The engine actions are not yet wired to C: the generated versioned header and
-exact ABI compatibility fixture must precede that work. The native initialization
-entry remains internal and must be admitted only by the first post-review
-adoption sitting's engine lifecycle. No caller boolean or public reset operation
+The internal engine actions are wired through the versioned C archive/header
+and Swift bridges, with handle ownership, bounded callbacks and ABI fixtures.
+Initialization, reconciliation and signing have internal bridge source; the
+initialization entry must be admitted only by the first post-review adoption
+sitting's engine lifecycle. No caller boolean or public reset operation
 supplies that permission. The displayed adoption-plan digest binds the selected
 public plan; it does not prove that adoption or owner review occurred. The engine
 lifecycle must establish the actual admitted first sitting. Exact existing-attempt/result selection and public
 reconciliation output remain the frozen engine's work; the source primitive
-alone is not a usable signer or authenticated-result endpoint. Eventual C exports
-must recover panics into closed refusals and retain UNKNOWN after DISPATCHED.
+alone is not a usable signer or authenticated-result endpoint. C exports recover
+panics into closed refusals; a failed bridge remains latched through closure and
+must retain UNKNOWN after DISPATCHED. Native execution, durable ordering and the
+complete owner-facing operation flow still require qualification.
 
 The paired item's decrypt principal remains the qualified Go vault, never the
 helper. Rebuilding that vault requires a finite attended old-to-new sole-principal
@@ -285,15 +293,21 @@ fresh review/presence. There is no implicit old-plus-new or helper trust interva
 
 ## Native software controls and remaining qualification
 
-`NamecoinJournalStorageTests.swift` uses Swift Testing and only public synthetic
-model/memory fixtures. It does not construct the real storage adapter, execute
-Keychain/code-identity/biometric calls, simulate hardware success or substitute a
-callback returning true. It checks fixed public framing vectors, positive and
-forbidden retained identity forms, sidecar bounds and binding, immutable owned
-buffers and closed error classification. Protected-anchor positive fixtures are
-syntax-only and intentionally not authenticated tokens. The test target should
-compile the storage/model source separately from `main.swift`, UI orchestration
-and production dispatch; a target is not yet installed by this source change.
+`NamecoinJournalStorageTests.swift` belongs to the explicit Swift Testing target.
+Its default controls use public model/memory fixtures and the public OS-account
+path lookup. They check framing vectors, retained identity compatibility, sidecar
+bounds and binding, owned buffers and closed error classification. Protected-anchor
+positive fixtures are syntax-only, not authenticated tokens.
+
+`nativeJournalAdapterConstructionRequiresActualCodePin` is an opt-in real native
+control. Set `KEYVAULT_NATIVE_JOURNAL_TESTS=1` only in the attended qualification
+lane with an appropriately signed test process and unlocked OS-account login
+Keychain. The control obtains the actual running code hash, pairs a wrong-hash
+constructor refusal with matching-hash construction, and reaches the real login
+Keychain open/status path. It neither queries nor mutates an item, requests
+biometrics, nor simulates native success. The constructor disables interactive
+Keychain prompts for its process. Record actual enabled execution; the default
+skip is not native evidence. Full item ACL/storage controls remain separate.
 
 Native code identity and sole-app decrypt policy need real disposable native
 controls. Update, delete, recreate and change-ACL boundaries need their actual
