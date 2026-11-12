@@ -26,6 +26,30 @@ func rootGrantsRequest44(t *testing.T, schema string) []byte {
 		[]string{"protocol", "engine", "profile", "mode", "pair_metadata", "pair", "service", "version", "created"})
 }
 
+// Test-only exact object-level writer. Unlike substring replacement, a root
+// "version" mutation cannot accidentally change the nested pair version.
+func rootGrantsObject44(t *testing.T, fields map[string]json.RawMessage, order []string) []byte {
+	t.Helper()
+	var out bytes.Buffer
+	out.WriteByte('{')
+	count := 0
+	for _, key := range order {
+		value, ok := fields[key]
+		if !ok {
+			continue
+		}
+		if count > 0 {
+			out.WriteByte(',')
+		}
+		out.Write(rootGrantsRaw13(t, key))
+		out.WriteByte(':')
+		out.Write(value)
+		count++
+	}
+	out.WriteByte('}')
+	return out.Bytes()
+}
+
 func rootGrantsSession44(t *testing.T) *RootGrantsPrivateSession {
 	t.Helper()
 	s, err := OpenRootGrantsPrivate(context.Background(), rootGrantsRequest44(t, "keyvault-recovery/2"))
@@ -97,17 +121,38 @@ func TestRootGrantsFacade44RequestRefusals(t *testing.T) {
 			"leading": append([]byte{' '}, valid...), "second-object": append(bytes.Clone(valid), []byte("{}")...),
 			"oversize": bytes.Repeat([]byte{' '}, 262145), "at-limit-invalid": bytes.Repeat([]byte{' '}, 262144),
 			"unknown": append(bytes.Clone(valid[:len(valid)-1]), []byte(",\"unknown\":\"\"}")...)}
-		for key, value := range fields {
-			literal := append(rootGrantsRaw13(t, key), ':')
-			pair := append(bytes.Clone(literal), value...)
-			cases["null-"+key] = bytes.Replace(valid, pair, append(bytes.Clone(literal), []byte("null")...), 1)
-			cases["alias-"+key] = bytes.Replace(valid, rootGrantsRaw13(t, key), rootGrantsRaw13(t, strings.ToUpper(key)), 1)
-			cases["duplicate-"+key] = append(append(bytes.Clone(valid[:len(valid)-1]), ','), append(bytes.Clone(pair), '}')...)
-			missing := bytes.Replace(valid, append(bytes.Clone(pair), ','), nil, 1)
-			if bytes.Equal(missing, valid) {
-				missing = bytes.Replace(valid, append([]byte{','}, pair...), nil, 1)
+		rootOrder := []string{"protocol", "engine", "profile", "mode", "pair_metadata", "pair", "service", "version", "created"}
+		for key := range fields {
+			copyFields := func() map[string]json.RawMessage {
+				out := make(map[string]json.RawMessage)
+				for k, v := range fields {
+					out[k] = v
+				}
+				return out
 			}
-			cases["missing-"+key] = missing
+			null := copyFields()
+			null[key] = json.RawMessage("null")
+			cases["null-"+key] = rootGrantsObject44(t, null, rootOrder)
+			missing := copyFields()
+			delete(missing, key)
+			cases["missing-"+key] = rootGrantsObject44(t, missing, rootOrder)
+			alias := copyFields()
+			delete(alias, key)
+			alias[strings.ToUpper(key)] = fields[key]
+			var aliasOrder, duplicateOrder []string
+			for _, k := range rootOrder {
+				if k == key {
+					aliasOrder = append(aliasOrder, strings.ToUpper(k))
+				} else {
+					aliasOrder = append(aliasOrder, k)
+				}
+				duplicateOrder = append(duplicateOrder, k)
+				if k == key {
+					duplicateOrder = append(duplicateOrder, k)
+				}
+			}
+			cases["alias-"+key] = rootGrantsObject44(t, alias, aliasOrder)
+			cases["duplicate-"+key] = rootGrantsObject44(t, fields, duplicateOrder)
 		}
 		var object map[string]json.RawMessage
 		if json.Unmarshal(valid, &object) != nil {
