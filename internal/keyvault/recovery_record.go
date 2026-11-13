@@ -193,6 +193,31 @@ func parseRecoveryRecord(raw []byte) (RecoveryRecord, error) {
 	return r, nil
 }
 
+// recoveryMetadataSHA256 is the single definition of the pair metadata digest:
+// the lowercase hex SHA-256 of the exact canonical retained public record bytes.
+// The root-grants attach binds a pair with it and `recovery pub` prints it, so
+// the printed value is the value the attach accepts as its pin.
+func recoveryMetadataSHA256(raw []byte) string {
+	h := sha256.Sum256(raw)
+	return hex.EncodeToString(h[:])
+}
+
+// PairMetadataSHA256 returns the digest of this record's canonical public
+// metadata, the same bytes the vault stores and the attach reads back
+// (parseRecoveryRecord admits only bytes equal to this encoding). It is public
+// data computed from public fields only. A record the store or the attach would
+// not accept yields no digest.
+func (r RecoveryRecord) PairMetadataSHA256() (string, error) {
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return "", recoveryRefuse("invalid_record")
+	}
+	if _, err := parseRecoveryRecord(raw); err != nil {
+		return "", err
+	}
+	return recoveryMetadataSHA256(raw), nil
+}
+
 type recoveryEnvelope struct {
 	Schema      string `json:"schema"`
 	Algorithm   string `json:"algorithm"`

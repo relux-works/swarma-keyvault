@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
@@ -113,10 +112,9 @@ func (p *rootGrantsPrepared) publicView() (RootGrantsPreparationPublic, error) {
 }
 
 func rootGrantsPairBinding(raw []byte, r RecoveryRecord) RootGrantsPairBinding {
-	h := sha256.Sum256(raw)
 	return RootGrantsPairBinding{
 		Schema: r.Schema, Service: r.Service, Version: r.Version, GroupID: r.GroupID,
-		MetadataSHA256: hex.EncodeToString(h[:]),
+		MetadataSHA256: recoveryMetadataSHA256(raw),
 		NostrIdentity:  r.purposeService(r.Nostr), NostrVersion: r.Nostr.Version,
 		NostrPublicKey: r.Nostr.PublicKey, NostrNPub: r.Nostr.NPub,
 		NamecoinIdentity: r.purposeService(r.Namecoin), NamecoinVersion: r.Namecoin.Version,
