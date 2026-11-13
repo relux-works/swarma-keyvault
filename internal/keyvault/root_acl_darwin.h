@@ -27,6 +27,8 @@ OSStatus KVQLogin(SecKeychainRef *out);
 OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out);
 // The single root-item access constructor: sole trusted application is the fixed
 // vault requirement, plus the exact partition ACL. Fails closed on any deviation.
-OSStatus KVQIntendedAccess(KVQSymbols symbols, SecAccessRef *out);
+// descriptor (the access name shown in system dialogs, also the description of the
+// projected ACLs) and applicationLabel are fixed strings owned by each caller.
+OSStatus KVQIntendedAccess(KVQSymbols symbols, const char *descriptor, const char *applicationLabel, SecAccessRef *out);
 
 #endif

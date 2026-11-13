@@ -27,7 +27,9 @@ int MacKeyVaultRootGrantsList(char **out, size_t *outLength);
 // Prepare returns 0, 1 (running code or SPI not admitted), 2 (access object could
 // not be built/projected) or 3 (allocation/argument). Commit returns 0 or an
 // OSStatus and sets *attempted immediately before the single SecItemAdd; every
-// earlier failure leaves it 0. Close is mandatory on every path.
+// earlier failure leaves it 0. A plan is one-shot: the first commit consumes it,
+// and any further commit on it refuses without touching the Keychain. Close is
+// mandatory on every path.
 typedef struct MacKeyVaultRootGrantsAdd MacKeyVaultRootGrantsAdd;
 int MacKeyVaultRootGrantsAddPrepare(MacKeyVaultRootGrantsAdd **plan, unsigned char **frame, size_t *frameLength);
 int MacKeyVaultRootGrantsAddCommit(MacKeyVaultRootGrantsAdd *plan, const char *account, const char *metadata,

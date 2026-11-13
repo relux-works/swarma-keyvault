@@ -12,11 +12,20 @@
 // Keep this literal in agreement with RootGrantsNamespace in root_grants_record.go.
 static const char *KVRGNamespace = "works.relux.mac-keyvault.root-grants.v1";
 
-struct MacKeyVaultRootGrantsAdd { SecAccessRef access; };
+// The two strings every production root item carries. The access descriptor names
+// the item in system dialogs and is the description of its projected ACLs, so it
+// must say what the item is; the application label only labels the trusted
+// application. Neither is shared with the public-marker qualification lane.
+static const char *KVRGAccessDescriptor = "Root grants key";
+static const char *KVRGApplicationLabel = "keyvault-root-grants:/vault";
+
+// consumed makes the plan one-shot: the first commit on it, successful or not,
+// uses it up, so a plan can never add twice.
+struct MacKeyVaultRootGrantsAdd { SecAccessRef access; int consumed; };
 
 const char *MacKeyVaultRootGrantsNamespace(void) { return KVRGNamespace; }
 
-// Note 55: both SPI symbols resolve and the ACTUAL running vault is verified
+// Both ACL SPI symbols must resolve and the ACTUAL running vault must be verified
 // BEFORE any Keychain query of the root operation. The access object, the code
 // check and the projection come from the same shared unit as the public-marker
 // qualification lane.
@@ -130,7 +139,7 @@ int MacKeyVaultRootGrantsAddPrepare(MacKeyVaultRootGrantsAdd **plan, unsigned ch
     if (!KVRGStartup(&symbols)) return 1;
     SecAccessRef access = NULL;
     CFDataRef projection = NULL;
-    OSStatus status = KVQIntendedAccess(symbols, &access);
+    OSStatus status = KVQIntendedAccess(symbols, KVRGAccessDescriptor, KVRGApplicationLabel, &access);
     if (status == errSecSuccess) status = KVQProject(access, symbols, &projection);
     if (status == errSecSuccess && (!projection || CFDataGetLength(projection) <= 0 || CFDataGetLength(projection) > 1048576)) status = errSecDecode;
     int result = status == errSecSuccess ? 0 : 2;
@@ -163,6 +172,8 @@ int MacKeyVaultRootGrantsAddCommit(MacKeyVaultRootGrantsAdd *plan, const char *a
     *attempted = 0;
     if (!plan || !plan->access || !account || !metadata || !envelope || envelopeLength == 0 || envelopeLength > 65536 ||
         strlen(account) == 0 || strlen(account) > 256 || strlen(metadata) == 0 || strlen(metadata) > 32768) return errSecParam;
+    if (plan->consumed) return errSecParam; // one-shot: a second commit never reaches the add
+    plan->consumed = 1;
     KVQSymbols symbols = {0};
     if (!KVRGStartup(&symbols)) return errSecAuthFailed;
     SecKeychainRef keychain = NULL;

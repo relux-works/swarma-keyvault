@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -696,93 +698,288 @@ func TestRootGrantsVaultDefaultPolicyFailsClosed(t *testing.T) {
 	}
 }
 
-// rootGrantsStoreSourceViolations lists every way the cgo store source leaves its
-// boundary: a forbidden Keychain API, a changed add/query count, a dispatch flag not
-// set immediately before the single add of the prepared access object, an entry that
-// reaches the Keychain before the running-vault check, or a namespace literal that
-// differs from the Go constant.
+// rootGrantsCStrip removes preprocessor lines and comments and blanks the string
+// literals of a C source, returning the remaining code and the literals in order.
+func rootGrantsCStrip(src string) (string, []string) {
+	var code strings.Builder
+	var literals []string
+	lineStart := true
+	for i := 0; i < len(src); {
+		c := src[i]
+		switch {
+		case lineStart && c == '#':
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case strings.HasPrefix(src[i:], "//"):
+			for i < len(src) && src[i] != '\n' {
+				i++
+			}
+		case strings.HasPrefix(src[i:], "/*"):
+			end := strings.Index(src[i+2:], "*/")
+			if end < 0 {
+				i = len(src)
+			} else {
+				i += end + 4
+			}
+		case c == '"':
+			j := i + 1
+			for j < len(src) && src[j] != '"' {
+				if src[j] == '\\' {
+					j++
+				}
+				j++
+			}
+			if j >= len(src) {
+				j = len(src) - 1
+			}
+			literals = append(literals, src[i+1:j])
+			code.WriteString(`""`)
+			lineStart = false
+			i = j + 1
+		default:
+			code.WriteByte(c)
+			if c == '\n' {
+				lineStart = true
+			} else if c != ' ' && c != '\t' {
+				lineStart = false
+			}
+			i++
+		}
+	}
+	return code.String(), literals
+}
+
+// rootGrantsCFunctionBody returns the braces of one top-level function definition.
+func rootGrantsCFunctionBody(code, name string) (string, bool) {
+	loc := regexp.MustCompile(`(?m)^[A-Za-z_][^\n(;]*\b` + regexp.QuoteMeta(name) + `\s*\(`).FindStringIndex(code)
+	if loc == nil {
+		return "", false
+	}
+	open := strings.Index(code[loc[1]:], "{")
+	if open < 0 {
+		return "", false
+	}
+	start, depth := loc[1]+open, 0
+	for i := start; i < len(code); i++ {
+		switch code[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return code[start : i+1], true
+			}
+		}
+	}
+	return "", false
+}
+
+func rootGrantsSet(names ...string) map[string]bool {
+	set := map[string]bool{}
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
+}
+
+// The closed vocabulary of the root-grants store, derived from what the operation
+// is allowed to do: query attributes of one fixed service, read the ACL of one item,
+// and add one item whose value is supplied by the caller. Nothing else may appear:
+// no call, query key or constant outside these sets, however it is spelled.
+var (
+	rootGrantsStoreCalls = rootGrantsSet(
+		// Security and CoreFoundation
+		"SecItemAdd", "SecItemCopyMatching", "SecKeychainItemCopyAccess", "SecKeychainItemGetTypeID",
+		"CFArrayCreate", "CFArrayGetCount", "CFArrayGetTypeID", "CFArrayGetValueAtIndex", "CFDataAppendBytes", "CFDataCreateMutable",
+		"CFDataCreateWithBytesNoCopy", "CFDataGetBytePtr", "CFDataGetLength", "CFDictionaryCreateMutable", "CFDictionaryGetTypeID",
+		"CFDictionaryGetValue", "CFDictionarySetValue", "CFEqual", "CFGetTypeID", "CFRelease", "CFStringCreateExternalRepresentation",
+		"CFStringCreateWithCString", "CFStringGetLength", "CFStringGetTypeID",
+		// the shared ACL unit, the existing attribute-only pair list and this file's own functions
+		"KVQIntendedAccess", "KVQLogin", "KVQProject", "KVQResolve", "KVQSelf", "MacKeyVaultNostrList",
+		"KVRGCopy", "KVRGQuery", "KVRGRows", "KVRGStartup",
+		"MacKeyVaultRootGrantsAddClose", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsList",
+		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsPairList", "MacKeyVaultRootGrantsReadback", "MacKeyVaultRootGrantsStartup",
+		// libc and C keywords that look like calls
+		"calloc", "free", "malloc", "memcpy", "strlen", "for", "if", "return", "sizeof", "switch", "while")
+	rootGrantsStoreConstants = rootGrantsSet(
+		"kCFAllocatorNull", "kCFBooleanTrue", "kCFStringEncodingUTF8", "kCFTypeArrayCallBacks", "kCFTypeDictionaryKeyCallBacks", "kCFTypeDictionaryValueCallBacks",
+		"kSecAttrAccess", "kSecAttrAccount", "kSecAttrComment", "kSecAttrLabel", "kSecAttrService", "kSecClass", "kSecClassGenericPassword",
+		"kSecMatchLimit", "kSecMatchLimitAll", "kSecMatchSearchList", "kSecReturnAttributes", "kSecReturnRef", "kSecUseKeychain", "kSecValueData", "kSecValueRef")
+	rootGrantsStoreTypes = rootGrantsSet("CFArrayRef", "CFDataRef", "CFDictionaryRef", "CFIndex", "CFMutableDataRef", "CFMutableDictionaryRef", "CFStringRef", "CFTypeRef",
+		"SecAccessRef", "SecKeychainItemRef", "SecKeychainRef")
+	rootGrantsStoreNames = rootGrantsSet("KVQSymbols", "KVRGAccessDescriptor", "KVRGApplicationLabel", "KVRGNamespace", "MacKeyVaultRootGrantsAdd")
+	// Entries that touch the Keychain: each must verify the running vault before any
+	// call other than argument validation.
+	rootGrantsStoreGatedEntries = []string{"MacKeyVaultRootGrantsStartup", "MacKeyVaultRootGrantsPairList", "MacKeyVaultRootGrantsList",
+		"MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsReadback"}
+	rootGrantsStoreAllFunctions = append(append([]string{}, rootGrantsStoreGatedEntries...),
+		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsAddClose", "KVRGStartup", "KVRGCopy", "KVRGRows", "KVRGQuery")
+	rootGrantsCIdentifier = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\b(\s*\()?`)
+)
+
+// rootGrantsStoreSourceViolations checks the cgo store source against the allowlist
+// above and against the order and ownership rules of the one add: the vocabulary is
+// closed (calls, query keys, constants, string literals), every Keychain entry
+// verifies the running vault before any other call, the prepared access object is
+// referenced only where it is created, added and released, the plan is one-shot, and
+// the dispatch flag sits immediately before the single add.
 func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 	var violations []string
-	for _, forbidden := range []string{"kSecReturnData", "SecItemUpdate", "SecItemDelete", "SecKeychainItemDelete", "SecKeychainItemModify",
-		"SecKeychainItemCopyContent", "SecKeychainItemCopyAttributesAndData", "SecKeychainItemSetAccess", "SecACLSet", "SecACLUpdate", "SecAccessCreate", "kSecMatchItemList"} {
-		if strings.Contains(src, forbidden) {
-			violations = append(violations, "forbidden operation "+forbidden)
+	seen := map[string]bool{}
+	add := func(format string, args ...any) {
+		message := fmt.Sprintf(format, args...)
+		if !seen[message] {
+			seen[message] = true
+			violations = append(violations, message)
 		}
 	}
-	if strings.Count(src, "SecItemAdd(") != 1 || strings.Count(src, "SecItemCopyMatching(") != 2 || strings.Count(src, "kSecAttrAccess,") != 1 {
-		violations = append(violations, "add/query count changed")
+	code, literals := rootGrantsCStrip(src)
+	if len(literals) != 3 || strings.Count(code, `static const char *KVRGNamespace = "";`) != 1 ||
+		strings.Count(code, `static const char *KVRGAccessDescriptor = "";`) != 1 || strings.Count(code, `static const char *KVRGApplicationLabel = "";`) != 1 {
+		add("string literals are not exactly the three declared constants (%d found)", len(literals))
 	}
-	if !strings.Contains(src, "CFDictionarySetValue(query, kSecAttrAccess, plan->access);") ||
-		!strings.Contains(src, "*attempted = 1;\n        status = SecItemAdd(query, NULL);") {
-		violations = append(violations, "dispatch flag is not immediately before the single add of the prepared access object")
+	for _, m := range rootGrantsCIdentifier.FindAllStringSubmatch(code, -1) {
+		id, isCall := m[1], m[2] != ""
+		switch {
+		case isCall && !rootGrantsStoreCalls[id]:
+			add("call %s is not in the allowlist", id)
+		case strings.HasPrefix(id, "kSec") || strings.HasPrefix(id, "kCF"):
+			if !rootGrantsStoreConstants[id] {
+				add("constant or query key %s is not in the allowlist", id)
+			}
+		case !isCall && (strings.HasPrefix(id, "Sec") || strings.HasPrefix(id, "CF")):
+			if !rootGrantsStoreTypes[id] {
+				add("type %s is not in the allowlist", id)
+			}
+		case strings.HasPrefix(id, "KVQ") || strings.HasPrefix(id, "KVRG") || strings.HasPrefix(id, "MacKeyVault"):
+			if !rootGrantsStoreNames[id] && !rootGrantsStoreCalls[id] {
+				add("name %s is not in the allowlist", id)
+			}
+		}
 	}
-	for _, entry := range []string{"MacKeyVaultRootGrantsPairList", "MacKeyVaultRootGrantsList", "MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsReadback"} {
-		start := strings.Index(src, "int "+entry+"(")
-		if start < 0 {
-			violations = append(violations, "missing entry "+entry)
+	for _, c := range []struct {
+		token string
+		want  int
+	}{{"SecItemAdd(", 1}, {"SecItemCopyMatching(", 2}, {"SecKeychainItemCopyAccess(", 1}, {"kSecAttrAccess", 1}, {"kSecValueData", 1},
+		{"kSecReturnAttributes", 1}, {"kSecReturnRef", 1}, {"KVQIntendedAccess(", 1}, {"MacKeyVaultNostrList(", 1}} {
+		if got := strings.Count(code, c.token); got != c.want {
+			add("%s occurs %d times, want %d", c.token, got, c.want)
+		}
+	}
+	if !strings.Contains(code, "KVQIntendedAccess(symbols, KVRGAccessDescriptor, KVRGApplicationLabel, &access)") {
+		add("the access object is not built with the production descriptor and application label")
+	}
+	bodies := map[string]string{}
+	for _, name := range rootGrantsStoreAllFunctions {
+		body, ok := rootGrantsCFunctionBody(code, name)
+		if !ok {
+			add("missing function %s", name)
 			continue
 		}
-		end := strings.Index(src[start:], "\n}\n")
-		if end < 0 {
-			violations = append(violations, "unterminated entry "+entry)
+		bodies[name] = body
+	}
+	// The prepared access object (->access) and the one-shot flag (->consumed) have
+	// fixed owners: created in prepare, validated and added in commit, released in close.
+	for name, want := range map[string]int{"MacKeyVaultRootGrantsAddPrepare": 1, "MacKeyVaultRootGrantsAddCommit": 2, "MacKeyVaultRootGrantsAddClose": 2} {
+		if got := strings.Count(bodies[name], "->access"); got != want {
+			add("%s references the access object %d times, want %d", name, got, want)
+		}
+	}
+	if strings.Count(code, "->access") != 5 || strings.Count(code, "->consumed") != 2 {
+		add("the access object or the one-shot flag is referenced outside its owners")
+	}
+	commit := bodies["MacKeyVaultRootGrantsAddCommit"]
+	if strings.Count(commit, "!plan->access") != 1 || strings.Count(commit, "kSecAttrAccess, plan->access);") != 1 {
+		add("the access object is used in the commit other than to be validated and added")
+	}
+	if strings.Count(bodies["MacKeyVaultRootGrantsAddClose"], "CFRelease(plan->access)") != 1 {
+		add("the access object is not released exactly once in close")
+	}
+	check, consume, gate, doAdd := strings.Index(commit, "if (plan->consumed) return errSecParam;"), strings.Index(commit, "plan->consumed = 1;"),
+		strings.Index(commit, "KVRGStartup("), strings.Index(commit, "SecItemAdd(")
+	if check < 0 || consume < 0 || gate < 0 || doAdd < 0 || !(check < consume && consume < gate && gate < doAdd) {
+		add("the commit is not one-shot: consumed check, consume, startup gate and add are not in that order")
+	}
+	if !regexp.MustCompile(`\*attempted = 1;\s*status = SecItemAdd\(query, NULL\);`).MatchString(commit) {
+		add("dispatch flag is not immediately before the single add")
+	}
+	if body := bodies["KVRGStartup"]; !strings.Contains(body, "KVQResolve(") || !strings.Contains(body, "KVQSelf(1)") {
+		add("the startup gate no longer resolves the SPI and verifies the running vault")
+	}
+	for _, entry := range rootGrantsStoreGatedEntries {
+		body := bodies[entry]
+		gateAt := strings.Index(body, "KVRGStartup(")
+		if gateAt < 0 {
+			add("%s does not verify the running vault", entry)
 			continue
 		}
-		body := src[start : start+end]
-		gate := strings.Index(body, "KVRGStartup(")
-		if gate < 0 {
-			violations = append(violations, entry+" does not verify the running vault")
-			continue
-		}
-		for _, native := range []string{"KVQLogin(", "SecItemCopyMatching(", "SecItemAdd(", "MacKeyVaultNostrList(", "KVQIntendedAccess("} {
-			if i := strings.Index(body, native); i >= 0 && i < gate {
-				violations = append(violations, entry+" reaches "+native+" before the startup check")
+		for _, m := range rootGrantsCIdentifier.FindAllStringSubmatch(body[:gateAt], -1) {
+			if m[2] != "" && m[1] != "strlen" && m[1] != "if" {
+				add("%s calls %s before the startup check", entry, m[1])
 			}
 		}
 	}
 	if literal := rootGrantsNamespaceLiteral(src); literal == "" || !strings.Contains(recordSrc, `"`+literal+`"`) {
-		violations = append(violations, "namespace literal differs from RootGrantsNamespace")
+		add("namespace literal differs from RootGrantsNamespace")
 	}
 	return violations
 }
 
-// Claim: the cgo store source keeps its boundary: one create-only SecItemAdd of
-// the prepared access object with the dispatched flag set immediately before it,
-// every native entry verifying the running vault first, and no value read, update,
-// delete or ACL-set API anywhere in the file. Control plants (each must be reported
-// with its intended violation) show the guard detects the violations it claims to,
-// so an always-silent guard cannot pass. Limit: a source guard, not a proof of the
-// OS behavior.
+// Claim: the cgo store source stays inside its allowed behavior. The vocabulary is a closed
+// allowlist (so a call, query key or constant spelled in any other way, such as a
+// value read written as a string key, is reported), every Keychain entry verifies
+// the running vault before any other call, the prepared access object is touched
+// only where it is created, added and released, the plan is one-shot, and the
+// dispatch flag sits immediately before the single add. Control plants, including a
+// planted ACL change on the admitted object and a value key spelled as a string,
+// must each be reported with their intended violation, so an always-silent guard
+// cannot pass. Limit: a source guard, not a proof of the OS behavior.
 func TestRootGrantsStoreSourceBoundary(t *testing.T) {
 	src, record := string(mustRead(t, "root_grants_store_darwin.c")), string(mustRead(t, "root_grants_record.go"))
 	if violations := rootGrantsStoreSourceViolations(src, record); len(violations) != 0 {
-		t.Fatalf("store left its boundary: %v", violations)
+		t.Fatalf("store left its allowed behavior: %v", violations)
+	}
+	replace := func(old, new string) func(string) string {
+		return func(s string) string { return strings.Replace(s, old, new, 1) }
 	}
 	for _, plant := range []struct {
 		name, want string
 		mutate     func(string) string
 	}{
-		{"value-read", "forbidden operation kSecReturnData", func(s string) string {
-			return s + "\n/* planted */ CFDictionarySetValue(q, kSecReturnData, kCFBooleanTrue);"
+		{"acl-changed-after-admission (an extra any-application ACL on the admitted object)", "call SecACLCreateWithSimpleContents is not in the allowlist", replace(
+			"    status = query && service && accountString && metadataString && data ? errSecSuccess : errSecAllocate;\n    if (status == errSecSuccess) {\n        CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);\n        CFDictionarySetValue(query, kSecAttrService, service);\n        CFDictionarySetValue(query, kSecAttrAccount, accountString);",
+			"    SecACLRef mutantAnyApp = NULL; /* planted */\n    if (SecACLCreateWithSimpleContents(plan->access, NULL, CFSTR(\"mutant\"), 0, &mutantAnyApp) == errSecSuccess && mutantAnyApp) CFRelease(mutantAnyApp);\n    status = query && service && accountString && metadataString && data ? errSecSuccess : errSecAllocate;\n    if (status == errSecSuccess) {\n        CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);\n        CFDictionarySetValue(query, kSecAttrService, service);\n        CFDictionarySetValue(query, kSecAttrAccount, accountString);")},
+		{"acl-changed-after-admission (access object referenced again)", "references the access object 3 times, want 2", replace(
+			"    status = query && service && accountString && metadataString && data ? errSecSuccess : errSecAllocate;",
+			"    (void)CFRetain(plan->access); /* planted */\n    status = query && service && accountString && metadataString && data ? errSecSuccess : errSecAllocate;")},
+		{"value-key-spelled-as-string", "call CFSTR is not in the allowlist", replace(
+			"        CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);",
+			"        CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);\n        CFDictionarySetValue(query, CFSTR(\"r_Data\"), kCFBooleanTrue); /* planted */")},
+		{"value-key-spelled-as-string (literal count)", "string literals are not exactly the three declared constants", replace(
+			"        CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);",
+			"        CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);\n        CFDictionarySetValue(query, kSecReturnAttributes, \"r_Data\"); /* planted */")},
+		{"value-read-constant", "constant or query key kSecReturnData is not in the allowlist", func(s string) string {
+			return s + "\n/* planted */ void f(void) { CFDictionarySetValue(q, kSecReturnData, kCFBooleanTrue); }"
 		}},
-		{"update", "forbidden operation SecItemUpdate", func(s string) string { return s + "\n/* planted */ SecItemUpdate(q, u);" }},
-		{"delete", "forbidden operation SecKeychainItemDelete", func(s string) string { return s + "\n/* planted */ SecKeychainItemDelete(item);" }},
-		{"second-add", "add/query count changed", func(s string) string { return s + "\n/* planted */ SecItemAdd(q, NULL);" }},
-		{"flag-moved", "dispatch flag is not immediately before", func(s string) string {
-			return strings.Replace(s, "*attempted = 1;\n        status = SecItemAdd(", "status = SecItemAdd(", 1)
-		}},
-		{"other-access-object", "dispatch flag is not immediately before", func(s string) string {
-			return strings.Replace(s, "kSecAttrAccess, plan->access", "kSecAttrAccess, other", 1)
-		}},
-		{"startup-removed", "MacKeyVaultRootGrantsAddPrepare does not verify the running vault", func(s string) string {
-			return strings.Replace(s, "    if (!KVRGStartup(&symbols)) return 1;\n", "", 1)
-		}},
-		{"keychain-before-startup", "MacKeyVaultRootGrantsList reaches KVQLogin( before the startup check", func(s string) string {
-			return strings.Replace(s, "    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);",
-				"    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);", 1)
-		}},
-		{"namespace-drift", "namespace literal differs", func(s string) string {
-			return strings.Replace(s, "works.relux.mac-keyvault.root-grants.v1", "works.relux.mac-keyvault.root-grants.v2", 1)
-		}},
+		{"update", "call SecItemUpdate is not in the allowlist", func(s string) string { return s + "\nvoid f(void) { SecItemUpdate(q, u); }" }},
+		{"delete", "call SecKeychainItemDelete is not in the allowlist", func(s string) string { return s + "\nvoid f(void) { SecKeychainItemDelete(item); }" }},
+		{"second-add", "SecItemAdd( occurs 2 times, want 1", func(s string) string { return s + "\nvoid f(void) { SecItemAdd(q, NULL); }" }},
+		{"flag-moved", "dispatch flag is not immediately before the single add", replace("*attempted = 1;\n        status = SecItemAdd(", "status = SecItemAdd(")},
+		{"other-access-object", "references the access object 1 times, want 2", replace("kSecAttrAccess, plan->access", "kSecAttrAccess, other")},
+		{"access-escapes-to-a-helper", "referenced outside its owners", replace("    CFArrayRef search = CFArrayCreate(", "    SecAccessRef leaked = plan->access; /* planted */\n    CFArrayRef search = CFArrayCreate(")},
+		{"consumed-check-removed", "the commit is not one-shot", replace("    if (plan->consumed) return errSecParam; // one-shot: a second commit never reaches the add\n", "")},
+		{"consume-removed", "the commit is not one-shot", replace("    plan->consumed = 1;\n", "")},
+		{"startup-removed", "MacKeyVaultRootGrantsAddPrepare does not verify the running vault", replace("    if (!KVRGStartup(&symbols)) return 1;\n", "")},
+		{"keychain-before-startup", "MacKeyVaultRootGrantsList calls KVQLogin before the startup check", replace(
+			"    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);",
+			"    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);")},
+		{"hidden-helper-before-startup", "MacKeyVaultRootGrantsPairList calls KVRGCopy before the startup check", replace(
+			"    *out = NULL; *outLength = 0;\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    return MacKeyVaultNostrList(",
+			"    *out = NULL; *outLength = 0;\n    KVRGCopy(NULL, 0, NULL, NULL); /* planted */\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    return MacKeyVaultNostrList(")},
+		{"gate-neutered", "the startup gate no longer resolves the SPI and verifies the running vault", replace("return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;", "return KVQResolve(symbols);")},
+		{"production-labels-replaced", "the access object is not built with the production descriptor", replace("KVQIntendedAccess(symbols, KVRGAccessDescriptor, KVRGApplicationLabel, &access)", "KVQIntendedAccess(symbols, \"Root ACL public qualification\", KVRGApplicationLabel, &access)")},
+		{"namespace-drift", "namespace literal differs", replace("works.relux.mac-keyvault.root-grants.v1", "works.relux.mac-keyvault.root-grants.v2")},
 	} {
 		planted := plant.mutate(src)
 		if planted == src {
@@ -793,8 +990,36 @@ func TestRootGrantsStoreSourceBoundary(t *testing.T) {
 			found = found || strings.Contains(v, plant.want)
 		}
 		if !found {
-			t.Fatalf("%s: the guard did not report %q", plant.name, plant.want)
+			t.Fatalf("%s: the guard did not report %q; reported %v", plant.name, plant.want, rootGrantsStoreSourceViolations(planted, record))
 		}
+	}
+}
+
+// Claim: the production root item carries its own access descriptor and application
+// label, defined once in the store source, distinct from the strings of the
+// public-marker qualification lane (which stay unchanged), and the qualification
+// lane passes its own strings to the shared constructor. Limit: source text; the
+// projected description is observed in the native lane.
+func TestRootGrantsProductionLabelsAreNotTheQualificationLabels(t *testing.T) {
+	pick := func(src, name string) string {
+		m := regexp.MustCompile(`static const char \*` + name + ` = "([^"]*)";`).FindStringSubmatch(src)
+		if m == nil {
+			t.Fatalf("missing %s", name)
+		}
+		return m[1]
+	}
+	store, qualification := string(mustRead(t, "root_grants_store_darwin.c")), string(mustRead(t, "root_qualification_darwin.c"))
+	descriptor, label := pick(store, "KVRGAccessDescriptor"), pick(store, "KVRGApplicationLabel")
+	qualDescriptor, qualLabel := pick(qualification, "KVQDescriptor"), pick(qualification, "KVQApplicationLabel")
+	if descriptor == "" || label == "" || descriptor == qualDescriptor || label == qualLabel ||
+		strings.Contains(strings.ToLower(descriptor+label), "qualification") {
+		t.Fatalf("production strings are empty, shared with or named after the qualification lane: %q %q", descriptor, label)
+	}
+	if qualDescriptor != "Root ACL public qualification" || qualLabel != "keyvault-root-acl-qualification:/vault" {
+		t.Fatal("the observed qualification strings changed")
+	}
+	if !strings.Contains(qualification, "KVQIntendedAccess(symbols, KVQDescriptor, KVQApplicationLabel, &intended)") {
+		t.Fatal("the qualification lane no longer passes its own strings to the shared constructor")
 	}
 }
 

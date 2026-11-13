@@ -20,6 +20,11 @@
 // separate finite function restricted to this created public-marker item.
 static const char *KVQService = "works.relux.mac-keyvault.root-acl-qualification.v1";
 static const char *KVQAccount = "public-marker@1";
+// The access descriptor and application label of the public-marker item. Both are
+// part of the ACL observed by the qualification lane and are never used by the
+// production root-grants item.
+static const char *KVQDescriptor = "Root ACL public qualification";
+static const char *KVQApplicationLabel = "keyvault-root-acl-qualification:/vault";
 
 // The access constructor, running-code check, login-keychain selection and ACL
 // projection live in the shared root_acl_darwin.c unit; this file keeps only the
@@ -182,7 +187,7 @@ int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *refere
     CFDataRef beforeFrame = NULL, afterFrame = NULL;
     CFTypeRef added = NULL;
     CFMutableDictionaryRef query = NULL;
-    OSStatus status = KVQIntendedAccess(symbols, &intended);
+    OSStatus status = KVQIntendedAccess(symbols, KVQDescriptor, KVQApplicationLabel, &intended);
     if (status == errSecSuccess) status = KVQProject(intended, symbols, &beforeFrame);
     if (status == errSecSuccess && !KVQCopyPublicData(beforeFrame, before, beforeLength, 1048576)) status = errSecAllocate;
     if (status == errSecSuccess) {

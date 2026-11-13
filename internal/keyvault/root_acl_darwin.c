@@ -353,8 +353,14 @@ static OSStatus KVQIntendedBindings(SecAccessRef access, CFDataRef required, CFS
 // The application's trust is compiled from the fixed certificate requirement,
 // never derived from a path. Defaults/owner/writer representations are fully
 // observed afterward and are NOT admitted as a root-storage policy here.
-OSStatus KVQIntendedAccess(KVQSymbols symbols, SecAccessRef *out) {
+// descriptor names the access in system dialogs and becomes the description of
+// the projected ACLs; applicationLabel only labels the trusted application. Each
+// caller passes its own fixed strings, never caller input.
+OSStatus KVQIntendedAccess(KVQSymbols symbols, const char *descriptor, const char *applicationLabel, SecAccessRef *out) {
     *out = NULL;
+    if (!descriptor || !descriptor[0] || !applicationLabel || !applicationLabel[0]) return errSecParam;
+    CFStringRef descriptorText = CFStringCreateWithCString(NULL, descriptor, kCFStringEncodingUTF8);
+    if (!descriptorText) return errSecAllocate;
     SecRequirementRef requirement = NULL;
     CFDataRef requirementData = NULL;
     SecTrustedApplicationRef application = NULL;
@@ -365,11 +371,11 @@ OSStatus KVQIntendedAccess(KVQSymbols symbols, SecAccessRef *out) {
     if (status == errSecSuccess && !requirement) status = errSecAuthFailed;
     if (status == errSecSuccess) status = SecRequirementCopyData(requirement, kSecCSDefaultFlags, &requirementData);
     if (status == errSecSuccess && !requirementData) status = errSecAuthFailed;
-    if (status == errSecSuccess) status = symbols.create("keyvault-root-acl-qualification:/vault", requirement, &application);
+    if (status == errSecSuccess) status = symbols.create(applicationLabel, requirement, &application);
     if (status == errSecSuccess && !KVQExactApplication(application, requirementData, symbols)) status = errSecAuthFailed;
     if (status == errSecSuccess) {
         trusted = CFArrayCreate(NULL, (const void **)&application, 1, &kCFTypeArrayCallBacks);
-        status = trusted ? SecAccessCreate(CFSTR("Root ACL public qualification"), trusted, out) : errSecAllocate;
+        status = trusted ? SecAccessCreate(descriptorText, trusted, out) : errSecAllocate;
     }
     if (status == errSecSuccess && !*out) status = errSecDecode;
     if (status == errSecSuccess) status = SecAccessCopyACLList(*out, &list);
@@ -396,7 +402,7 @@ OSStatus KVQIntendedAccess(KVQSymbols symbols, SecAccessRef *out) {
             releases++;
             CFArrayRef previous = NULL; CFStringRef description = NULL; SecKeychainPromptSelector prompt = 0;
             status = SecACLCopyContents(acl, &previous, &description, &prompt);
-            if (status == errSecSuccess) status = SecACLSetContents(acl, trusted, description ? description : CFSTR("Root ACL public qualification"), prompt);
+            if (status == errSecSuccess) status = SecACLSetContents(acl, trusted, description ? description : descriptorText, prompt);
             if (previous) CFRelease(previous);
             if (description) CFRelease(description);
         }
@@ -419,6 +425,7 @@ OSStatus KVQIntendedAccess(KVQSymbols symbols, SecAccessRef *out) {
     if (application) CFRelease(application);
     if (requirementData) CFRelease(requirementData);
     if (requirement) CFRelease(requirement);
+    CFRelease(descriptorText);
     if (status != errSecSuccess && *out) { CFRelease(*out); *out = NULL; }
     return status;
 }
