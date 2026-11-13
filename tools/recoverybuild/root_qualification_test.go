@@ -141,8 +141,10 @@ func TestRootQualificationOfflineEnvironment(t *testing.T) {
 // positive control must also pass when the test binary is built with -trimpath.
 // Relative/current-directory lookup, missing/non-executable go and GOROOT
 // replacement return the fixed refusal and no selected tool path.
+// Disabling ErrDot only inside inert fixtures independently exercises the
+// resolver's absolute-path guard; missing lookup must leave the directory empty.
 func TestRootQualificationGoToolPath(t *testing.T) {
-	for _, form := range []string{"absolute", "relative", "dot", "missing", "not-executable", "goroot"} {
+	for _, form := range []string{"absolute", "relative", "dot", "relative-no-errdot", "dot-no-errdot", "missing", "not-executable", "goroot"} {
 		t.Run(form, func(t *testing.T) {
 			dir := t.TempDir()
 			bin := filepath.Join(dir, "bin")
@@ -163,14 +165,17 @@ func TestRootQualificationGoToolPath(t *testing.T) {
 			t.Setenv("GOROOT", "")
 			t.Setenv("PATH", bin)
 			switch form {
-			case "relative":
+			case "relative", "relative-no-errdot":
 				t.Chdir(dir)
 				t.Setenv("PATH", "bin")
-			case "dot":
+			case "dot", "dot-no-errdot":
 				t.Chdir(bin)
 				t.Setenv("PATH", ".")
 			case "goroot":
 				t.Setenv("GOROOT", "/PUBLIC/replacement")
+			}
+			if strings.HasSuffix(form, "-no-errdot") {
+				t.Setenv("GODEBUG", "execerrdot=0")
 			}
 			got, err := qualificationGoTool()
 			if form == "absolute" {
@@ -186,7 +191,15 @@ func TestRootQualificationGoToolPath(t *testing.T) {
 					t.Fatal("refusal returned a tool path")
 				}
 			}
-			if form != "missing" {
+			if form == "missing" {
+				if _, err := os.Lstat(tool); !os.IsNotExist(err) {
+					t.Fatal("lookup created the missing executable")
+				}
+				entries, err := os.ReadDir(bin)
+				if err != nil || len(entries) != 0 {
+					t.Fatal("missing lookup changed its empty directory")
+				}
+			} else {
 				b, err := os.ReadFile(tool)
 				st, statErr := os.Stat(tool)
 				if err != nil || statErr != nil || !bytes.Equal(b, marker) || st.Mode().Perm() != mode {
