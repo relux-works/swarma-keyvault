@@ -2,7 +2,7 @@
 
 These tests use published test authorities only. They never accept an owner's
 mnemonic or invoke the native helper, Keychain, wrapping, presence or signing.
-The production source is an unwired private preparation seam; these tests do
+These tests cover fixed root grants derivation and attachment preparation; they do
 not establish a usable creation/export command or native qualification.
 
 The fixed product profile is `namecoin-landlord-root/1`, derivation
