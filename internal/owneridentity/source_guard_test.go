@@ -32,7 +32,7 @@ func identityField(name string) bool {
 	}
 	switch name {
 	case "owner", "expectedowner", "ownermxid", "ownerprincipal", "owneraddress", "ownerkey",
-		"principal", "service", "nostridentity", "namecoinidentity", "qualificationnostr", "qualificationnamecoin",
+		"principal", "service", "nostridentity", "namecoinidentity", "grantsidentity", "qualificationnostr", "qualificationnamecoin",
 		"user", "username", "host", "hostname", "home", "homedir", "uid", "gid":
 		return true
 	}
@@ -345,9 +345,9 @@ func TestNoFixedOwnerIdentityInSource(t *testing.T) {
 // and trusted inputs passed through by parameter are admitted.
 func TestOwnerIdentityGuardPlants(t *testing.T) {
 	const copied = `package probe
-type config struct { Owner, Service, Host, Home string; UID int }
-func makeConfig(owner, service, host, home string, uid int) config {
-	return config{Owner: owner, Service: service, Host: host, Home: home, UID: uid}
+type config struct { Owner, Service, Host, Home, GrantsIdentity string; UID int }
+func makeConfig(owner, service, host, home, grants string, uid int) config {
+	return config{Owner: owner, Service: service, Host: host, Home: home, GrantsIdentity: grants, UID: uid}
 }
 `
 	for _, plant := range []struct{ old, injected, want string }{
@@ -362,6 +362,13 @@ func makeConfig(owner, service, host, home string, uid int) config {
 		{"Host: host", `Host: "some-new-host"`, "fixed identity-bearing field"},
 		{"Home: home", `Home: "/var/private-user"`, "fixed identity-bearing field"},
 		{"UID: uid", `UID: 4091`, "fixed identity-bearing field"},
+		// The grants identity is an identity-bearing field like the Nostr and Namecoin
+		// identities: a literal, a concatenation, a fixed normalization and a plain
+		// assignment of a fixed value are all caught.
+		{"GrantsIdentity: grants", `GrantsIdentity: "alice"`, "fixed identity-bearing field"},
+		{"GrantsIdentity: grants", `GrantsIdentity: "ali" + "ce"`, "fixed identity-bearing field"},
+		{"GrantsIdentity: grants", `GrantsIdentity: strings.TrimSpace(" alice ")`, "fixed identity-bearing field"},
+		{"return config", `var q config; q.GrantsIdentity = "alice"; _ = q; return config`, "fixed identity-bearing field"},
 		{"return config", "var tmp = \"/home/unknown-user\"; _ = tmp; return config", "fixed owner, account or home literal"},
 	} {
 		raw := strings.Replace(copied, plant.old, plant.injected, 1)
@@ -414,6 +421,17 @@ func makeConfig(owner, service, host, home string, uid int) config {
 	}
 	if hit, err := guardGo("copy/probe.go", []byte(strings.Replace(copied, "Service: service", `Service: strings.Trim(service, " ")`, 1))); hit != "" || err != nil {
 		t.Fatal("runtime normalization was refused", hit, err)
+	}
+	// Runtime grants identities stay admitted: a parameter, a normalized parameter and
+	// a destination assigned from a validated value.
+	for _, source := range []string{
+		strings.Replace(copied, "GrantsIdentity: grants", `GrantsIdentity: strings.TrimSpace(grants)`, 1),
+		strings.Replace(copied, "return config", `var q config; q.GrantsIdentity = grants; _ = q; return config`, 1),
+		strings.Replace(copied, "return config", `var q config; for _, d := range targets { v, _ := validate(d.flag); *d.target = v }; _ = q; return config`, 1),
+	} {
+		if hit, err := guardGo("copy/probe.go", []byte(source)); hit != "" || err != nil {
+			t.Fatal("runtime grants identity was refused", hit, err)
+		}
 	}
 	if got := guardSwift([]byte(`let fallback = ("unseen-person"); let chosen = suppliedService ?? fallback`)); got != "fixed native identity fallback" {
 		t.Fatal("parenthesized fixed alias was admitted", got)
