@@ -15,7 +15,7 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/keyvault"
 )
 
-const recoveryUsage = "mac-keyvault [--json] recovery plan|generate|restore --nostr-identity A --namecoin-identity B [--version G --nostr-version N --namecoin-version M] | recovery pub A --version G | recovery delete A --version G --expected-group-id ID | recovery attach-root-grants --nostr-identity A --namecoin-identity B --version G --nostr-version N --namecoin-version M --grants-identity R --grants-version V --expected-group-id ID --expected-pair-metadata-sha256 H --expected-npub NPUB --expected-namecoin-xpub XPUB --expected-origin ORIGIN | recovery root-grants-pub --grants-identity R --grants-version V [--format id-value]"
+const recoveryUsage = "mac-keyvault [--json] recovery plan|generate|restore --nostr-identity A --namecoin-identity B [--version G --nostr-version N --namecoin-version M] | recovery pub A --version G | recovery delete A --version G --expected-group-id ID | recovery attach-root-grants --nostr-identity A --namecoin-identity B --version G --nostr-version N --namecoin-version M --grants-identity R --grants-version V --expected-group-id ID --expected-pair-metadata-sha256 H --expected-npub NPUB --expected-namecoin-xpub XPUB --expected-origin ORIGIN | recovery root-grants-pub --grants-identity R --grants-version V [--format id-value] | recovery review-sign-grant-v3 --grants-identity R --grants-version V --owner-principal P --grant-file PATH --contract-file PATH"
 
 var newRecoveryBackend = func() keyvault.RecoveryBackend { return keyvault.NewNostrSecurityStore() }
 
@@ -42,6 +42,8 @@ func runRecovery(args []string, out output) int {
 		return runRecoveryAttachRootGrants(args[1:], out)
 	case rootGrantsPubOp:
 		return runRecoveryRootGrantsPub(args[1:], out)
+	case rootGrantsSignV3Op:
+		return runRecoveryReviewSignGrantV3(args[1:], out)
 	}
 	if op != "plan" && op != "generate" && op != "restore" && op != "pub" && op != "delete" {
 		return recoveryFailureReceipt(out, usagef("unsupported recovery operation; private input and export are refused"))

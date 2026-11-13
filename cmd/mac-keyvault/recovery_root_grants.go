@@ -17,13 +17,15 @@ import (
 // Production routes of the two root-grants operations. Tests replace them; no
 // flag, environment variable or file can.
 var (
-	attachRootGrants = keyvault.AttachRootGrants
-	lookupRootGrants = keyvault.RootGrantsPublicLookup
+	attachRootGrants     = keyvault.AttachRootGrants
+	lookupRootGrants     = keyvault.RootGrantsPublicLookup
+	reviewSignRootGrants = keyvault.ReviewRootGrantsGrantV3
 )
 
 const (
 	rootGrantsAttachOp = "attach-root-grants"
 	rootGrantsPubOp    = "root-grants-pub"
+	rootGrantsSignV3Op = "review-sign-grant-v3"
 	// One fixed public line, printed after every flag was admitted and before the
 	// vault is touched. It carries no value and no input echo.
 	rootGrantsAttachNotice = "root grants attach: follow the review window and the terminal prompts\n"

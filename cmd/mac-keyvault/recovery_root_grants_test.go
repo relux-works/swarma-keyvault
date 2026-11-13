@@ -56,10 +56,10 @@ type rgFake struct {
 func rgFixture(t *testing.T) *rgFake {
 	t.Helper()
 	f := &rgFake{}
-	oldAttach, oldLookup := attachRootGrants, lookupRootGrants
+	oldAttach, oldLookup, oldSign := attachRootGrants, lookupRootGrants, reviewSignRootGrants
 	oldBackend, oldManager, oldTerminal, oldLock := newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock
 	t.Cleanup(func() {
-		attachRootGrants, lookupRootGrants = oldAttach, oldLookup
+		attachRootGrants, lookupRootGrants, reviewSignRootGrants = oldAttach, oldLookup, oldSign
 		newRecoveryBackend, makeRecoveryManager, newRecoveryTerminal, vaultLock = oldBackend, oldManager, oldTerminal, oldLock
 	})
 	attachRootGrants = func(_ context.Context, q keyvault.RootGrantsAttachRequest) (keyvault.RootGrantsAttachResult, error) {
