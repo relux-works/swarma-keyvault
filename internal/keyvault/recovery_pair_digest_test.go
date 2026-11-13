@@ -9,10 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"go/types"
+	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -264,9 +267,12 @@ var recoveryReviewedHashers = []string{
 	"sealRootGrantsWithRandom", "validRecoveryNamecoinPins", "validateWrapping",
 }
 
+// recoveryIsHashPath is a BOUNDED list of the hash packages the inventory knows,
+// not a proof that no other hash constructor exists: an unlisted package is not
+// classified as hashing. The behavioural digest tests are the guarantee.
 func recoveryIsHashPath(path string) bool {
 	switch path {
-	case "crypto", "crypto/md5", "crypto/sha1", "crypto/sha256", "crypto/sha512", "crypto/hmac", "hash",
+	case "crypto", "crypto/md5", "crypto/sha1", "crypto/sha256", "crypto/sha3", "crypto/sha512", "crypto/hmac", "hash",
 		"golang.org/x/crypto/sha3", "golang.org/x/crypto/blake2b", "golang.org/x/crypto/blake2s",
 		"golang.org/x/crypto/ripemd160", "golang.org/x/crypto/pbkdf2", "golang.org/x/crypto/hkdf":
 		return true
@@ -323,6 +329,7 @@ type recoveryPackage struct {
 	files []*ast.File
 	pkg   *types.Package
 	info  *types.Info
+	errs  []types.Error
 }
 
 func recoveryLoad(sources map[string]string) (*recoveryPackage, error) {
@@ -341,12 +348,18 @@ func recoveryLoad(sources map[string]string) (*recoveryPackage, error) {
 		files = append(files, f)
 	}
 	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
-	conf := types.Config{Importer: recoveryRefusingImporter{}, FakeImportC: true, DisableUnusedImportCheck: true, Error: func(error) {}}
+	var errs []types.Error
+	collect := func(err error) {
+		if typeErr, ok := err.(types.Error); ok {
+			errs = append(errs, typeErr)
+		}
+	}
+	conf := types.Config{Importer: recoveryRefusingImporter{}, FakeImportC: true, DisableUnusedImportCheck: true, Error: collect}
 	pkg, _ := conf.Check("keyvault", fset, files, info)
 	if pkg == nil {
 		return nil, errors.New("the sources did not type-check into a package")
 	}
-	return &recoveryPackage{files: files, pkg: pkg, info: info}, nil
+	return &recoveryPackage{files: files, pkg: pkg, info: info, errs: errs}, nil
 }
 
 func (p *recoveryPackage) object(name string) types.Object { return p.pkg.Scope().Lookup(name) }
@@ -377,15 +390,21 @@ func (p *recoveryPackage) isNil(e ast.Expr) bool {
 	return nilObject
 }
 
-func (p *recoveryPackage) findFunc(key string) *ast.FuncDecl {
+// findFunc returns the declaration of key and how many times it is declared.
+func (p *recoveryPackage) findFunc(key string) (*ast.FuncDecl, int) {
+	var found *ast.FuncDecl
+	count := 0
 	for _, f := range p.files {
 		for _, d := range f.Decls {
 			if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil && recoveryFuncKey(fd) == key {
-				return fd
+				if found == nil {
+					found = fd
+				}
+				count++
 			}
 		}
 	}
-	return nil
+	return found, count
 }
 
 // sharedCall reports whether e is exactly recoveryMetadataSHA256(argument): the
@@ -462,9 +481,9 @@ func namedResults(fd *ast.FuncDecl) bool {
 func (p *recoveryPackage) printerProblems(key string) []string {
 	var problems []string
 	note := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
-	fd := p.findFunc(key)
-	if fd == nil {
-		return []string{key + ": function not found"}
+	fd, count := p.findFunc(key)
+	if count != 1 {
+		return []string{fmt.Sprintf("%s is declared %d times in the selected build, not once", key, count)}
 	}
 	if _, ok := p.object(recoveryShared).(*types.Func); !ok {
 		note("%s is not a package-level function", recoveryShared)
@@ -528,9 +547,9 @@ func (p *recoveryPackage) printerProblems(key string) []string {
 func (p *recoveryPackage) bindingProblems(key string) []string {
 	var problems []string
 	note := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
-	fd := p.findFunc(key)
-	if fd == nil {
-		return []string{key + ": function not found"}
+	fd, count := p.findFunc(key)
+	if count != 1 {
+		return []string{fmt.Sprintf("%s is declared %d times in the selected build, not once", key, count)}
 	}
 	if namedResults(fd) {
 		note("named results are not admitted")
@@ -652,16 +671,84 @@ func (p *recoveryPackage) hasherProblems(reviewed []string) []string {
 	return problems
 }
 
-// recoveryContractProblems type-checks the sources as one package and applies the
-// whole one-definition contract. An empty result means the sources conform.
+// contractProblems applies the call-site contract to a BUILD-SELECTED package and
+// fails closed when a required declaration is ambiguous or cannot be typed: a
+// duplicate declaration anywhere in the view, a function declared other than
+// once, or any type error inside the two checked functions.
+func (p *recoveryPackage) contractProblems() []string {
+	problems := p.printerProblems("RecoveryRecord.PairMetadataSHA256")
+	problems = append(problems, p.bindingProblems("rootGrantsPairBinding")...)
+	for _, err := range p.errs {
+		if strings.Contains(err.Msg, "redeclared") || strings.Contains(err.Msg, "already declared") {
+			problems = append(problems, "duplicate declaration in the selected build: "+err.Msg)
+		}
+	}
+	for _, key := range []string{"RecoveryRecord.PairMetadataSHA256", "rootGrantsPairBinding"} {
+		fd, count := p.findFunc(key)
+		if count != 1 {
+			continue
+		}
+		for _, err := range p.errs {
+			if err.Pos >= fd.Pos() && err.Pos <= fd.End() {
+				problems = append(problems, "type error inside "+key+": "+err.Msg)
+			}
+		}
+	}
+	return problems
+}
+
+var recoveryViews = []struct{ goos, goarch string }{{"darwin", "arm64"}, {"linux", "amd64"}}
+
+// recoverySelect returns the files that the Go build would compile for the
+// platform with the default tags, decided by go/build from the file names and
+// build constraints (the file contents come from sources).
+func recoverySelect(sources map[string]string, goos, goarch string) (map[string]string, error) {
+	ctx := build.Default
+	ctx.GOOS, ctx.GOARCH, ctx.CgoEnabled = goos, goarch, true
+	ctx.OpenFile = func(path string) (io.ReadCloser, error) {
+		source, ok := sources[filepath.Base(path)]
+		if !ok {
+			return nil, os.ErrNotExist
+		}
+		return io.NopCloser(strings.NewReader(source)), nil
+	}
+	selected := map[string]string{}
+	for name, source := range sources {
+		match, err := ctx.MatchFile(".", name)
+		if err != nil {
+			return nil, err
+		}
+		if match {
+			selected[name] = source
+		}
+	}
+	return selected, nil
+}
+
+// recoveryContractProblems applies the one-definition contract: the hash
+// inventory over ALL source files (a separate, text-level view) and, for each
+// platform view, the call-site contract on the package that platform compiles.
+// An empty result means the sources conform.
 func recoveryContractProblems(sources map[string]string, reviewed []string) ([]string, error) {
-	p, err := recoveryLoad(sources)
+	all, err := recoveryLoad(sources)
 	if err != nil {
 		return nil, err
 	}
-	problems := p.printerProblems("RecoveryRecord.PairMetadataSHA256")
-	problems = append(problems, p.bindingProblems("rootGrantsPairBinding")...)
-	return append(problems, p.hasherProblems(reviewed)...), nil
+	problems := all.hasherProblems(reviewed)
+	for _, view := range recoveryViews {
+		selected, err := recoverySelect(sources, view.goos, view.goarch)
+		if err != nil {
+			return nil, err
+		}
+		p, err := recoveryLoad(selected)
+		if err != nil {
+			return nil, err
+		}
+		for _, problem := range p.contractProblems() {
+			problems = append(problems, view.goos+"/"+view.goarch+": "+problem)
+		}
+	}
+	return problems, nil
 }
 
 const recoveryStubTypes = `package keyvault
@@ -740,6 +827,16 @@ func recoveryStubPackage(printer, binding string, extra map[string]string) map[s
 // inventory (it can still not reach the two sites); the command-line printer's
 // call of PairMetadataSHA256 is not covered; behaviour is covered by
 // TestRecoveryPairDigestIsTheAttachPin.
+//
+// Bounded lint, not a proof: the behavioural tests (the frozen fixture anchor,
+// the exact-metadata and attach-pin tests and the command-line goldens) are the
+// guarantee that the printed digest equals the attach binding's; this guard only
+// makes the likeliest regressions fail early. The call-site contract is
+// evaluated on the files the Go build selects for darwin/arm64 and linux/amd64
+// with the default tags, and fails closed on a duplicate or ambiguous
+// declaration or a type error inside the two checked functions; the hash
+// inventory is a separate view over all files and a bounded list of hash
+// packages.
 func TestRecoveryPairDigestHasOneDefinition(t *testing.T) {
 	reviewed := []string{recoveryShared}
 	conformingPrinter := recoveryStubPrinter("", "return recoveryMetadataSHA256(raw), nil")
@@ -794,6 +891,10 @@ func TestRecoveryPairDigestHasOneDefinition(t *testing.T) {
 		{"package-level hash constructor", "unreviewed hashing function <package-level>", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"var.go": "package keyvault\nimport \"crypto/sha256\"\nvar newDigest = sha256.New\n"}), reviewed},
 		{"dot-imported hash package", "a hash package is dot-imported", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"dot.go": "package keyvault\nimport . \"crypto/sha256\"\nfunc dotted(b []byte) [32]byte {\nreturn Sum256(b)\n}\n"}), reviewed},
 		{"reviewed function no longer hashes", "reviewed hashing function not found: ghost", recoveryStubPackage(conformingPrinter, conformingBinding, nil), []string{recoveryShared, "ghost"}},
+		printer("excluded build-tagged file holds a conforming copy, the compiled printer hashes raw[1:] (review mutant)", "", "return recoveryMetadataSHA256(raw[1:]), nil", notExactly, map[string]string{"a_decoy.go": "//go:build review_guard_disabled\n\n" + recoveryStubPrinter("", "return recoveryMetadataSHA256(raw), nil")}),
+		{"two selected declarations of the printer", "is declared 2 times in the selected build", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"dup.go": conformingPrinter}), reviewed},
+		{"unconstrained platform duplicates", "duplicate declaration in the selected build", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"plat_a.go": "package keyvault\nfunc platform() string { return \"a\" }\n", "plat_b.go": "package keyvault\nfunc platform() string { return \"b\" }\n"}), reviewed},
+		{"standard-library sha3 constructor", "unreviewed hashing function sha3Copy", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"sha3.go": "package keyvault\nimport \"crypto/sha3\"\nfunc sha3Copy(b []byte) []byte {\nh := sha3.New256()\n_, _ = h.Write(b)\nreturn h.Sum(nil)\n}\n"}), reviewed},
 	}
 	for _, p := range plants {
 		problems, err := recoveryContractProblems(p.files, p.reviewed)
@@ -810,6 +911,13 @@ func TestRecoveryPairDigestHasOneDefinition(t *testing.T) {
 	}
 	if problems, err := recoveryContractProblems(recoveryStubPackage(conformingPrinter, conformingBinding, nil), reviewed); err != nil || len(problems) != 0 {
 		t.Fatalf("the conforming package was rejected: %v %v", problems, err)
+	}
+	variants := map[string]string{
+		"plat_darwin.go": "package keyvault\nfunc platform() string { return \"d\" }\n",
+		"plat_other.go":  "//go:build !darwin\n\npackage keyvault\nfunc platform() string { return \"o\" }\n",
+	}
+	if problems, err := recoveryContractProblems(recoveryStubPackage(conformingPrinter, conformingBinding, variants), reviewed); err != nil || len(problems) != 0 {
+		t.Fatalf("legitimate platform variants were rejected: %v %v", problems, err)
 	}
 	// The real source: every non-test file of the package, whatever its build
 	// constraint, so that the result is the same on every platform.
