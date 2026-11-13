@@ -76,17 +76,31 @@ type rootGrantsExactFramePolicy struct {
 	t        *testing.T
 	admitted []byte
 	calls    *[][]byte
+	entries  *[]string
 }
 
 var errRootGrantsSyntheticRefusal = errors.New("synthetic policy refusal")
 
-func (p rootGrantsExactFramePolicy) Admit(projection rootqualification.Projection) error {
+func (p rootGrantsExactFramePolicy) AdmitIntended(projection rootqualification.Projection) error {
+	return p.admit("intended", projection)
+}
+
+func (p rootGrantsExactFramePolicy) AdmitStored(projection rootqualification.Projection) error {
+	return p.admit("stored", projection)
+}
+
+// admit records which entry point was used, so a call site that asked the wrong
+// form is caught, not only a call site that skipped the policy.
+func (p rootGrantsExactFramePolicy) admit(entry string, projection rootqualification.Projection) error {
 	frame, err := rootqualification.EncodeNativeProjection(projection)
 	if err != nil {
 		p.t.Fatal(err)
 	}
 	if p.calls != nil {
 		*p.calls = append(*p.calls, frame)
+	}
+	if p.entries != nil {
+		*p.entries = append(*p.entries, entry)
 	}
 	if !bytes.Equal(frame, p.admitted) {
 		return errRootGrantsSyntheticRefusal
@@ -218,13 +232,14 @@ func (f *rootGrantsNativeFake) Readback(account string) ([]byte, []byte, error) 
 }
 
 type rootGrantsVaultFixture struct {
-	plan  *rootGrantsAttachment
-	vault *rootGrantsProductionVault
-	fake  *rootGrantsNativeFake
-	lock  FileLock
-	item  rootGrantsSealedItem
-	frame []byte
-	calls *[][]byte
+	plan    *rootGrantsAttachment
+	vault   *rootGrantsProductionVault
+	fake    *rootGrantsNativeFake
+	lock    FileLock
+	item    rootGrantsSealedItem
+	frame   []byte
+	calls   *[][]byte
+	entries *[]string
 }
 
 func newRootGrantsVaultFixture(t *testing.T, schema string) *rootGrantsVaultFixture {
@@ -246,12 +261,13 @@ func newRootGrantsVaultFixture(t *testing.T, schema string) *rootGrantsVaultFixt
 	fake := &rootGrantsNativeFake{t: t, pair: bytes.Clone(q.PairMetadata), pairAccount: pairRecord.Account(), frame: frame, commitAttempted: true}
 	lock := rootGrantsLockFixture45(t)
 	var calls [][]byte
+	var entries []string
 	vault := &rootGrantsProductionVault{
 		lockSource: func() (FileLock, error) { return lock, nil },
 		native:     fake,
-		policy:     rootGrantsExactFramePolicy{t: t, admitted: frame, calls: &calls},
+		policy:     rootGrantsExactFramePolicy{t: t, admitted: frame, calls: &calls, entries: &entries},
 	}
-	return &rootGrantsVaultFixture{plan: plan, vault: vault, fake: fake, lock: lock, item: item, frame: frame, calls: &calls}
+	return &rootGrantsVaultFixture{plan: plan, vault: vault, fake: fake, lock: lock, item: item, frame: frame, calls: &calls, entries: &entries}
 }
 
 func (x *rootGrantsVaultFixture) lockedVault(t *testing.T) rootGrantsLockedVault {
@@ -334,6 +350,11 @@ func TestRootGrantsVaultAttachStoresThroughAdmittedACL(t *testing.T) {
 			// The policy saw the intended object before the add and the actual one after.
 			if len(*x.calls) != 2 || !bytes.Equal((*x.calls)[0], x.frame) || !bytes.Equal((*x.calls)[1], x.frame) {
 				t.Fatal("policy was not applied to both the intended and the actual ACL")
+			}
+			// ... and each through its own entry point, intended before the add and
+			// stored after it, never the other way round and never one for both.
+			if !reflect.DeepEqual(*x.entries, []string{"intended", "stored"}) {
+				t.Fatalf("policy entry points in call order: %v", *x.entries)
 			}
 			if rootGrantsLockHeld(t, x.lock) {
 				t.Fatal("guard leaked after the attach")
@@ -686,14 +707,29 @@ func TestRootGrantsVaultRefusesMalformedPacketBeforeNative(t *testing.T) {
 	}
 }
 
-// Claim: the production build cannot store a root item until the real owner/writer
-// allowlist replaces the fail-closed default: the default refuses every
-// projection, including the synthetic admitted one, with the policy error.
-func TestRootGrantsVaultDefaultPolicyFailsClosed(t *testing.T) {
+// Claim: the production policy is the observed-form allowlist, not the refuse-all
+// stub, and it admits only what it was built from: a synthetic projection and an
+// empty one are refused through both entry points with the policy's own refusal.
+// The stub is a separate value that still refuses everything. Limit: the observed
+// forms themselves are checked in the rootqualification tests and, natively, by the
+// in-process and attended runs.
+func TestRootGrantsProductionPolicyIsTheAllowlistAndRefusesWhatItWasNotBuiltFrom(t *testing.T) {
 	policy := productionRootGrantsACLPolicy()
+	if _, ok := policy.(*rootqualification.StoragePolicy); !ok {
+		t.Fatalf("the production policy is %T, not the allowlist", policy)
+	}
 	for _, p := range []rootqualification.Projection{{}, rootGrantsSyntheticProjection()} {
-		if err := policy.Admit(p); !errors.Is(err, errRootGrantsACLPolicyUnavailable) {
-			t.Fatal("default policy admitted a projection")
+		if err := policy.AdmitIntended(p); !errors.Is(err, rootqualification.ErrPolicyRefused) {
+			t.Fatalf("intended: the allowlist admitted a projection it was not built from: %v", err)
+		}
+		if err := policy.AdmitStored(p); !errors.Is(err, rootqualification.ErrPolicyRefused) {
+			t.Fatalf("stored: the allowlist admitted a projection it was not built from: %v", err)
+		}
+	}
+	var stub rootGrantsACLPolicy = rootGrantsNoACLPolicy{}
+	for _, p := range []rootqualification.Projection{{}, rootGrantsSyntheticProjection()} {
+		if !errors.Is(stub.AdmitIntended(p), errRootGrantsACLPolicyUnavailable) || !errors.Is(stub.AdmitStored(p), errRootGrantsACLPolicyUnavailable) {
+			t.Fatal("the refuse-all stub admitted a projection")
 		}
 	}
 }

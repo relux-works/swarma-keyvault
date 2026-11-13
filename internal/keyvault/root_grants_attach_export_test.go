@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcd/btcutil/base58"
+
+	"github.com/relux-works/swarma-keyvault/internal/rootqualification"
 )
 
 // A valid secp256k1 x-only key different from every fixture key (the generator's
@@ -409,9 +411,13 @@ func TestRootGrantsPublicLookupRefusals(t *testing.T) {
 			rootGrantsStoredFixture(t, x)
 			x.fake.readbackFrame = rootGrantsSyntheticFrame(t, rootGrantsSyntheticVariants[0].mutate)
 		}, func(err error) bool { return errors.Is(err, errRootGrantsSyntheticRefusal) }},
-		{"default-policy", func(t *testing.T, x *rootGrantsVaultFixture) {
+		{"production-allowlist-refuses-a-synthetic-stored-form", func(t *testing.T, x *rootGrantsVaultFixture) {
 			rootGrantsStoredFixture(t, x)
 			x.vault.policy = productionRootGrantsACLPolicy()
+		}, func(err error) bool { return errors.Is(err, rootqualification.ErrPolicyRefused) }},
+		{"refuse-all-stub", func(t *testing.T, x *rootGrantsVaultFixture) {
+			rootGrantsStoredFixture(t, x)
+			x.vault.policy = rootGrantsNoACLPolicy{}
 		}, func(err error) bool { return errors.Is(err, errRootGrantsACLPolicyUnavailable) }},
 		{"record-names-another-group", func(t *testing.T, x *rootGrantsVaultFixture) {
 			rootGrantsStoredFixture(t, x)

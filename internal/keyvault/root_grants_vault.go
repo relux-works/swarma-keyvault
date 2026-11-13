@@ -25,24 +25,48 @@ var (
 )
 
 // rootGrantsACLPolicy is the finite owner/writer admission predicate over a
-// decoded KVQP1 projection. It must be a positive allowlist derived from the
-// observed native forms; it is applied to the intended access object before the
-// add and to the actual ACL after it.
+// decoded KVQP1 projection. It is a positive allowlist derived from the observed
+// native forms, and it has two entry points because the access object built in
+// memory and the item the Keychain stores are not the same ACL set: the intended
+// object is admitted before the add and the stored item's ACL after it, each
+// against its own form and never against a union of the two.
 type rootGrantsACLPolicy interface {
-	Admit(rootqualification.Projection) error
+	AdmitIntended(rootqualification.Projection) error
+	AdmitStored(rootqualification.Projection) error
 }
 
-// rootGrantsNoACLPolicy refuses every projection. It is the production value
-// until the observed-form allowlist exists, so a build without that policy
-// cannot store a root item. Replace it ONLY with the reviewed allowlist.
+// rootGrantsNoACLPolicy refuses every projection. It is the fail-closed value
+// that production falls back to if the allowlist cannot be constructed, and a
+// test double; it is not the production policy.
 type rootGrantsNoACLPolicy struct{}
 
-func (rootGrantsNoACLPolicy) Admit(rootqualification.Projection) error {
+func (rootGrantsNoACLPolicy) AdmitIntended(rootqualification.Projection) error {
 	return errRootGrantsACLPolicyUnavailable
 }
 
+func (rootGrantsNoACLPolicy) AdmitStored(rootqualification.Projection) error {
+	return errRootGrantsACLPolicyUnavailable
+}
+
+// rootGrantsAccessDescriptor is the description that every production root item's
+// non-partition ACLs carry. It must equal KVRGAccessDescriptor in the native store
+// unit; a source-guard test compares the two literals.
+const rootGrantsAccessDescriptor = "Root grants key"
+
+// rootGrantsPolicyFor builds the allowlist for one descriptor and refuses
+// everything if it cannot (fail closed).
+func rootGrantsPolicyFor(descriptor string) rootGrantsACLPolicy {
+	policy, err := rootqualification.NewStoragePolicy(descriptor)
+	if err != nil {
+		return rootGrantsNoACLPolicy{}
+	}
+	return policy
+}
+
 // productionRootGrantsACLPolicy is the single wiring point of the ACL allowlist.
-func productionRootGrantsACLPolicy() rootGrantsACLPolicy { return rootGrantsNoACLPolicy{} }
+func productionRootGrantsACLPolicy() rootGrantsACLPolicy {
+	return rootGrantsPolicyFor(rootGrantsAccessDescriptor)
+}
 
 // rootGrantsNativeAdd is one prepared create-only add. The access object that
 // ACLFrame describes is the exact object Commit adds with.
@@ -325,7 +349,7 @@ func (v *rootGrantsProductionVault) prepareAdmittedAdd() (rootGrantsNativeAdd, e
 		return nil, refuse(rootGrantsAddUnavailable)
 	}
 	intended, err := rootqualification.DecodeNativeProjection(add.ACLFrame())
-	if err != nil || v.policy.Admit(intended) != nil {
+	if err != nil || v.policy.AdmitIntended(intended) != nil {
 		add.Close()
 		return nil, refuse(rootGrantsAddACLRefused)
 	}
@@ -404,7 +428,7 @@ func (l *rootGrantsProductionLocked) RootGrantsPublicMetadata(address RootGrants
 	if err != nil {
 		return nil, err
 	}
-	if err := l.vault.policy.Admit(actual); err != nil {
+	if err := l.vault.policy.AdmitStored(actual); err != nil {
 		return nil, err
 	}
 	r, err := ParseRootGrantsRecord(metadata)
