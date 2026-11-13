@@ -1,0 +1,252 @@
+{
+ "schema": "keyvault-root-acl-qualification-created/1",
+ "state": "created",
+ "utc": "2026-11-13T14:54:35.64714Z",
+ "namespace": "works.relux.mac-keyvault.root-acl-qualification.v1",
+ "account": "public-marker@1",
+ "item_class": "generic-password",
+ "candidate": {
+  "source_head": "c2a03e7f9797ef0d4e817fc7f4a6fb44461f55d1",
+  "source_tree": "d83a0477903860e16c1d1eb8b257c526fa52a211",
+  "vault": {
+   "sha256": "abdd35e8abeeb8dfad74caffad2854e970dce1b79567ba3c9d7ac13608284cc8",
+   "cdhash": "9d81984e10c03b9698cf6c188b2e360b00c59069"
+  },
+  "helper": {
+   "sha256": "2dc0321fa8dd87a62f41700a0033438c25b4ac33e615edc625aaf69dce654161",
+   "cdhash": "d530a09ebd28b08ef0694c916e20da8024d8b1a2"
+  },
+  "foreign": {
+   "sha256": "3ce4650e288194213b8b1518c54c9d77018d8ddc1d677ffe2ab0d36403d5f520",
+   "cdhash": "1a3501b63a3e9034b9e90946650091037aa0e7bf"
+  }
+ },
+ "before": {
+  "owner_uid": 0,
+  "owner_gid": 0,
+  "owner_type": 0,
+  "acls": [
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationEncrypt"
+    ],
+    "authorization_numbers": [
+     35
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationChangeACL"
+    ],
+    "authorization_numbers": [
+     65536
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "present",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationDecrypt",
+     "ACLAuthorizationDerive",
+     "ACLAuthorizationExportClear",
+     "ACLAuthorizationExportWrapped",
+     "ACLAuthorizationMAC",
+     "ACLAuthorizationSign"
+    ],
+    "authorization_numbers": [
+     24,
+     28,
+     37,
+     38,
+     59,
+     115
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "present",
+    "applications": [
+     {
+      "requirement_state": "present",
+      "requirement": "+t4MAAAAAHQAAAABAAAABgAAAAYAAAAGAAAAAgAAABR3b3Jrcy5yZWx1eC5rZXl2YXVsdAAAAA8AAAAEAAAAAAAAABTXEZCr5UGF+QgWnunKU41AZpQsDwAAAA4AAAABAAAACiqGSIb3Y2QGAgEAAAAAAAA=",
+      "requirement_text": "identifier \"works.relux.keyvault\" and anchor apple generic and certificate leaf = H\"d71190abe54185f908169ee9ca538d4066942c0f\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */"
+     }
+    ]
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationPartitionID"
+    ],
+    "authorization_numbers": [
+     65538
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c21444f435459504520706c697374205055424c494320222d2f2f4170706c652f2f44544420504c49535420312e302f2f454e222022687474703a2f2f7777772e6170706c652e636f6d2f445444732f50726f70657274794c6973742d312e302e647464223e0a3c706c6973742076657273696f6e3d22312e30223e0a3c646963743e0a093c6b65793e506172746974696f6e733c2f6b65793e0a093c61727261793e0a09093c737472696e673e7465616d69643a323632525a35393546503c2f737472696e673e0a093c2f61727261793e0a3c2f646963743e0a3c2f706c6973743e0a",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   }
+  ]
+ },
+ "before_sha256": "0885f13cdf52426c4bfeb0d49d8d9e4cb268c2f0267a14a0cbb55c38e4af46c2",
+ "after": {
+  "owner_uid": 0,
+  "owner_gid": 0,
+  "owner_type": 0,
+  "acls": [
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationEncrypt"
+    ],
+    "authorization_numbers": [
+     35
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationDecrypt",
+     "ACLAuthorizationDerive",
+     "ACLAuthorizationExportClear",
+     "ACLAuthorizationExportWrapped",
+     "ACLAuthorizationMAC",
+     "ACLAuthorizationSign"
+    ],
+    "authorization_numbers": [
+     24,
+     28,
+     37,
+     38,
+     59,
+     115
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "present",
+    "applications": [
+     {
+      "requirement_state": "present",
+      "requirement": "+t4MAAAAAHQAAAABAAAABgAAAAYAAAAGAAAAAgAAABR3b3Jrcy5yZWx1eC5rZXl2YXVsdAAAAA8AAAAEAAAAAAAAABTXEZCr5UGF+QgWnunKU41AZpQsDwAAAA4AAAABAAAACiqGSIb3Y2QGAgEAAAAAAAA=",
+      "requirement_text": "identifier \"works.relux.keyvault\" and anchor apple generic and certificate leaf = H\"d71190abe54185f908169ee9ca538d4066942c0f\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */"
+     }
+    ]
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationPartitionID"
+    ],
+    "authorization_numbers": [
+     65538
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c21444f435459504520706c697374205055424c494320222d2f2f4170706c652f2f44544420504c49535420312e302f2f454e222022687474703a2f2f7777772e6170706c652e636f6d2f445444732f50726f70657274794c6973742d312e302e647464223e0a3c706c6973742076657273696f6e3d22312e30223e0a3c646963743e0a093c6b65793e506172746974696f6e733c2f6b65793e0a093c61727261793e0a09093c737472696e673e7465616d69643a323632525a35393546503c2f737472696e673e0a093c2f61727261793e0a3c2f646963743e0a3c2f706c6973743e0a",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationIntegrity"
+    ],
+    "authorization_numbers": [
+     65539
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "fc1058fe1a8c1f0b349a3385b018e600be5e571d514c23b420c6c7e847701497",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationPartitionID"
+    ],
+    "authorization_numbers": [
+     65538
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "3c3f786d6c2076657273696f6e3d22312e302220656e636f64696e673d225554462d38223f3e0a3c21444f435459504520706c697374205055424c494320222d2f2f4170706c652f2f44544420504c49535420312e302f2f454e222022687474703a2f2f7777772e6170706c652e636f6d2f445444732f50726f70657274794c6973742d312e302e647464223e0a3c706c6973742076657273696f6e3d22312e30223e0a3c646963743e0a093c6b65793e506172746974696f6e733c2f6b65793e0a093c61727261793e0a09093c737472696e673e7465616d69643a323632525a35393546503c2f737472696e673e0a093c2f61727261793e0a3c2f646963743e0a3c2f706c6973743e0a",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "null",
+    "applications": []
+   },
+   {
+    "authorization_names_state": "readable",
+    "authorizations": [
+     "ACLAuthorizationChangeACL"
+    ],
+    "authorization_numbers": [
+     65536
+    ],
+    "contents_state": "readable",
+    "description_state": "present",
+    "description": "Root ACL public qualification",
+    "prompt_bits": 0,
+    "raw_prompt_state": "readable",
+    "raw_prompt_version": 257,
+    "raw_prompt_flags": 0,
+    "applications_state": "present",
+    "applications": []
+   }
+  ]
+ },
+ "after_sha256": "53e6776f24208d795cc07c39355f4ab0a245cddfdddece7b784a9c1c9720d31a"
+}
