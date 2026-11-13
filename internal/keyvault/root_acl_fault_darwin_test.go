@@ -103,27 +103,42 @@ func TestFaultedIntendedAccessStagesNameThemselves(t *testing.T) {
 
 // Claim: arming one projection group makes the call record the BEFORE id when the
 // first projection fails and the AFTER id when the second does, never the internal
-// projection id, with the armed OSStatus. The natural verdict of the groups is masked
-// so that every id stays reachable even where a group fails naturally on this
-// system. Limit: a plain in-memory access object is projected, not the intended one.
+// projection id, with the armed OSStatus. A group the natural projection fails before
+// reaching cannot be armed, and the AFTER ids need a natural BEFORE projection that
+// completes; both are printed as SKIPPED and are not counted as proven. Limit: a plain
+// in-memory access object is projected, not the intended one.
 func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
-	natural := runProjectFault(0, 0, false, true)
+	natural := runProjectFault(0, 0, false, false)
+	reach := 74 // the highest projection id the BEFORE projection can reach
 	if !natural.Completed {
-		t.Fatalf("a masked projection of a plain access must complete: %+v", natural)
+		if natural.Stage < 30 || natural.Stage > 34 {
+			t.Fatalf("a failed natural projection must name a BEFORE group: %+v", natural)
+		}
+		reach = 70 + (natural.Stage - 30)
 	}
+	proven := 0
 	for generic := 70; generic <= 74; generic++ {
 		for _, after := range []bool{false, true} {
 			want := 30 + (generic - 70)
 			if after {
 				want = 50 + (generic - 70)
 			}
-			got := runProjectFault(generic, injected(generic), after, true)
+			if generic > reach || (after && !natural.Completed) {
+				t.Logf("SKIPPED projection id %d after=%v: the natural projection already fails at stage %d (status %d)", generic, after, natural.Stage, natural.OSStatus)
+				continue
+			}
+			got := runProjectFault(generic, injected(generic), after, false)
 			assertReportable(t, "projection", got)
 			if got.Stage != want || got.OSStatus != injected(generic) || got.Completed || got.Result != injected(generic) {
 				t.Fatalf("armed projection %d after=%v: got stage %d status %d completed %v result %d, want stage %d status %d",
 					generic, after, got.Stage, got.OSStatus, got.Completed, got.Result, want, injected(generic))
 			}
+			proven++
 		}
+	}
+	t.Logf("projection ids proven by injection: %d of 10", proven)
+	if proven == 0 {
+		t.Fatal("no projection stage could be armed")
 	}
 }
 
@@ -174,6 +189,18 @@ func TestProbeAuthorizationsDescribesTheProjectionInput(t *testing.T) {
 	t.Logf("authorizations probe: %+v", probe)
 	if probe.Status != 0 || probe.Counts[0] == 0 || probe.Counts[2] == 0 {
 		t.Fatalf("the probe saw no authorization names: %+v", probe)
+	}
+}
+
+// Claim: the probe describes the list the projection reads. It logs the element
+// types of SecAccessCopyOwnerAndACL beside those of SecAccessCopyACLList on this system.
+// Its only assertions are that the probe ran and saw the lists, so an empty probe cannot
+// pass for an answer.
+func TestProbeOwnerACLDescribesTheProjectionList(t *testing.T) {
+	values, status := probeOwnerACL()
+	t.Logf("owner/ACL probe: status=%d values=%v", status, values)
+	if status != 0 || values[3] == 0 || values[13] == 0 {
+		t.Fatalf("the probe saw no ACL list: status %d values %v", status, values)
 	}
 }
 

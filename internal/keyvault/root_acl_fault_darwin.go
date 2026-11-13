@@ -8,6 +8,7 @@ int KVQFaultRunIntended(int armStage, int armStatus, int maskRequirement, int *s
 int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int maskNatural, int *stage, int *status, int *completed);
 int KVQFaultRunBefore(int *stage, int *status, int *completed);
 int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize);
+int KVQFaultProbeOwnerACL(int *out);
 int KVQFaultRunLogin(int armStage, int armStatus, int *stage, int *status, int *completed);
 int KVQFaultRunSelf(int armStage, int armStatus, int *stage, int *status);
 void KVQFaultNoteTwice(int firstStage, int firstStatus, int secondStage, int secondStatus, int *stage, int *status);
@@ -106,4 +107,21 @@ func noteTwice(firstStage, firstStatus, secondStage, secondStatus int) faultRun 
 	var stage, osStatus C.int
 	C.KVQFaultNoteTwice(C.int(firstStage), C.int(firstStatus), C.int(secondStage), C.int(secondStatus), &stage, &osStatus)
 	return faultRun{Stage: int(stage), OSStatus: int(osStatus)}
+}
+
+// probeOwnerACL describes what SecAccessCopyOwnerAndACL returns (the list the
+// projection reads) next to SecAccessCopyACLList (the list the constructor reads).
+// Indices: [0] OwnerAndACL status, [1] list present, [2] is an array, [3] elements,
+// [4] SecACL elements, [5] dictionaries, [6] data, [7] strings, [8] first element's
+// type id, [9] SecACL type id, [10] SecACLGetAuthorizations status on the first SecACL
+// element (-1 none), [11] its count, [12] ACLList status, [13] its elements, [14] its
+// SecACL elements.
+func probeOwnerACL() ([16]int, int) {
+	var out [16]C.int
+	status := C.KVQFaultProbeOwnerACL(&out[0])
+	var values [16]int
+	for i := range out {
+		values[i] = int(out[i])
+	}
+	return values, int(status)
 }

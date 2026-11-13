@@ -713,6 +713,61 @@ int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize) {
     return (int)status;
 }
 
+// Describes what SecAccessCopyOwnerAndACL, the call the projection reads its ACL list
+// from, returns for a plain in-memory access object, next to what SecAccessCopyACLList
+// (the call the access constructor and its bindings read) returns. out: [0] status of
+// OwnerAndACL, [1] list present, [2] list is an array, [3] element count, [4] elements
+// that are SecACL objects, [5] dictionaries, [6] data, [7] strings, [8] CFTypeID of the
+// first element, [9] SecACLGetTypeID(), [10] status of SecACLGetAuthorizations on the
+// first SecACL element (-1 if none), [11] its number count, [12] status of
+// SecAccessCopyACLList, [13] its element count, [14] its elements that are SecACL objects.
+int KVQFaultProbeOwnerACL(int *out) {
+    for (int i = 0; i < 16; i++) out[i] = 0;
+    out[10] = -1;
+    SecAccessRef access = NULL;
+    OSStatus status = SecAccessCreate(CFSTR("Root ACL fault test"), NULL, &access);
+    if (status != errSecSuccess || !access) return status != errSecSuccess ? (int)status : (int)errSecDecode;
+    uid_t uid = 0; gid_t gid = 0; SecAccessOwnerType owner = 0;
+    CFArrayRef list = NULL;
+    out[0] = (int)SecAccessCopyOwnerAndACL(access, &uid, &gid, &owner, &list);
+    out[9] = (int)SecACLGetTypeID();
+    if (list) {
+        out[1] = 1;
+        out[2] = CFGetTypeID(list) == CFArrayGetTypeID();
+        if (out[2]) {
+            out[3] = (int)CFArrayGetCount(list);
+            for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+                CFTypeRef element = CFArrayGetValueAtIndex(list, i);
+                CFTypeID type = element ? CFGetTypeID(element) : 0;
+                if (i == 0) out[8] = (int)type;
+                if (type == SecACLGetTypeID()) {
+                    out[4]++;
+                    if (out[10] == -1) {
+                        CSSM_ACL_AUTHORIZATION_TAG tags[64]; uint32 count = 64;
+                        out[10] = (int)SecACLGetAuthorizations((SecACLRef)element, tags, &count);
+                        out[11] = (int)count;
+                    }
+                } else if (type == CFDictionaryGetTypeID()) out[5]++;
+                else if (type == CFDataGetTypeID()) out[6]++;
+                else if (type == CFStringGetTypeID()) out[7]++;
+            }
+        }
+        CFRelease(list);
+    }
+    CFArrayRef plain = NULL;
+    out[12] = (int)SecAccessCopyACLList(access, &plain);
+    if (plain) {
+        out[13] = (int)CFArrayGetCount(plain);
+        for (CFIndex i = 0; i < CFArrayGetCount(plain); i++) {
+            CFTypeRef element = CFArrayGetValueAtIndex(plain, i);
+            if (element && CFGetTypeID(element) == SecACLGetTypeID()) out[14]++;
+        }
+        CFRelease(plain);
+    }
+    CFRelease(access);
+    return 0;
+}
+
 // Runs only the login-keychain step with one fault armed (0 = a natural run).
 int KVQFaultRunLogin(int armStage, int armStatus, int *stage, int *status, int *completed) {
     KVQDiagReset();
