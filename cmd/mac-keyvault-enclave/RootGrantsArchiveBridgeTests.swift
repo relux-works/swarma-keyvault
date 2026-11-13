@@ -221,6 +221,34 @@ struct RootGrantsArchiveBridgeTests {
         }
     }
 
+    // Claim: every signing archive status keeps its public meaning through the
+    // Swift decoder, private helper frame and public error; attach stays 1..20.
+    @Test func signingArchiveStatusesKeepExtendedRefusalCodesThroughPublicFrame() throws {
+        #expect(Int32(KV_RG_CODE_NOT_ADMITTED) == 21)
+        #expect(Int32(KV_RG_ACL_REFUSED) == 22)
+        #expect(Int32(KV_RG_LOCK_UNAVAILABLE) == 23)
+        #expect(Int32(KV_RG_INVENTORY_CHANGED) == 24)
+        try RootGrantsArchiveBindings.signingStatus(0)
+        for raw in 1...24 {
+            do {
+                try RootGrantsArchiveBindings.signingStatus(Int32(raw))
+                Issue.record("Expected signing refusal")
+            } catch let archiveError as RootGrantsReviewError {
+                let frame = try RootGrantsPrivateFrame.response(.refusal(archiveError.status))
+                guard case .refusal(let decoded) = try RootGrantsPrivateFrame.decodeResponse(frame) else {
+                    Issue.record("Expected public helper refusal"); continue
+                }
+                #expect(decoded == RootGrantsStatus.helperClosed(Int32(raw)))
+                #expect(RootGrantsReviewError(status: decoded).code == decoded.code)
+            }
+        }
+        for invalid in [Int32(-1), Int32(25), Int32.max] {
+            archiveExpectRefusal(.privateProtocolError) { try RootGrantsArchiveBindings.signingStatus(invalid) }
+        }
+        archiveExpectRefusal(.privateProtocolError) { try RootGrantsArchiveBindings.status(21) }
+        archiveExpectRefusal(.privateProtocolError) { try RootGrantsArchiveBindings.status(24) }
+    }
+
     // Bounded conversion and status/handle controls admit their valid forms.
     // Pure scalar tests cannot prove C allocation, copying or private lifetimes.
     @Test func boundedLengthsAndOpenDomain() throws {

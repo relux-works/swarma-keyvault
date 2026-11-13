@@ -16,6 +16,11 @@ enum RootGrantsArchiveBindings {
     static func status(_ raw: Int32) throws {
         if let refusal = RootGrantsReviewError.fromStatus(raw) { throw refusal }
     }
+    static func signingStatus(_ raw: Int32) throws {
+        guard raw != 0 else { return }
+        guard (1...24).contains(raw) else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        throw RootGrantsReviewError(status: RootGrantsStatus.helperClosed(raw))
+    }
     static func opened(status raw: Int32, handle: UInt64) throws {
         guard raw == 0 || handle == 0 else { throw RootGrantsReviewError(status: .privateProtocolError) }
         try status(raw)
