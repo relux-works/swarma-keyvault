@@ -134,6 +134,81 @@ func rootGrantsReadGrantV3Frame(r io.Reader) rootGrantsHelperFrame {
 	return rootGrantsReadFrameThrough(r, 24)
 }
 
+const rootGrantsGrantV3RecheckLimit = 2
+
+// The child may request only the two contract-defined parent reads. The stage
+// marker is fixed and ordered; no caller-selected address or policy is sent.
+func rootGrantsGrantV3RecheckFrame(stage byte, remaining time.Duration) ([]byte, error) {
+	if stage < 1 || stage > rootGrantsGrantV3RecheckLimit || remaining <= 0 || remaining > rootGrantsGrantV3AttemptLimit {
+		return nil, recoveryRefuse("private_protocol_error")
+	}
+	frame := make([]byte, 5+12)
+	frame[0] = 2
+	binary.BigEndian.PutUint32(frame[1:5], 12)
+	binary.BigEndian.PutUint64(frame[5:13], uint64(remaining))
+	marker := byte('3')
+	if stage == 2 {
+		marker = '4'
+	}
+	copy(frame[13:17], []byte{'K', 'V', 'R', marker})
+	return frame, nil
+}
+
+func rootGrantsReadGrantV3ExchangeFrame(r io.Reader) (rootGrantsHelperFrame, byte, time.Duration) {
+	var header [5]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
+		return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}, 0, 0
+	}
+	n := binary.BigEndian.Uint32(header[1:])
+	status := header[0]
+	valid := status == 0 && n > 0 && n <= 131072 || status == 1 && n == 4 || status == 2 && n == 12
+	if !valid {
+		return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}, 0, 0
+	}
+	payload := make([]byte, int(n))
+	if _, err := io.ReadFull(r, payload); err != nil {
+		clear(payload)
+		return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}, 0, 0
+	}
+	if status == 1 {
+		code := binary.BigEndian.Uint32(payload)
+		if code == 0 || code > 24 {
+			clear(payload)
+			return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}, 0, 0
+		}
+	}
+	if status != 2 {
+		return rootGrantsHelperFrame{status: status, payload: payload}, 0, 0
+	}
+	remaining := time.Duration(binary.BigEndian.Uint64(payload[:8]))
+	stageMarker := payload[8:]
+	if remaining <= 0 || remaining > rootGrantsGrantV3AttemptLimit ||
+		len(stageMarker) != 4 || stageMarker[0] != 'K' || stageMarker[1] != 'V' || stageMarker[2] != 'R' ||
+		(stageMarker[3] != '3' && stageMarker[3] != '4') {
+		clear(payload)
+		return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}, 0, 0
+	}
+	stage := byte(1)
+	if stageMarker[3] == '4' {
+		stage = 2
+	}
+	clear(payload)
+	return rootGrantsHelperFrame{status: status}, stage, remaining
+}
+
+func rootGrantsGrantV3ControlResponse(err error) []byte {
+	if err == nil {
+		return []byte{0, 0, 0, 0, 0}
+	}
+	code := RootGrantsGrantV3HelperStatus(err)
+	if code < 1 || code > 24 {
+		code = 16
+	}
+	frame := []byte{1, 0, 0, 0, 4, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(frame[5:], uint32(code))
+	return frame
+}
+
 func rootGrantsReadFrameThrough(r io.Reader, maxStatus uint32) rootGrantsHelperFrame {
 	var header [5]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {

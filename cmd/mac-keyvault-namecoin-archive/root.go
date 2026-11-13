@@ -15,7 +15,9 @@ enum {
  KV_RG_BINDING_MISMATCH=13, KV_RG_CANCELED=14, KV_RG_TIMEOUT=15,
  KV_RG_PRIVATE_PROTOCOL_ERROR=16, KV_RG_LIMIT_EXCEEDED=17,
  KV_RG_UNSUPPORTED_VERSION=18, KV_RG_UNSUPPORTED_OPERATION=19,
- KV_RG_INPUT_CANCELED=20
+ KV_RG_INPUT_CANCELED=20, KV_RG_CODE_NOT_ADMITTED=21,
+ KV_RG_ACL_REFUSED=22, KV_RG_LOCK_UNAVAILABLE=23,
+ KV_RG_INVENTORY_CHANGED=24
 };
 */
 import "C"
@@ -33,10 +35,71 @@ import (
 )
 
 const rootHandleBit uint64 = 1 << 63
+const rootSignContextHandleBit uint64 = 1 << 62
 const rootRequestLimit = 262144
 const rootResponseLimit = 131072
 const rootAttemptLimit = 900 * time.Second
 const rootHandleLimit = 64 // Closed handles remain bounded tombstones.
+const rootSignContextBudgetLimit = 120 * time.Second
+
+type rootSignContextEntry struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+type rootSignContextRegistry struct {
+	mu      sync.Mutex
+	entries map[uint64]rootSignContextEntry
+	next    atomic.Uint64
+}
+
+var rootSignContexts = &rootSignContextRegistry{entries: make(map[uint64]rootSignContextEntry)}
+
+func (r *rootSignContextRegistry) open(budget time.Duration) (uint64, int32) {
+	if budget <= 0 || budget > rootSignContextBudgetLimit {
+		return 0, 15
+	}
+	n := r.next.Add(1)
+	if n == 0 || n >= rootSignContextHandleBit {
+		return 0, 17
+	}
+	handle := rootSignContextHandleBit | n
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	r.mu.Lock()
+	r.entries[handle] = rootSignContextEntry{ctx: ctx, cancel: cancel}
+	r.mu.Unlock()
+	return handle, 0
+}
+
+func (r *rootSignContextRegistry) context(handle uint64) context.Context {
+	if handle&rootSignContextHandleBit == 0 || handle&rootHandleBit != 0 {
+		return nil
+	}
+	r.mu.Lock()
+	entry, ok := r.entries[handle]
+	r.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return entry.ctx
+}
+
+func (r *rootSignContextRegistry) cancel(handle uint64, closeEntry bool) int32 {
+	if handle&rootSignContextHandleBit == 0 || handle&rootHandleBit != 0 {
+		return 1
+	}
+	r.mu.Lock()
+	entry, ok := r.entries[handle]
+	if ok && closeEntry {
+		delete(r.entries, handle)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return 1
+	}
+	entry.cancel()
+	return 0
+}
 
 type rootFacade interface {
 	Prepare() (keyvault.RootGrantsPreparationPublic, error)
@@ -437,8 +500,52 @@ func kv_rg_close_v1(handle C.uint64_t) (verdict C.int32_t) {
 	return C.int32_t(rootHandles.close(uint64(handle)))
 }
 
+//export kv_rg_sign_grant_v3_context_open_v1
+func kv_rg_sign_grant_v3_context_open_v1(budgetNanos C.uint64_t, outHandle *C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			if outHandle != nil {
+				*outHandle = 0
+			}
+			verdict = 16
+		}
+	}()
+	if outHandle == nil {
+		return 1
+	}
+	*outHandle = 0
+	handle, code := rootSignContexts.open(time.Duration(budgetNanos))
+	if code == 0 {
+		*outHandle = C.uint64_t(handle)
+	}
+	return C.int32_t(code)
+}
+
+//export kv_rg_sign_grant_v3_context_cancel_v1
+func kv_rg_sign_grant_v3_context_cancel_v1(handle C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	return C.int32_t(rootSignContexts.cancel(uint64(handle), false))
+}
+
+//export kv_rg_sign_grant_v3_context_close_v1
+func kv_rg_sign_grant_v3_context_close_v1(handle C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	return C.int32_t(rootSignContexts.cancel(uint64(handle), true))
+}
+
 //export kv_rg_sign_grant_v3_v1
-func kv_rg_sign_grant_v3_v1(request *C.uchar, requestSize C.size_t, plaintext *C.uchar, plaintextSize C.size_t,
+func kv_rg_sign_grant_v3_v1(contextHandle C.uint64_t, request *C.uchar, requestSize C.size_t, plaintext *C.uchar, plaintextSize C.size_t,
 	out *C.uchar, capacity C.size_t, written *C.size_t) (verdict C.int32_t) {
 	verdict = 16
 	defer func() {
@@ -453,7 +560,8 @@ func kv_rg_sign_grant_v3_v1(request *C.uchar, requestSize C.size_t, plaintext *C
 		return 1
 	}
 	*written = 0
-	if request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit ||
+	ctx := rootSignContexts.context(uint64(contextHandle))
+	if ctx == nil || request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit ||
 		plaintext == nil || plaintextSize != 68 || out == nil || capacity < 64 {
 		return 1
 	}
@@ -461,7 +569,7 @@ func kv_rg_sign_grant_v3_v1(request *C.uchar, requestSize C.size_t, plaintext *C
 	privateInput := C.GoBytes(unsafe.Pointer(plaintext), 68)
 	defer clear(publicInput)
 	defer clear(privateInput)
-	signature, err := keyvault.RootGrantsGrantV3SignFromHelper(publicInput, privateInput)
+	signature, err := keyvault.RootGrantsGrantV3SignFromHelper(ctx, publicInput, privateInput)
 	defer clear(signature)
 	if err != nil || len(signature) != 64 {
 		if err != nil {
@@ -474,24 +582,5 @@ func kv_rg_sign_grant_v3_v1(request *C.uchar, requestSize C.size_t, plaintext *C
 		destination[i] = C.uchar(value)
 	}
 	*written = 64
-	return 0
-}
-
-//export kv_rg_sign_grant_v3_check_v1
-func kv_rg_sign_grant_v3_check_v1(request *C.uchar, requestSize C.size_t) (verdict C.int32_t) {
-	verdict = 16
-	defer func() {
-		if recover() != nil {
-			verdict = 16
-		}
-	}()
-	if request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit {
-		return 1
-	}
-	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
-	defer clear(publicInput)
-	if err := keyvault.RootGrantsGrantV3CheckForHelper(publicInput); err != nil {
-		return C.int32_t(keyvault.RootGrantsGrantV3HelperStatus(err))
-	}
 	return 0
 }

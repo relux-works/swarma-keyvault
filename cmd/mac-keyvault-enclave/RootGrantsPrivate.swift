@@ -59,6 +59,28 @@ enum RootGrantsPrivateFrame {
     }
 }
 
+enum RootGrantsPrivateControl {
+    static func recheck(stage: UInt8, remainingNanoseconds: UInt64) throws -> Data {
+        guard (1...2).contains(stage), remainingNanoseconds > 0, remainingNanoseconds <= 120_000_000_000 else {
+            throw RootGrantsReviewError(status: .privateProtocolError)
+        }
+        let marker: UInt8 = stage == 1 ? 51 : 52
+        var frame = Data([2]) + RootGrantsPrivateFrame.word(12)
+        var remaining = remainingNanoseconds.bigEndian
+        frame.append(withUnsafeBytes(of: &remaining) { Data($0) })
+        frame.append(contentsOf: [75, 86, 82, marker]) // KVR3 / KVR4, in order.
+        return frame
+    }
+    static func response(status: UInt8, length: Int, payload: Data) throws {
+        guard payload.count == length else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        if status == 0 && length == 0 { return }
+        guard status == 1 && length == 4 else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        let raw = try RootGrantsPrivateFrame.number(payload)
+        guard (1...24).contains(raw) else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        throw RootGrantsReviewError(status: RootGrantsStatus.helperClosed(Int32(raw)))
+    }
+}
+
 // PUBLIC byte binding only: not review, presence, storage or completion authority.
 // Original exchanged bytes, including lengths, are hashed without reserialization.
 enum RootGrantsPrivateAcknowledgement {
@@ -117,6 +139,7 @@ struct RootGrantsPrivateCompletion {
 // Supplied instants are process-local monotonic values, never parent authority.
 struct RootGrantsPrivateDeadline {
     static let budget: UInt64 = 900_000_000_000
+    static let grantSigningBudget: UInt64 = 120_000_000_000
     let startedAt: UInt64
 	let duration: UInt64
 	init(startedAt: UInt64, budget: UInt64 = RootGrantsPrivateDeadline.budget) {
@@ -131,6 +154,14 @@ struct RootGrantsPrivateDeadline {
 		guard now >= startedAt, now - startedAt < duration else {
             throw RootGrantsReviewError(status: .timeout)
         }
+    }
+    func remaining(at now: UInt64) throws -> UInt64 {
+        try check(at: now)
+        return duration - (now - startedAt)
+    }
+    static func boundedGrantSigningBudget(remaining: UInt64) throws -> UInt64 {
+        guard remaining > 0 else { throw RootGrantsReviewError(status: .timeout) }
+        return min(grantSigningBudget, remaining)
     }
 }
 
@@ -163,6 +194,22 @@ final class RootGrantsPrivateCancellation {
     private var failure: RootGrantsStatus?
     private var session: NativeRootGrantsArchiveSession?
     private var context: LAContext?
+    private var signingCancellation: (() -> Void)?
+    func remainingNanoseconds() throws -> UInt64 {
+        try deadline.remaining(at: DispatchTime.now().uptimeNanoseconds)
+    }
+    func setSigningCancellation(_ value: (() -> Void)?) throws {
+        lock.lock()
+        let refusal = failure
+        let occupied = value != nil && signingCancellation != nil
+        if value == nil || refusal == nil && !occupied { signingCancellation = value }
+        lock.unlock()
+        // Removing a completed helper handle is cleanup, so cancellation must
+        // not turn that cleanup into a new failure.
+        if value == nil { return }
+        if let refusal { value?(); throw RootGrantsReviewError(status: refusal) }
+        if occupied { value?(); throw RootGrantsReviewError(status: .operationUnavailable) }
+    }
     func check() throws {
         try checkDeadline()
         lock.lock(); let value = failure; lock.unlock()
@@ -194,9 +241,10 @@ final class RootGrantsPrivateCancellation {
     func cancel(_ status: RootGrantsStatus = .canceled) {
         lock.lock()
         if failure == nil { failure = status == .success ? .privateProtocolError : status }
-        let active = session, authentication = context
+        let active = session, authentication = context, signing = signingCancellation
         lock.unlock()
         authentication?.invalidate()
+        signing?()
         _ = active?.close() // No state lock held while Go restores its reader.
     }
     func reviewDeadline() throws {
@@ -207,10 +255,11 @@ final class RootGrantsPrivateCancellation {
     @discardableResult
     func finish() -> RootGrantsStatus {
         lock.lock()
-        let active = session, authentication = context
-        session = nil; context = nil
+        let active = session, authentication = context, signing = signingCancellation
+        session = nil; context = nil; signingCancellation = nil
         lock.unlock()
         authentication?.invalidate()
+        signing?()
         return active?.close() ?? .success
     }
 }
@@ -478,6 +527,28 @@ final class RootGrantsPrivateTransport {
         guard (1...262144).contains(count) else { throw RootGrantsReviewError(status: .invalidArguments) }
         // stdin intentionally remains open for the one completion message.
         return try readBytes(count)
+    }
+    func recheck(stage: UInt8, remainingNanoseconds: UInt64) throws {
+        let frame = try RootGrantsPrivateControl.recheck(stage: stage,
+            remainingNanoseconds: remainingNanoseconds)
+        try writeControl(frame)
+        let header = try readBytes(5)
+        let status = header[0]
+        let length = try RootGrantsPrivateFrame.number(Data(header.dropFirst()))
+        guard (0...4).contains(length) else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        let payload = try readBytes(length)
+        try RootGrantsPrivateControl.response(status: status, length: length, payload: payload)
+    }
+    private func writeControl(_ frame: Data) throws {
+        var offset = 0
+        while offset < frame.count {
+            try ready(STDOUT_FILENO, writing: true)
+            let count = frame.count - offset
+            let written = frame.withUnsafeBytes { Darwin.write(STDOUT_FILENO, $0.baseAddress!.advanced(by: offset), count) }
+            if written < 0, errno == EINTR { continue }
+            guard written > 0 else { throw RootGrantsReviewError(status: .privateProtocolError) }
+            offset += written
+        }
     }
     func checkOutput() throws {
         try cancellation.check()

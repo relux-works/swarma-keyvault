@@ -36,6 +36,48 @@ private func privateReviews(_ raw: Data) throws -> (RootGrantsInitialReview, Roo
 }
 
 struct RootGrantsPrivateTests {
+    // Claim: both ordered helper checkpoints carry the original remaining
+    // deadline and only fixed frames; parent refusals stay closed at 1..24.
+    @Test func orderedVaultRecheckControlAndRefusalFrames() throws {
+        let first = try RootGrantsPrivateControl.recheck(stage: 1, remainingNanoseconds: 7_000_000_000)
+        let second = try RootGrantsPrivateControl.recheck(stage: 2, remainingNanoseconds: 6_000_000_000)
+        #expect(first.first == 2 && second.first == 2)
+        #expect(try RootGrantsPrivateFrame.number(Data(first.dropFirst().prefix(4))) == 12)
+        #expect(first.suffix(4) == Data([75, 86, 82, 51]))
+        #expect(second.suffix(4) == Data([75, 86, 82, 52]))
+        privateRefusal(.privateProtocolError) { _ = try RootGrantsPrivateControl.recheck(stage: 2, remainingNanoseconds: 0) }
+        privateRefusal(.privateProtocolError) { _ = try RootGrantsPrivateControl.recheck(stage: 3, remainingNanoseconds: 1) }
+        try RootGrantsPrivateControl.response(status: 0, length: 0, payload: Data())
+        for raw in 21...24 {
+            do {
+                try RootGrantsPrivateControl.response(status: 1, length: 4,
+                    payload: RootGrantsPrivateFrame.word(UInt32(raw)))
+                Issue.record("Expected parent vault refusal")
+            } catch let error as RootGrantsReviewError {
+                #expect(error.status == RootGrantsStatus.helperClosed(Int32(raw)))
+            }
+        }
+        privateRefusal(.privateProtocolError) {
+            try RootGrantsPrivateControl.response(status: 1, length: 4, payload: RootGrantsPrivateFrame.word(25))
+        }
+    }
+
+    // Claim: native cancellation reaches an already-open helper signing
+    // context; deadline checks use the same monotonic budget.
+    @Test func cancellationPropagatesToSigningContext() throws {
+        let start = DispatchTime.now().uptimeNanoseconds
+        let deadline = RootGrantsPrivateDeadline(startedAt: start, budget: 500_000_000_000)
+        let cancellation = RootGrantsPrivateCancellation(deadline: deadline)
+        var cancelled = 0
+        try cancellation.setSigningCancellation { cancelled += 1 }
+        cancellation.cancel(.timeout)
+        #expect(cancelled == 1)
+        privateRefusal(.timeout) { try cancellation.check() }
+        try cancellation.setSigningCancellation(nil)
+        #expect(try deadline.remaining(at: start + 499_000_000_000) == 1_000_000_000)
+        privateRefusal(.timeout) { _ = try deadline.remaining(at: start + 500_000_000_000) }
+    }
+
     // Exact finite frame lengths/EOF, not canonical request/engine validity.
     @Test func requestFrameLimitsAndExactEOF() throws {
         for body in [privateRequestV1, privateRequestV2, Data([1]), Data(repeating: 65, count: 262144)] {

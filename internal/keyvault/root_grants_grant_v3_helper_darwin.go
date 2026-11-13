@@ -10,6 +10,7 @@ import (
 	"io"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 type rootGrantsGrantV3ProductionHelper struct{}
@@ -65,7 +66,12 @@ func invokeRootGrantsGrantV3Helper(parent context.Context, raw []byte) ([]byte, 
 	if err != nil {
 		return nil, rootGrantsGrantV3Failed("operation_unavailable", "preflight", false)
 	}
-	payload, _, err := rootGrantsGrantV3HelperExchange(parent, raw, pin, rootGrantsGrantV3ExecHost{path: path})
+	vault := newRootGrantsGrantV3SigningVault()
+	check := func(ctx context.Context, request []byte) error {
+		return rootGrantsGrantV3CheckForHelperWithContext(ctx, request, vault, LoadRootGrantsAuthority)
+	}
+	payload, _, err := rootGrantsGrantV3HelperExchange(parent, raw, pin,
+		rootGrantsGrantV3ExecHost{path: path}, check)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +80,9 @@ func invokeRootGrantsGrantV3Helper(parent context.Context, raw []byte) ([]byte, 
 
 // This operation has its own 120-second budget and entry point; it does not
 // inherit attach's 900-second lifetime or response validator.
-func rootGrantsGrantV3HelperExchange(parent context.Context, raw, pin []byte, host rootGrantsHelperHost) ([]byte, int, error) {
-	if parent == nil || host == nil {
+func rootGrantsGrantV3HelperExchange(parent context.Context, raw, pin []byte, host rootGrantsHelperHost,
+	check func(context.Context, []byte) error) ([]byte, int, error) {
+	if parent == nil || host == nil || check == nil {
 		return nil, 0, rootGrantsGrantV3Failed("invalid_arguments", "preflight", false)
 	}
 	if len(pin) != 20 && len(pin) != 32 {
@@ -105,10 +112,55 @@ func rootGrantsGrantV3HelperExchange(parent context.Context, raw, pin []byte, ho
 			frames <- rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "sign", true)}
 			return
 		}
-		frame := rootGrantsReadGrantV3Frame(child.output)
+		rechecks := byte(0)
+		var recheckFailure error
+		var frame rootGrantsHelperFrame
+		for {
+			var stage byte
+			var remaining time.Duration
+			frame, stage, remaining = rootGrantsReadGrantV3ExchangeFrame(child.output)
+			if frame.err != nil || frame.status != 2 {
+				break
+			}
+			clear(frame.payload)
+			if stage != rechecks+1 || rechecks >= rootGrantsGrantV3RecheckLimit {
+				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "recheck", false)}
+				break
+			}
+			rechecks++
+			if err := ctx.Err(); err != nil {
+				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)}
+				break
+			}
+			readCtx, readCancel := context.WithTimeout(ctx, remaining)
+			checkErr := check(readCtx, owned)
+			if checkErr == nil {
+				if err := readCtx.Err(); err != nil {
+					checkErr = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)
+				}
+			}
+			if checkErr == nil {
+				if err := ctx.Err(); err != nil {
+					checkErr = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)
+				}
+			}
+			readCancel()
+			if checkErr != nil {
+				recheckFailure = checkErr
+			}
+			control := rootGrantsGrantV3ControlResponse(checkErr)
+			if err := rootGrantsWriteRaw(child.input, control); err != nil {
+				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "recheck", false)}
+				break
+			}
+		}
 		refusalFrame := frame.err == nil && frame.status == 1
 		if frame.err == nil && frame.status == 0 {
-			if len(frame.payload) != 64 {
+			if recheckFailure != nil {
+				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3RefusalCode(recheckFailure), "recheck", true)
+			} else if rechecks != rootGrantsGrantV3RecheckLimit {
+				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "recheck", true)
+			} else if len(frame.payload) != 64 {
 				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "verify", true)
 			} else if plan, planErr := rootGrantsGrantV3PlanFromHelperRequest(owned); planErr != nil || plan.VerifySignature(frame.payload) != nil {
 				frame.err = rootGrantsGrantV3Failed("signature_verification_failed", "verify", true)
@@ -203,6 +255,17 @@ func rootGrantsGrantV3HelperExchange(parent context.Context, raw, pin []byte, ho
 		rootGrantsStopChild(child, waited)
 		return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(ctx.Err()), "receipt", true)
 	}
+}
+
+func rootGrantsWriteRaw(w io.Writer, raw []byte) error {
+	n, err := w.Write(raw)
+	if err != nil {
+		return err
+	}
+	if n != len(raw) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func rootGrantsGrantV3HelperRefusalName(code uint32) string {
