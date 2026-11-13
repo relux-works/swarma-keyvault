@@ -103,15 +103,13 @@ func TestFaultedIntendedAccessStagesNameThemselves(t *testing.T) {
 
 // Claim: arming one projection group makes the call record the BEFORE id when the
 // first projection fails and the AFTER id when the second does, never the internal
-// projection id, with the armed OSStatus. Limit: a plain in-memory access object is
-// projected, not the intended one, so these ids are proven independently of the
-// bindings verdict of this system.
+// projection id, with the armed OSStatus. The natural verdict of the groups is masked
+// so that every id stays reachable even where a group fails naturally on this
+// system. Limit: a plain in-memory access object is projected, not the intended one.
 func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
-	natural := runProjectFault(0, 0, false)
-	t.Logf("natural projection run: completed=%v stage=%d status=%d", natural.Completed, natural.Stage, natural.OSStatus)
-	assertReportable(t, "natural projection", natural)
+	natural := runProjectFault(0, 0, false, true)
 	if !natural.Completed {
-		t.Skipf("a plain in-memory access object cannot be projected here (stage %d status %d)", natural.Stage, natural.OSStatus)
+		t.Fatalf("a masked projection of a plain access must complete: %+v", natural)
 	}
 	for generic := 70; generic <= 74; generic++ {
 		for _, after := range []bool{false, true} {
@@ -119,13 +117,63 @@ func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
 			if after {
 				want = 50 + (generic - 70)
 			}
-			got := runProjectFault(generic, injected(generic), after)
+			got := runProjectFault(generic, injected(generic), after, true)
 			assertReportable(t, "projection", got)
 			if got.Stage != want || got.OSStatus != injected(generic) || got.Completed || got.Result != injected(generic) {
 				t.Fatalf("armed projection %d after=%v: got stage %d status %d completed %v result %d, want stage %d status %d",
 					generic, after, got.Stage, got.OSStatus, got.Completed, got.Result, want, injected(generic))
 			}
 		}
+	}
+}
+
+// Claim: the unmasked projection of a plain access either completes with no record or
+// fails with a BEFORE-family stage and a nonzero status; a failure without a record
+// fails this test. The verdict is logged: it is the natural diagnosis of this system.
+func TestNaturalProjectionRunReportsConsistently(t *testing.T) {
+	run := runProjectFault(0, 0, false, false)
+	t.Logf("natural projection run: completed=%v stage=%d status=%d", run.Completed, run.Stage, run.OSStatus)
+	assertReportable(t, "natural projection", run)
+	if run.Completed {
+		if run.Stage != 0 || run.Result != 0 {
+			t.Fatalf("a completed run recorded a failure: %+v", run)
+		}
+		return
+	}
+	if run.Stage < 30 || run.Stage > 34 || run.OSStatus == 0 || run.Result == 0 {
+		t.Fatalf("a failed projection must name a BEFORE group with a status: %+v", run)
+	}
+}
+
+// Claim: the first half of the create call, run unarmed (symbols, intended access,
+// BEFORE projection), either completes with no record or fails with a reported stage
+// and a nonzero status. This reproduces, in process and without signing, the point
+// where the create call refused on a real system; the verdict is logged.
+func TestNaturalBeforeProjectionOfTheIntendedAccess(t *testing.T) {
+	run := runBeforeNatural()
+	t.Logf("natural create front half: completed=%v stage=%d status=%d result=%d", run.Completed, run.Stage, run.OSStatus, run.Result)
+	assertReportable(t, "natural before", run)
+	if run.Completed {
+		if run.Stage != 0 || run.Result != 0 {
+			t.Fatalf("a completed run recorded a failure: %+v", run)
+		}
+		return
+	}
+	if run.Stage == 0 || run.OSStatus == 0 || run.Result == 0 {
+		t.Fatalf("the run failed without a recorded stage and status: %+v", run)
+	}
+}
+
+// Claim: the probe describes the inputs of the authorizations group on this system.
+// It logs how many ACLs and names there are and whether the UTF-8 conversion check or
+// the projection's own text writer rejects any name (with the first rejected name and
+// lengths). Its only assertion is that it examined at least one name, so a probe that
+// sees nothing cannot pass for an answer.
+func TestProbeAuthorizationsDescribesTheProjectionInput(t *testing.T) {
+	probe := probeAuthorizations()
+	t.Logf("authorizations probe: %+v", probe)
+	if probe.Status != 0 || probe.Counts[0] == 0 || probe.Counts[2] == 0 {
+		t.Fatalf("the probe saw no authorization names: %+v", probe)
 	}
 }
 

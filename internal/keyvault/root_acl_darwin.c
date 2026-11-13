@@ -61,9 +61,14 @@ static _Thread_local OSStatus kvqFaultStatus;
 // A test may ignore the natural verdict of the release-requirement check so that
 // the stages after it stay reachable on a system where that check itself fails.
 static _Thread_local int kvqMaskRequirement;
+// A test may likewise ignore the natural verdict of the projection groups, so that
+// the BEFORE and AFTER ids can be armed on a system where a group fails naturally.
+static _Thread_local int kvqMaskProjection;
+#define KVQ_NATURAL_MASKED() (kvqMaskProjection)
 #define KVQ_FAULT(stage, var) do { if (kvqFaultStage == (stage)) (var) = kvqFaultStatus; } while (0)
 #else
 #define KVQ_FAULT(stage, var) do { } while (0)
+#define KVQ_NATURAL_MASKED() 0
 #endif
 
 // Runs one step while nothing has failed and records its failure at stage. An armed
@@ -91,7 +96,7 @@ static _Thread_local int kvqMaskRequirement;
     OSStatus kvqForced = errSecSuccess; \
     KVQ_FAULT((stage), kvqForced); \
     if (kvqForced != errSecSuccess && !failGroup) { failGroup = (stage); failStatus = kvqForced; ok = 0; } \
-    else if (!ok && !failGroup) { failGroup = (stage); failStatus = errSecDecode; } } while (0)
+    else if (!ok && !failGroup) { if (KVQ_NATURAL_MASKED()) ok = 1; else { failGroup = (stage); failStatus = errSecDecode; } } } while (0)
 
 
 int KVQResolve(KVQSymbols *out) {
@@ -598,8 +603,9 @@ int KVQFaultRunIntended(int armStage, int armStatus, int maskRequirement, int *s
 // one projection stage armed (a KVQ_STAGE_PROJECT_* id; with armAfter only for the
 // second projection). The recorded failure is retagged exactly as the create call
 // does. No code check, no Keychain, no intended access.
-int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int *stage, int *status, int *completed) {
+int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int maskNatural, int *stage, int *status, int *completed) {
     KVQDiagReset();
+    kvqMaskProjection = maskNatural;
     kvqFaultStage = 0;
     kvqFaultStatus = errSecSuccess;
     *stage = 0; *status = 0; *completed = 0;
@@ -625,10 +631,86 @@ int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int *stage, in
     if (access) CFRelease(access);
     kvqFaultStage = 0;
     kvqFaultStatus = errSecSuccess;
+    kvqMaskProjection = 0;
     OSStatus recorded = errSecSuccess; int recordedStage = 0;
     if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
     *completed = result == errSecSuccess;
     return (int)result;
+}
+
+// Runs the first half of the create call exactly as it runs there: symbol resolution,
+// the intended access object, and its BEFORE projection, all natural (nothing armed).
+// This reproduces the point where the create call refused on a real system.
+int KVQFaultRunBefore(int *stage, int *status, int *completed) {
+    KVQDiagReset();
+    kvqFaultStage = 0;
+    kvqFaultStatus = errSecSuccess;
+    *stage = 0; *status = 0; *completed = 0;
+    KVQSymbols symbols = {0};
+    OSStatus result = KVQResolve(&symbols) ? errSecSuccess : errSecUnimplemented;
+    SecAccessRef access = NULL;
+    CFDataRef frame = NULL;
+    if (result == errSecSuccess) result = KVQIntendedAccess(symbols, "Root ACL fault test", "keyvault-root-acl-fault-test:/vault", &access);
+    if (result == errSecSuccess) {
+        result = KVQProject(access, symbols, &frame);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (frame) CFRelease(frame);
+    if (access) CFRelease(access);
+    OSStatus recorded = errSecSuccess; int recordedStage = 0;
+    if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    *completed = result == errSecSuccess;
+    return (int)result;
+}
+
+// Describes the inputs of the authorizations group of the projection on a plain
+// in-memory access object: for every ACL, whether its names are readable, how each
+// name converts to UTF-8, and whether the projection's own text writer accepts it.
+// out: [0] ACL count, [1] ACLs with unreadable names, [2] names examined, [3] names the
+// UTF-8 conversion count check rejects, [4] names the projection's text writer
+// rejects, [5] ACLs whose authorization numbers cannot be read, [6] length of the
+// first rejected name in characters, [7] characters CFStringGetBytes reported for it.
+// failName receives the first rejected name (authorization names are public constants).
+int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize) {
+    for (int i = 0; i < 8; i++) out[i] = 0;
+    if (failNameSize > 0) failName[0] = 0;
+    SecAccessRef access = NULL;
+    OSStatus status = SecAccessCreate(CFSTR("Root ACL fault test"), NULL, &access);
+    if (status != errSecSuccess || !access) return status != errSecSuccess ? (int)status : (int)errSecDecode;
+    CFArrayRef list = NULL;
+    status = SecAccessCopyACLList(access, &list);
+    CFMutableDataRef scratch = CFDataCreateMutable(NULL, 0);
+    if (status == errSecSuccess && list && scratch) {
+        out[0] = (int)CFArrayGetCount(list);
+        for (CFIndex i = 0; i < CFArrayGetCount(list); i++) {
+            SecACLRef acl = (SecACLRef)CFArrayGetValueAtIndex(list, i);
+            CSSM_ACL_AUTHORIZATION_TAG numbers[64]; uint32 numberCount = 64;
+            if (SecACLGetAuthorizations(acl, numbers, &numberCount) != errSecSuccess || numberCount > 64) out[5]++;
+            CFArrayRef names = SecACLCopyAuthorizations(acl);
+            if (!names || CFGetTypeID(names) != CFArrayGetTypeID() || CFArrayGetCount(names) > 64) { out[1]++; if (names) CFRelease(names); continue; }
+            for (CFIndex j = 0; j < CFArrayGetCount(names); j++) {
+                CFTypeRef name = CFArrayGetValueAtIndex(names, j);
+                if (!name || CFGetTypeID(name) != CFStringGetTypeID()) { out[1]++; continue; }
+                out[2]++;
+                CFIndex characters = CFStringGetLength((CFStringRef)name), needed = 0;
+                CFIndex converted = CFStringGetBytes((CFStringRef)name, CFRangeMake(0, characters), kCFStringEncodingUTF8, 0, false, NULL, 0, &needed);
+                int countRejected = converted != characters;
+                int textRejected = !KVQText(scratch, (CFStringRef)name, 1024);
+                if (countRejected) out[3]++;
+                if (textRejected) out[4]++;
+                if ((countRejected || textRejected) && out[6] == 0) {
+                    out[6] = (int)characters;
+                    out[7] = (int)converted;
+                    if (failNameSize > 0) (void)CFStringGetCString((CFStringRef)name, failName, failNameSize, kCFStringEncodingUTF8);
+                }
+            }
+            CFRelease(names);
+        }
+    }
+    if (scratch) CFRelease(scratch);
+    if (list) CFRelease(list);
+    CFRelease(access);
+    return (int)status;
 }
 
 // Runs only the login-keychain step with one fault armed (0 = a natural run).

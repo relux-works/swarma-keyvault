@@ -5,7 +5,9 @@ package keyvault
 /*
 #cgo CFLAGS: -DKVQ_FAULT_INJECTION
 int KVQFaultRunIntended(int armStage, int armStatus, int maskRequirement, int *stage, int *status, int *completed);
-int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int *stage, int *status, int *completed);
+int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int maskNatural, int *stage, int *status, int *completed);
+int KVQFaultRunBefore(int *stage, int *status, int *completed);
+int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize);
 int KVQFaultRunLogin(int armStage, int armStatus, int *stage, int *status, int *completed);
 int KVQFaultRunSelf(int armStage, int armStatus, int *stage, int *status);
 void KVQFaultNoteTwice(int firstStage, int firstStatus, int secondStage, int secondStatus, int *stage, int *status);
@@ -39,15 +41,50 @@ func runIntendedFault(arm, status int, mask bool) faultRun {
 
 // runProjectFault projects a plain in-memory access object as BEFORE and then as
 // AFTER with one projection stage armed (a projection id; with after, only for the
-// second projection).
-func runProjectFault(arm, status int, after bool) faultRun {
+// second projection). With mask the natural verdict of the projection groups is
+// ignored, so every id stays reachable on a system where a group fails naturally.
+func runProjectFault(arm, status int, after, mask bool) faultRun {
 	var stage, osStatus, completed C.int
-	flag := C.int(0)
+	afterFlag, maskFlag := C.int(0), C.int(0)
 	if after {
-		flag = 1
+		afterFlag = 1
 	}
-	result := C.KVQFaultRunProject(C.int(arm), C.int(status), flag, &stage, &osStatus, &completed)
+	if mask {
+		maskFlag = 1
+	}
+	result := C.KVQFaultRunProject(C.int(arm), C.int(status), afterFlag, maskFlag, &stage, &osStatus, &completed)
 	return faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: completed != 0}
+}
+
+// runBeforeNatural runs the first half of the create call, unarmed: symbol
+// resolution, the intended access object and its BEFORE projection.
+func runBeforeNatural() faultRun {
+	var stage, osStatus, completed C.int
+	result := C.KVQFaultRunBefore(&stage, &osStatus, &completed)
+	return faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: completed != 0}
+}
+
+// authorizationsProbe describes the inputs of the projection's authorizations group.
+// Counts: [0] ACLs, [1] ACLs or names that are unreadable, [2] names examined, [3] names
+// the UTF-8 conversion count check rejects, [4] names the projection's own text writer
+// rejects, [5] ACLs whose authorization numbers cannot be read, [6] characters of the
+// first rejected name, [7] characters CFStringGetBytes reported for it. Name is that
+// first rejected name (authorization names are public constants).
+type authorizationsProbe struct {
+	Counts [8]int
+	Name   string
+	Status int
+}
+
+func probeAuthorizations() authorizationsProbe {
+	var out [8]C.int
+	name := make([]C.char, 128)
+	status := C.KVQFaultProbeAuthorizations(&out[0], &name[0], C.int(len(name)))
+	var counts [8]int
+	for i := range out {
+		counts[i] = int(out[i])
+	}
+	return authorizationsProbe{Counts: counts, Name: C.GoString(&name[0]), Status: int(status)}
 }
 
 // runLoginFault runs only the login-keychain step with one stage armed.
