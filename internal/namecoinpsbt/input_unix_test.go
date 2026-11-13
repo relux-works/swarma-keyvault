@@ -19,6 +19,59 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
 )
 
+// The owned-byte seam preserves the existing file preparation's candidate and
+// freezes caller buffers; changed source files after public admission are not
+// reread. A zero public preparation and supplied A/B reveal bytes refuse.
+func TestOwnedSigningInputSeam(t *testing.T) {
+	for _, slot := range []string{"A", "B", "C", "D"} {
+		files, now, _ := signingFilesFixture(t, "two-stage", slot)
+		original, err := PrepareSigningFiles(files, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		public, err := PrepareInitializationFiles(InitializationFiles{Group: files.Group, Account: files.Account, ProfilePath: files.ProfilePath, ProfileSHA256: files.ProfileSHA256, AccountPinPath: files.AccountPinPath})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := original.RequestBytes()
+		var reveal []byte
+		if files.RevealPinPath != "" {
+			reveal = public.NativeSelection().Selection.RevealValuesPin
+		}
+		if err := os.WriteFile(files.ProfilePath, []byte("changed after freeze"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(files.AccountPinPath, []byte("changed after freeze"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		p, err := PrepareSigningInput(public, request, reveal, now)
+		if err != nil || p.Attempt().Commitment() != original.Attempt().Commitment() || !bytes.Equal(p.RequestBytes(), original.RequestBytes()) {
+			t.Fatal("owned input differs", err)
+		}
+		request[0] ^= 1
+		if len(reveal) > 0 {
+			reveal[0] ^= 1
+		}
+		if !bytes.Equal(p.RequestBytes(), original.RequestBytes()) || p.Attempt().ReviewDigest() != original.Attempt().ReviewDigest() {
+			t.Fatal("borrowed request/reveal")
+		}
+		requireCode(t, func() error {
+			_, err := PrepareSigningInput(PreparedInitialization{}, original.RequestBytes(), nil, now)
+			return err
+		}(), namecoinwire.PolicyRefused)
+		requireCode(t, func() error { _, err := PrepareSigningInput(public, nil, nil, now); return err }(), namecoinwire.InvalidRequest)
+		if slot == "A" || slot == "B" {
+			for _, supplied := range [][]byte{make([]byte, 0), {1}} {
+				_, err := PrepareSigningInput(public, original.RequestBytes(), supplied, now)
+				requireCode(t, err, namecoinwire.IntentMismatch)
+			}
+		} else {
+			_, err := PrepareSigningInput(public, original.RequestBytes(), nil, now)
+			requireCode(t, err, namecoinwire.IntentMismatch)
+		}
+	}
+}
+
 func signingFilesFixture(t *testing.T, mode, slot string) (SigningFiles, time.Time, string) {
 	t.Helper()
 	// Use the OS account home: writable ancestors such as /tmp are deliberately

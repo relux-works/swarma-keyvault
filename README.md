@@ -17,6 +17,13 @@ migration or installed binary replacement.
 
 ## Tools and local build
 
+The [offline registration interoperability suite](interop/namecoin-registration/README.md)
+checks the independently built identity CLI against public Namecoin wire, review
+frame and PSBT contracts. Run
+`KEYVAULT_IDENTITY_CLI=/out/swarma-identity go test -p 1 -count=1 -v ./interop/namecoin-registration`
+inside the documented private offline sandbox; keep binaries and captures in
+`.temp/`. Without the CLI selector, only the frozen public fixture lane runs.
+
 `tools/verifiertoolchain` is the stdlib-only hosted preflight utility. Run
 `go run ./tools/verifiertoolchain -modfile go.mod` to validate the module grammar
 with Go's own parser and require the running compiler's exact pinned version;
