@@ -269,8 +269,9 @@ func (*rootGrantsReadFailure46) Read([]byte) (int, error) {
 }
 func (*rootGrantsReadFailure46) Close() error { return errors.New("PUBLIC_TEST_PRIVATE_SENTINEL") }
 
-// Claim: every ROOT1..20 maps to the exact accepted fixed class, including
-// input_canceled20 versus canceled14/timeout15. Refusals never yield a plan.
+// Claim: every attach ROOT1..20 maps to the exact accepted fixed class,
+// including input_canceled20 versus canceled14/timeout15. Refusals never yield
+// a plan. The grant-sign helper's extra statuses have a separate decoder test.
 // Limit: framed fixture classes, not actual native/owner refusals.
 func TestRootGrantsHelper46FixedCodes(t *testing.T) {
 	request, _, _, _ := rootGrantsSealedFixture46(t, "keyvault-recovery/1")
@@ -288,6 +289,36 @@ func TestRootGrantsHelper46FixedCodes(t *testing.T) {
 		if failure.public.Code != name || failure.public.Outcome != "not_applied" {
 			t.Fatal("wrong attach refusal")
 		}
+	}
+}
+
+// Claim: only the grant-sign helper admits its added stored-vault read statuses;
+// attach still rejects 21, and both reject values beyond the fixed table.
+// Limit: frame decoding and public refusal mapping, not a helper process.
+func TestRootGrantsGrantV3ExtendedReadRefusals(t *testing.T) {
+	expected := []string{"code_not_admitted", "acl_refused", "lock_unavailable", "inventory_changed"}
+	for offset, name := range expected {
+		code := uint32(offset + 21)
+		raw := rootGrantsFrame46(1, []byte{0, 0, 0, byte(code)})
+		if legacy := rootGrantsReadFrame(bytes.NewReader(raw)); legacy.err == nil {
+			clear(legacy.payload)
+			t.Fatalf("attach decoder admitted grant-sign status %d", code)
+		}
+		frame := rootGrantsReadGrantV3Frame(bytes.NewReader(raw))
+		if frame.err != nil || frame.status != 1 || len(frame.payload) != 4 {
+			clear(frame.payload)
+			t.Fatalf("grant-sign decoder refused status %d", code)
+		}
+		got := rootGrantsGrantV3RefusalCode(rootGrantsHelperRefusal(code))
+		clear(frame.payload)
+		if got != name {
+			t.Errorf("grant-sign status %d maps to %s, want %s", code, got, name)
+		}
+	}
+	tooNew := rootGrantsReadGrantV3Frame(bytes.NewReader(rootGrantsFrame46(1, []byte{0, 0, 0, 25})))
+	if tooNew.err == nil {
+		clear(tooNew.payload)
+		t.Fatal("grant-sign decoder admitted status 25")
 	}
 }
 

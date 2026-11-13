@@ -252,16 +252,19 @@ struct RootGrantsReviewTests {
         rootRefusal(.bindingMismatch) { _ = try review.confirmStore("STORE ROOT GRANTS", currentRequest: rootFixtureV2, currentPreparation: response + Data([32])) }
     }
 
-    // Each ROOT code has its own exact mapping; unrelated/unknown values close
-    // to16. Numeric20 is input_canceled, not a Namecoin journal error.
+    // Archive statuses remain ROOT1..20; helper read refusals use the separate
+    // extended table. Numeric20 is input_canceled, not a Namecoin journal error.
     @Test func closedRootStatuses() throws {
         let codes = ["success", "invalid_arguments", "terminal_required", "invalid_word_number", "invalid_word_count", "invalid_mnemonic", "invalid_checksum", "invalid_derivation", "retained_record_mismatch", "public_pin_mismatch", "operation_unavailable", "wrapping_policy_refused", "invalid_envelope", "binding_mismatch", "canceled", "timeout", "private_protocol_error", "limit_exceeded", "unsupported_version", "unsupported_operation", "input_canceled"]
         for (raw, code) in codes.enumerated() { #expect(RootGrantsStatus.closed(Int32(raw)).code == code) }
+        for (offset, code) in ["code_not_admitted", "acl_refused", "lock_unavailable", "inventory_changed"].enumerated() {
+            #expect(RootGrantsStatus.helperClosed(Int32(offset + 21)).code == code)
+        }
         #expect(RootGrantsReviewError.fromStatus(0) == nil)
         #expect(RootGrantsReviewError.fromStatus(14)?.status == .canceled)
         #expect(RootGrantsReviewError.fromStatus(15)?.status == .timeout)
         #expect(RootGrantsReviewError.fromStatus(20)?.status == .inputCanceled)
-        for raw in [Int32(-1), Int32(21), Int32.max] { #expect(RootGrantsReviewError.fromStatus(raw)?.status == .privateProtocolError) }
+        for raw in [Int32(-1), Int32(21), Int32(25), Int32.max] { #expect(RootGrantsReviewError.fromStatus(raw)?.status == .privateProtocolError) }
     }
 
     // All thirteen pair fields are required, ordered and typed; no alias or extra

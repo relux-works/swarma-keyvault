@@ -1042,6 +1042,9 @@ if CommandLine.arguments.dropFirst().first == "--root-grants-qualification-read"
 if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-private-v2"] {
     exit(rootGrantsPrivate())
 }
+if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-sign-grant-v3"] {
+    exit(rootGrantsSignGrantV3())
+}
 if CommandLine.arguments == [CommandLine.arguments[0], "--recovery-private"] {
     exit(recoveryPrivate())
 }

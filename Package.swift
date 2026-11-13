@@ -27,6 +27,7 @@ let coreSources = [
     "RootGrantsReview.swift",
     "RootGrantsArchiveBridge.swift",
     "RootGrantsPrivate.swift",
+    "RootGrantsSignV3.swift",
     "RootGrantsQualification.swift",
 ]
 let testSources = [
@@ -39,6 +40,7 @@ let testSources = [
     "RootGrantsReviewTests.swift",
     "RootGrantsArchiveBridgeTests.swift",
     "RootGrantsPrivateTests.swift",
+    "RootGrantsSignV3Tests.swift",
     "RootGrantsQualificationTests.swift",
 ]
 

@@ -108,9 +108,10 @@ func rootGrantsCompletionACK(request, sealed []byte) [36]byte {
 	return ack
 }
 
-// The fixed code numbers are ROOT ABI51, never Namecoin's enum or raw stderr.
+// The fixed codes are ROOT ABI52 for grant signing; attach remains bounded to
+// ABI51 statuses 1..20. Neither uses Namecoin's enum or raw stderr.
 func rootGrantsHelperRefusal(code uint32) error {
-	names := [...]string{"", "invalid_arguments", "terminal_required", "invalid_word_number", "invalid_word_count", "invalid_mnemonic", "invalid_checksum", "invalid_derivation", "retained_record_mismatch", "public_pin_mismatch", "operation_unavailable", "wrapping_policy_refused", "invalid_envelope", "binding_mismatch", "canceled", "timeout", "private_protocol_error", "limit_exceeded", "unsupported_version", "unsupported_operation", "input_canceled"}
+	names := [...]string{"", "invalid_arguments", "terminal_required", "invalid_word_number", "invalid_word_count", "invalid_mnemonic", "invalid_checksum", "invalid_derivation", "retained_record_mismatch", "public_pin_mismatch", "operation_unavailable", "wrapping_policy_refused", "invalid_envelope", "binding_mismatch", "canceled", "timeout", "private_protocol_error", "limit_exceeded", "unsupported_version", "unsupported_operation", "input_canceled", "code_not_admitted", "acl_refused", "lock_unavailable", "inventory_changed"}
 	if code == 0 || code >= uint32(len(names)) {
 		return recoveryRefuse("private_protocol_error")
 	}
@@ -124,6 +125,16 @@ type rootGrantsHelperFrame struct {
 }
 
 func rootGrantsReadFrame(r io.Reader) rootGrantsHelperFrame {
+	return rootGrantsReadFrameThrough(r, 20)
+}
+
+// The grant-sign helper adds only the stored-vault read refusals 21..24. Keep
+// the attach helper's existing 1..20 status domain unchanged.
+func rootGrantsReadGrantV3Frame(r io.Reader) rootGrantsHelperFrame {
+	return rootGrantsReadFrameThrough(r, 24)
+}
+
+func rootGrantsReadFrameThrough(r io.Reader, maxStatus uint32) rootGrantsHelperFrame {
 	var header [5]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}
@@ -139,7 +150,7 @@ func rootGrantsReadFrame(r io.Reader) rootGrantsHelperFrame {
 	}
 	if header[0] == 1 {
 		code := binary.BigEndian.Uint32(payload)
-		if code == 0 || code > 20 {
+		if code == 0 || code > maxStatus {
 			clear(payload)
 			return rootGrantsHelperFrame{err: recoveryRefuse("private_protocol_error")}
 		}

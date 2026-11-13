@@ -436,3 +436,62 @@ func kv_rg_close_v1(handle C.uint64_t) (verdict C.int32_t) {
 	}()
 	return C.int32_t(rootHandles.close(uint64(handle)))
 }
+
+//export kv_rg_sign_grant_v3_v1
+func kv_rg_sign_grant_v3_v1(request *C.uchar, requestSize C.size_t, plaintext *C.uchar, plaintextSize C.size_t,
+	out *C.uchar, capacity C.size_t, written *C.size_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			if written != nil {
+				*written = 0
+			}
+			verdict = 16
+		}
+	}()
+	if written == nil {
+		return 1
+	}
+	*written = 0
+	if request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit ||
+		plaintext == nil || plaintextSize != 68 || out == nil || capacity < 64 {
+		return 1
+	}
+	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
+	privateInput := C.GoBytes(unsafe.Pointer(plaintext), 68)
+	defer clear(publicInput)
+	defer clear(privateInput)
+	signature, err := keyvault.RootGrantsGrantV3SignFromHelper(publicInput, privateInput)
+	defer clear(signature)
+	if err != nil || len(signature) != 64 {
+		if err != nil {
+			return C.int32_t(keyvault.RootGrantsGrantV3HelperStatus(err))
+		}
+		return 16
+	}
+	destination := unsafe.Slice(out, 64)
+	for i, value := range signature {
+		destination[i] = C.uchar(value)
+	}
+	*written = 64
+	return 0
+}
+
+//export kv_rg_sign_grant_v3_check_v1
+func kv_rg_sign_grant_v3_check_v1(request *C.uchar, requestSize C.size_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	if request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit {
+		return 1
+	}
+	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
+	defer clear(publicInput)
+	if err := keyvault.RootGrantsGrantV3CheckForHelper(publicInput); err != nil {
+		return C.int32_t(keyvault.RootGrantsGrantV3HelperStatus(err))
+	}
+	return 0
+}

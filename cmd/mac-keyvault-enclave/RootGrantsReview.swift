@@ -13,8 +13,18 @@ enum RootGrantsStatus: Int32 {
     case invalidEnvelope = 12, bindingMismatch = 13, canceled = 14, timeout = 15
     case privateProtocolError = 16, limitExceeded = 17, unsupportedVersion = 18
     case unsupportedOperation = 19, inputCanceled = 20
+    case codeNotAdmitted = 21, aclRefused = 22, lockUnavailable = 23, inventoryChanged = 24
 
-    static func closed(_ raw: Int32) -> Self { Self(rawValue: raw) ?? .privateProtocolError }
+    // The C archive still emits only ROOT1..20. Private helper frames have a
+    // separate extended table so a future C status cannot acquire a new meaning.
+    static func closed(_ raw: Int32) -> Self {
+        guard (0...20).contains(raw) else { return .privateProtocolError }
+        return Self(rawValue: raw) ?? .privateProtocolError
+    }
+    static func helperClosed(_ raw: Int32) -> Self {
+        guard (1...24).contains(raw) else { return .privateProtocolError }
+        return Self(rawValue: raw) ?? .privateProtocolError
+    }
     var code: String {
         switch self {
         case .success: return "success"
@@ -38,6 +48,10 @@ enum RootGrantsStatus: Int32 {
         case .unsupportedVersion: return "unsupported_version"
         case .unsupportedOperation: return "unsupported_operation"
         case .inputCanceled: return "input_canceled"
+        case .codeNotAdmitted: return "code_not_admitted"
+        case .aclRefused: return "acl_refused"
+        case .lockUnavailable: return "lock_unavailable"
+        case .inventoryChanged: return "inventory_changed"
         }
     }
 }
