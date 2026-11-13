@@ -4,6 +4,8 @@ package keyvault
 
 import (
 	"bytes"
+	"encoding/json"
+	"sort"
 	"testing"
 
 	"github.com/relux-works/swarma-keyvault/internal/rootqualification"
@@ -173,26 +175,74 @@ func TestProjectionRefusesAListElementThatIsNotAnACL(t *testing.T) {
 	}
 }
 
-// Claim: the projection output is byte-stable. The same access object projected twice
-// gives the same frame, and so do two separately built intended access objects; every
-// frame is a valid KVQP1 projection that the Go decoder accepts and that lists at least
-// one ACL. Limit: one machine and one run; it shows determinism, not that the observed
-// ACL forms are admissible.
-func TestProjectionIsByteStable(t *testing.T) {
-	for _, fresh := range []bool{false, true} {
-		first, second, run := projectTwice(fresh)
-		if !run.Completed || len(first) == 0 || len(second) == 0 {
-			t.Fatalf("fresh=%v: the projections must complete: %+v lengths %d %d", fresh, run, len(first), len(second))
-		}
-		if !bytes.Equal(first, second) {
-			t.Fatalf("fresh=%v: two projections of the same input differ (%d and %d bytes)", fresh, len(first), len(second))
-		}
-		projection, err := rootqualification.DecodeNativeProjection(first)
+// Claim: the projection output is deterministic. The same access object projected twice
+// gives byte-identical frames. Two separately built intended access objects give frames
+// with the same owner and the same set of ACL projections; their ACL order and bytes
+// are logged because the system does not promise an order. Every frame is a valid KVQP1
+// projection that the Go decoder accepts and that lists at least one ACL. Limit: one
+// machine; it shows determinism of content, not that the observed ACL forms are
+// admissible, and any later comparison of observed ACLs must ignore their order.
+func TestProjectionIsDeterministic(t *testing.T) {
+	decode := func(raw []byte) rootqualification.Projection {
+		t.Helper()
+		projection, err := rootqualification.DecodeNativeProjection(raw)
 		if err != nil || len(projection.ACLs) == 0 {
-			t.Fatalf("fresh=%v: the frame is not a valid KVQP1 projection (%v, %d ACLs)", fresh, err, len(projection.ACLs))
+			t.Fatalf("the frame is not a valid KVQP1 projection (%v, %d ACLs)", err, len(projection.ACLs))
 		}
-		t.Logf("fresh=%v: %d bytes, %d ACLs, owner %d/%d type %d, identical twice", fresh, len(first), len(projection.ACLs), projection.OwnerUID, projection.OwnerGID, projection.OwnerType)
+		return projection
 	}
+	canon := func(p rootqualification.Projection) []string {
+		out := make([]string, 0, len(p.ACLs))
+		for _, acl := range p.ACLs {
+			raw, err := json.Marshal(acl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, string(raw))
+		}
+		return out
+	}
+	same, again, run := projectTwice(false)
+	if !run.Completed || len(same) == 0 || !bytes.Equal(same, again) {
+		t.Fatalf("the same object projected twice must give identical frames: %+v lengths %d %d", run, len(same), len(again))
+	}
+	first := decode(same)
+	t.Logf("same object: %d bytes, %d ACLs, owner %d/%d type %d, identical twice", len(same), len(first.ACLs), first.OwnerUID, first.OwnerGID, first.OwnerType)
+
+	one, two, run := projectTwice(true)
+	if !run.Completed || len(one) == 0 || len(two) == 0 {
+		t.Fatalf("two separately built objects must project: %+v", run)
+	}
+	a, b := decode(one), decode(two)
+	if a.OwnerUID != b.OwnerUID || a.OwnerGID != b.OwnerGID || a.OwnerType != b.OwnerType {
+		t.Fatalf("the owner differs between two builds: %d/%d/%d versus %d/%d/%d", a.OwnerUID, a.OwnerGID, a.OwnerType, b.OwnerUID, b.OwnerGID, b.OwnerType)
+	}
+	ordered := canon(a)
+	unordered := canon(b)
+	inOrder := true
+	for i := range ordered {
+		if i >= len(unordered) || ordered[i] != unordered[i] {
+			inOrder = false
+		}
+	}
+	sort.Strings(ordered)
+	sort.Strings(unordered)
+	if len(ordered) != len(unordered) {
+		t.Fatalf("two builds give %d and %d ACLs", len(ordered), len(unordered))
+	}
+	for i := range ordered {
+		if ordered[i] != unordered[i] {
+			t.Fatalf("the set of ACL projections differs between two builds at sorted position %d:\n%s\n%s", i, ordered[i], unordered[i])
+		}
+	}
+	firstDifference := -1
+	for i := 0; i < len(one) && i < len(two); i++ {
+		if one[i] != two[i] {
+			firstDifference = i
+			break
+		}
+	}
+	t.Logf("two builds: %d and %d bytes, byte-identical=%v, same ACLs in the same order=%v, first differing byte=%d", len(one), len(two), bytes.Equal(one, two), inOrder, firstDifference)
 }
 
 // Claim: the probe describes the inputs of the authorizations group on this system.
