@@ -323,6 +323,11 @@ func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTermi
 	if r.GroupID != q.ExpectedGroupID {
 		return zero, recoveryRefuse("public_pin_mismatch")
 	}
+	// An attached pair is never deleted from here: no cascade, no half delete. The
+	// refusal precedes the owner prompt and every lock effect.
+	if err := m.refuseAttached(r); err != nil {
+		return zero, err
+	}
 	before, _ := json.Marshal(r)
 	// Confirmation precedes a creating file lock. The exact public snapshot is
 	// compared again under that lock; changed records are never auto-selected.
@@ -342,8 +347,31 @@ func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTermi
 	if !bytes.Equal(before, after) {
 		return zero, recoveryRefuse("public_pin_mismatch")
 	}
+	// An attachment can appear while the owner confirms: check again under the lock.
+	if err := m.refuseAttached(current); err != nil {
+		return zero, err
+	}
 	if err := m.backend.RecoveryDelete(r); err != nil {
 		return r, recoveryMutationError("delete", r, err)
 	}
 	return r, nil
+}
+
+// refuseAttached refuses a pair that a stored root-grants item references
+// (attachment_exists, definite, no effect). An inventory that cannot be read
+// refuses too (inventory_changed): "no attachment" must be proven, not assumed.
+func (m *RecoveryManager) refuseAttached(r RecoveryRecord) error {
+	inventory, ok := m.backend.(RootGrantsAttachmentInventory)
+	if !ok {
+		return nil
+	}
+	attached, err := inventory.RootGrantsAttached(r)
+	if err != nil {
+		return recoveryRefuse("inventory_changed")
+	}
+	if attached {
+		return &Refusal{Code: "attachment_exists", Message: "Recovery delete refused: a root-grants item is attached to this pair",
+			Hint: "the attached root is never deleted or orphaned from here; keep both items"}
+	}
+	return nil
 }
