@@ -19,7 +19,9 @@ func (f *recoveryCLIOperations) Create(keyvault.RecoveryRequest, keyvault.Recove
 }
 func (f *recoveryCLIOperations) Describe(service string, version int) (keyvault.RecoveryRecord, error) {
 	f.calls = append(f.calls, "public")
-	return keyvault.RecoveryRecord{Service: service, Version: version}, nil
+	// A valid public record, as the real manager only ever returns one: the
+	// public receipt now refuses a record that has no pair metadata digest.
+	return recoveryValidPublicRecord(service, version), nil
 }
 func (f *recoveryCLIOperations) Plan(keyvault.RecoveryRequest) (keyvault.RecoveryPlan, error) {
 	f.calls = append(f.calls, "plan")

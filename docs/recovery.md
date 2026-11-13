@@ -93,6 +93,15 @@ mac-keyvault nostr pub example/nostr --version 2 --format npub
 mac-keyvault --json recovery restore --nostr-identity restored --namecoin-identity restored-wallet --version 1 --nostr-version 2 --namecoin-version 1 --expected-npub NPUB --expected-namecoin-xpub XPUB --expected-origin '[fingerprint/84h/7h/0h]'
 ```
 
+`recovery pub` is a read-only public lookup: no words, no owner terminal and no
+Touch ID. Besides the public keys it prints the group id (`group_id`) and the
+pair metadata digest (`pair_metadata_sha256`, member of the JSON `result`): the
+lowercase hex SHA-256 of the exact canonical retained public record, computed by
+the function the root-grants attach uses, so the printed value is the
+`--expected-pair-metadata-sha256` pin that `recovery attach-root-grants`
+accepts for that pair. A missing, ambiguous or invalid record prints neither.
+Earlier output lines and JSON members are unchanged.
+
 The explicit legacy `--service S` alias selects A=B=S. It cannot be mixed
 with either purpose identity flag. Missing identities, mixed forms, repeated
 security parameters and malformed generations refuse before custody is

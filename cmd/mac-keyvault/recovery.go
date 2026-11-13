@@ -181,7 +181,23 @@ func runRecovery(args []string, out output) int {
 	if op != "pub" {
 		return recoveryMutationReceipt(out, op, r, r, text, nil)
 	}
-	return recoveryPublicReceipt(out, r, text)
+	// The retained public pins the root-grants attach needs: the group id and the
+	// digest of the exact canonical pair metadata, from the attach's own function.
+	// A record that function refuses is not described at all.
+	digest, err := r.PairMetadataSHA256()
+	if err != nil {
+		return recoveryBoundedFailure(out, err)
+	}
+	text += fmt.Sprintf("group_id: %s\npair_metadata_sha256: %s\n", r.GroupID, digest)
+	return recoveryPublicReceipt(out, recoveryPublicResult{RecoveryRecord: r, PairDigest: digest}, text)
+}
+
+// recoveryPublicResult is the JSON result of `recovery pub`: every member of the
+// public record exactly as before, plus the pair metadata digest. The digest is
+// not a member of RecoveryRecord, whose canonical bytes it is computed over.
+type recoveryPublicResult struct {
+	keyvault.RecoveryRecord
+	PairDigest string `json:"pair_metadata_sha256"`
 }
 
 func recoveryPublicReceipt(out output, result any, text string) int {
