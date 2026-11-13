@@ -10,7 +10,7 @@ import Security
 // Finite PUBLIC/SEALED transport only. Decoding a frame never proves an
 // authenticated helper, native review, wrap qualification or parent custody.
 enum RootGrantsPrivateFrame {
-    enum Payload { case sealed(Data), refusal(RootGrantsStatus) }
+    enum Payload { case sealed(Data), signature(Data), refusal(RootGrantsStatus) }
     static func number(_ bytes: Data) throws -> Int {
         guard bytes.count == 4 else { throw RootGrantsReviewError(status: .invalidArguments) }
         return bytes.reduce(0) { ($0 << 8) | Int($1) }
@@ -32,6 +32,9 @@ enum RootGrantsPrivateFrame {
         case .sealed(let bytes):
             guard (1...131072).contains(bytes.count) else { throw RootGrantsReviewError(status: .limitExceeded) }
             return Data([0]) + word(UInt32(bytes.count)) + bytes
+        case .signature(let bytes):
+            guard bytes.count == 64 else { throw RootGrantsReviewError(status: .privateProtocolError) }
+            return Data([0]) + word(64) + bytes
         case .refusal(let status):
             let fixed = status == .success ? RootGrantsStatus.privateProtocolError : status
             return Data([1]) + word(4) + word(UInt32(fixed.rawValue))
@@ -46,9 +49,10 @@ enum RootGrantsPrivateFrame {
         case 0 where (1...131072).contains(length): return .sealed(bytes)
         case 1 where length == 4:
             let raw = try number(bytes)
-            guard (1...20).contains(raw), let status = RootGrantsStatus(rawValue: Int32(raw)) else {
+            guard (1...24).contains(raw) else {
                 throw RootGrantsReviewError(status: .privateProtocolError)
             }
+            let status = RootGrantsStatus.helperClosed(Int32(raw))
             return .refusal(status)
         default: throw RootGrantsReviewError(status: .privateProtocolError)
         }
@@ -85,7 +89,7 @@ struct RootGrantsPrivateCompletion {
         phase = .failed // Consume before frame construction or any possible write.
         let bytes = try RootGrantsPrivateFrame.response(payload)
         switch payload {
-        case .sealed(let sealed):
+        case .sealed(let sealed), .signature(let sealed):
             guard let request else { throw RootGrantsReviewError(status: .privateProtocolError) }
             expected = try RootGrantsPrivateAcknowledgement.bytes(request: request, sealed: sealed)
             phase = .awaitingAcknowledgement
@@ -114,12 +118,17 @@ struct RootGrantsPrivateCompletion {
 struct RootGrantsPrivateDeadline {
     static let budget: UInt64 = 900_000_000_000
     let startedAt: UInt64
+	let duration: UInt64
+	init(startedAt: UInt64, budget: UInt64 = RootGrantsPrivateDeadline.budget) {
+        self.startedAt = startedAt
+		self.duration = budget
+    }
     var expiresAt: UInt64 {
-        let (value, overflow) = startedAt.addingReportingOverflow(Self.budget)
+		let (value, overflow) = startedAt.addingReportingOverflow(duration)
         return overflow ? UInt64.max : value
     }
     func check(at now: UInt64) throws {
-        guard now >= startedAt, now - startedAt < Self.budget else {
+		guard now >= startedAt, now - startedAt < duration else {
             throw RootGrantsReviewError(status: .timeout)
         }
     }
@@ -175,7 +184,7 @@ final class RootGrantsPrivateCancellation {
         session = value
         lock.unlock()
     }
-    fileprivate func setAuthenticationContext(_ value: LAContext?) throws {
+    func setAuthenticationContext(_ value: LAContext?) throws {
         lock.lock()
         let refusal = failure
         if refusal == nil { context = value }
@@ -190,7 +199,7 @@ final class RootGrantsPrivateCancellation {
         authentication?.invalidate()
         _ = active?.close() // No state lock held while Go restores its reader.
     }
-    fileprivate func reviewDeadline() throws {
+    func reviewDeadline() throws {
         try check()
         lock.lock(); let active = session; lock.unlock()
         try active?.checkReviewDeadline()
@@ -420,7 +429,7 @@ enum RootGrantsPrivatePipes {
         return RootGrantsPrivatePipeIdentity(handle: pipe.pipeinfo.pipe_handle, device: info.st_dev, inode: info.st_ino)
     }
 }
-private final class RootGrantsPrivateTransport {
+final class RootGrantsPrivateTransport {
     let input: RootGrantsPrivatePipeIdentity
     let output: RootGrantsPrivatePipeIdentity
     let cancellation: RootGrantsPrivateCancellation
@@ -487,7 +496,7 @@ private final class RootGrantsPrivateTransport {
         while offset < frame.count {
             try cancellation.checkDeadline()
             switch payload {
-            case .sealed:
+            case .sealed, .signature:
                 try ready(STDOUT_FILENO, writing: true)
             case .refusal:
                 // Cleanup is complete. A canceled session may emit its single
@@ -556,7 +565,7 @@ private final class RootGrantsConfirmationFormatter: Formatter {
         errorDescription error: AutoreleasingUnsafeMutablePointer<NSString?>?) -> Bool { admitted(partialString) }
 }
 
-private final class RootGrantsNativeReview: NSObject, NSWindowDelegate, NSTextFieldDelegate {
+final class RootGrantsNativeReview: NSObject, NSWindowDelegate, NSTextFieldDelegate {
     let text: String
     let cancellation: RootGrantsPrivateCancellation
     let transport: RootGrantsPrivateTransport
@@ -570,7 +579,7 @@ private final class RootGrantsNativeReview: NSObject, NSWindowDelegate, NSTextFi
     var refusal: RootGrantsStatus?
 
     init(text: String, labels: [String], cancellation: RootGrantsPrivateCancellation,
-         transport: RootGrantsPrivateTransport) throws {
+         transport: RootGrantsPrivateTransport, title: String = "Root grants: complete attachment review") throws {
         guard Thread.isMainThread, text.utf8.count <= 1 << 20, [1, 4].contains(labels.count),
               let screen = NSScreen.main, screen.visibleFrame.width >= 850, screen.visibleFrame.height >= 700 else {
             throw RootGrantsReviewError(status: .operationUnavailable)
@@ -581,7 +590,7 @@ private final class RootGrantsNativeReview: NSObject, NSWindowDelegate, NSTextFi
         let footer = CGFloat(labels.count * 44 + 70)
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Root grants: complete attachment review"
+        window.title = title
         window.isReleasedWhenClosed = false
         scroll = NSScrollView(frame: NSRect(x: 20, y: footer, width: width - 40, height: height - footer - 30))
         scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false

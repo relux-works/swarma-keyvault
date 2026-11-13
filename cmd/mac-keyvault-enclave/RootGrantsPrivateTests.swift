@@ -61,8 +61,8 @@ struct RootGrantsPrivateTests {
             #expect(decoded == bytes)
             privateRefusal(.privateProtocolError) { _ = try RootGrantsPrivateFrame.decodeResponse(frame + Data([0])) }
         }
-        for raw in 1...20 {
-            let status = RootGrantsStatus.closed(Int32(raw))
+        for raw in 1...24 {
+            let status = RootGrantsStatus.helperClosed(Int32(raw))
             let frame = try RootGrantsPrivateFrame.response(.refusal(status))
             #expect(frame == Data([1, 0, 0, 0, 4]) + RootGrantsPrivateFrame.word(UInt32(raw)))
             guard case .refusal(let decoded) = try RootGrantsPrivateFrame.decodeResponse(frame) else {
@@ -74,7 +74,7 @@ struct RootGrantsPrivateTests {
         #expect(closed == Data([1, 0, 0, 0, 4, 0, 0, 0, 16]))
         for frame in [Data(), Data([2, 0, 0, 0, 1, 0]), Data([0, 0, 0, 0, 0]),
                       Data([1, 0, 0, 0, 3, 0, 0, 1]), Data([1, 0, 0, 0, 4, 0, 0, 0, 0]),
-                      Data([1, 0, 0, 0, 4, 0, 0, 0, 21]), Data([1, 0, 0, 0, 4, 255, 255, 255, 255])] {
+                      Data([1, 0, 0, 0, 4, 0, 0, 0, 25]), Data([1, 0, 0, 0, 4, 255, 255, 255, 255])] {
             privateRefusal(.privateProtocolError) { _ = try RootGrantsPrivateFrame.decodeResponse(frame) }
         }
         privateRefusal(.limitExceeded) { _ = try RootGrantsPrivateFrame.response(.sealed(Data())) }
@@ -294,9 +294,9 @@ extension RootGrantsPrivateTests {
     // Every known refusal has EOF/no-ACK completion. No refusal or malformed
     // construction may open a retry/frame path. No actual process is launched.
     @Test func refusalRequiresEOFWithoutACKAndRemainsOneShot() throws {
-        for raw in 1...20 {
+        for raw in 1...24 {
             var completion = RootGrantsPrivateCompletion()
-            let frame = try completion.frame(request: nil, payload: .refusal(.closed(Int32(raw))))
+            let frame = try completion.frame(request: nil, payload: .refusal(.helperClosed(Int32(raw))))
             #expect(frame == Data([1, 0, 0, 0, 4]) + RootGrantsPrivateFrame.word(UInt32(raw)))
             #expect(completion.phase == .awaitingEOF)
             try completion.endOfInput(trailing: Data())
