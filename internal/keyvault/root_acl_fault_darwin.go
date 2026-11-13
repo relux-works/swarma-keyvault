@@ -4,6 +4,8 @@ package keyvault
 
 /*
 #cgo CFLAGS: -DKVQ_FAULT_INJECTION
+#include <stdlib.h>
+int KVQFaultIntendedFrame(const char *descriptor, const char *label, unsigned char *out, int capacity, int *length, int *stage, int *status);
 int KVQFaultRunIntended(int armStage, int armStatus, int maskRequirement, int *stage, int *status, int *completed);
 int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int maskNatural, int *stage, int *status, int *completed);
 int KVQFaultRunBefore(int *stage, int *status, int *completed);
@@ -179,4 +181,22 @@ func runProjectOpFault(op, opStatus int, after bool) faultRun {
 	}
 	result := C.KVQFaultRunProjectOp(C.int(op), C.int(opStatus), flag, &stage, &osStatus, &completed)
 	return faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: completed != 0}
+}
+
+// intendedFrame builds the intended access object in memory for the given access
+// descriptor and application label, exactly as a create call would, and returns its
+// projected BEFORE frame. Nothing is stored and no Keychain item is touched.
+func intendedFrame(descriptor, label string) ([]byte, faultRun) {
+	const capacity = 65536
+	out := make([]byte, capacity)
+	cDescriptor, cLabel := C.CString(descriptor), C.CString(label)
+	defer C.free(unsafe.Pointer(cDescriptor))
+	defer C.free(unsafe.Pointer(cLabel))
+	var length, stage, osStatus C.int
+	result := C.KVQFaultIntendedFrame(cDescriptor, cLabel, (*C.uchar)(unsafe.Pointer(&out[0])), C.int(capacity), &length, &stage, &osStatus)
+	run := faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: result == 0}
+	if result != 0 || length <= 0 || int(length) > capacity {
+		return nil, run
+	}
+	return out[:length], run
 }

@@ -860,6 +860,36 @@ int KVQFaultProjectTwice(int fresh, unsigned char *a, unsigned char *b, int capa
     return (int)result;
 }
 
+// Builds the intended access object exactly as a create call would, for the given access
+// descriptor and application label, and returns its BEFORE projection frame. The object
+// lives in memory only: nothing is stored and no Keychain item is touched. The policy
+// tests use it to compare the native object with the admitted form.
+int KVQFaultIntendedFrame(const char *descriptor, const char *label, unsigned char *out, int capacity, int *length, int *stage, int *status) {
+    KVQDiagReset();
+    kvqFaultStage = 0;
+    kvqFaultStatus = errSecSuccess;
+    *length = 0; *stage = 0; *status = 0;
+    KVQSymbols symbols = {0};
+    OSStatus result = KVQResolve(&symbols) ? errSecSuccess : errSecUnimplemented;
+    SecAccessRef access = NULL;
+    CFDataRef frame = NULL;
+    if (result == errSecSuccess) result = KVQIntendedAccess(symbols, descriptor, label, &access);
+    if (result == errSecSuccess) {
+        result = KVQProject(access, symbols, &frame);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (result == errSecSuccess && (!frame || CFDataGetLength(frame) <= 0 || CFDataGetLength(frame) > capacity)) result = errSecAllocate;
+    if (result == errSecSuccess) {
+        memcpy(out, CFDataGetBytePtr(frame), (size_t)CFDataGetLength(frame));
+        *length = (int)CFDataGetLength(frame);
+    }
+    if (frame) CFRelease(frame);
+    if (access) CFRelease(access);
+    OSStatus recorded = errSecSuccess; int recordedStage = 0;
+    if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    return (int)result;
+}
+
 // Projects a plain in-memory access object twice, as BEFORE and then as AFTER, with one
 // OPERATION broken instead of one stage armed: op 1 makes the projection's read of the
 // ACL list return opStatus, op 2 makes its text writer reject every authorization name.

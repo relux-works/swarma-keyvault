@@ -4,7 +4,10 @@ package keyvault
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -379,6 +382,75 @@ func TestFirstFailureWinsAndNonFailuresAreNotRecorded(t *testing.T) {
 		got := noteTwice(c.a[0], c.a[1], c.b[0], c.b[1])
 		if got.Stage != c.want[0] || got.OSStatus != c.want[1] {
 			t.Errorf("%s: got stage %d status %d, want stage %d status %d", c.name, got.Stage, got.OSStatus, c.want[0], c.want[1])
+		}
+	}
+}
+
+// canonicalACLSet is the order-free form of a projection: every ACL encoded alone with
+// the owner row, sorted. Two builds of the same access object list their ACLs in
+// different orders, so only this form can be compared.
+func canonicalACLSet(t *testing.T, p rootqualification.Projection) []string {
+	t.Helper()
+	out := make([]string, len(p.ACLs))
+	for i, a := range p.ACLs {
+		raw, err := rootqualification.EncodeNativeProjection(rootqualification.Projection{
+			OwnerUID: p.OwnerUID, OwnerGID: p.OwnerGID, OwnerType: p.OwnerType, ACLs: []rootqualification.ACLProjection{a}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[i] = hex.EncodeToString(raw)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Claim (the native agreement check, and the public dump): the intended access object
+// that the native unit builds in memory, projected exactly as a create call projects it,
+// is admitted by the allowlist built for the same descriptor through the intended entry
+// point and refused by the stored one, for the public marker and for the production
+// descriptor. The marker's native frame equals the attended observation of the signed
+// build as an order-free set of ACLs, and the production frame equals that observation
+// with the descriptor substituted. The public fields are logged: this is the dump.
+// Limit: in memory only, an unsigned test binary; it says nothing about the stored
+// item, which only an attended add can show.
+func TestNativeIntendedFrameAgreesWithTheAdmittedForm(t *testing.T) {
+	observedBefore, _ := loadObservedProjections(t)
+	for _, c := range []struct {
+		name, descriptor, label string
+		want                    rootqualification.Projection
+	}{
+		{"marker", markerAccessDescriptor, "keyvault-root-acl-qualification:/vault", observedBefore},
+		{"production", rootGrantsAccessDescriptor, "keyvault-root-grants:/vault", substituteDescriptor(observedBefore, markerAccessDescriptor, rootGrantsAccessDescriptor)},
+	} {
+		frame, run := intendedFrame(c.descriptor, c.label)
+		if !run.Completed || len(frame) == 0 {
+			t.Fatalf("%s: the native run did not complete: %+v", c.name, run)
+		}
+		projection, err := rootqualification.DecodeNativeProjection(frame)
+		if err != nil {
+			t.Fatalf("%s: the native frame does not decode: %v", c.name, err)
+		}
+		sum := sha256.Sum256(frame)
+		t.Logf("%s: %d bytes, sha256 %s, owner %d/%d/%d, %d ACLs", c.name, len(frame), hex.EncodeToString(sum[:]), projection.OwnerUID, projection.OwnerGID, projection.OwnerType, len(projection.ACLs))
+		for i, a := range projection.ACLs {
+			t.Logf("%s acl %d: names %v numbers %v description %q applications %s/%d prompt %d %s %d %d", c.name, i, a.Authorizations, a.AuthorizationNumbers,
+				a.Description, a.ApplicationsState, len(a.Applications), a.PromptBits, a.RawPromptState, a.RawPromptVersion, a.RawPromptFlags)
+			for _, app := range a.Applications {
+				t.Logf("%s acl %d application: %s %d bytes %q", c.name, i, app.RequirementState, len(app.Requirement), app.RequirementText)
+			}
+		}
+		policy, err := rootqualification.NewStoragePolicy(c.descriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := policy.AdmitIntended(projection); err != nil {
+			t.Fatalf("%s: the allowlist refuses the native intended object: %v", c.name, err)
+		}
+		if err := policy.AdmitStored(projection); err == nil {
+			t.Fatalf("%s: the stored entry point admitted the intended object", c.name)
+		}
+		if got, want := canonicalACLSet(t, projection), canonicalACLSet(t, c.want); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: the native object differs from the admitted observation:\n got %v\nwant %v", c.name, got, want)
 		}
 	}
 }
