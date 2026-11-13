@@ -186,7 +186,7 @@ func TestRootGrantsAttachCLIUsageNeverReachesTheVault(t *testing.T) {
 
 // Claim: a fully specified invocation reaches the attach route exactly once with
 // every public parameter, prints only the fixed notice on stderr and exactly the
-// contract receipt on stdout (JSON: ok/command/result in the family envelope; text:
+// specified receipt on stdout (JSON: ok/command/result in the family envelope; text:
 // the same facts), and exits 0. No ciphertext, wrapping, scalar or path member exists.
 func TestRootGrantsAttachCLIStoredReceipt(t *testing.T) {
 	for _, jsonMode := range []bool{true, false} {
@@ -228,7 +228,7 @@ func TestRootGrantsAttachCLIStoredReceipt(t *testing.T) {
 		r := reply.Result
 		if r.Schema != "keyvault-root-grants-receipt/1" || r.Mode != "attach" || r.Outcome != "stored" || r.Storage != "enclave-wrapped-keychain" ||
 			r.Presence != "biometry-any-per-signature" || r.PrivateExport || !r.PairUnchanged || r.Root != rgProjection() {
-			t.Fatalf("receipt differs from the contract: %s", stdout)
+			t.Fatalf("receipt differs from the specified receipt: %s", stdout)
 		}
 		for _, forbidden := range []string{"ciphertext", "enclave_blob", "wrapping", "scalar", "envelope"} {
 			if strings.Contains(stdout, forbidden) {
@@ -238,7 +238,7 @@ func TestRootGrantsAttachCLIStoredReceipt(t *testing.T) {
 	}
 }
 
-// Claim: the failure map is the contract's: a closed not_applied outcome exits 3
+// Claim: the failure map is the specified one: a closed not_applied outcome exits 3
 // with ok=false, the closed code and no result; every other outcome (unknown, an
 // unrecognized state, an untyped error) exits 1 with ok=false, the UNCONFIRMED
 // reference and no retry advice. Text mode keeps the same split on stderr.

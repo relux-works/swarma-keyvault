@@ -120,7 +120,7 @@ func runRecoveryAttachRootGrants(args []string, out output) int {
 	if pins.ValidateRestorePins() != nil {
 		return recoveryFailureReceipt(out, usagef("three canonical retained public recovery pins are required"))
 	}
-	// Best effort: the notice is guidance for the owner, not part of the contract's
+	// Best effort: the notice is guidance for the owner, not part of the
 	// receipt, so an unwritable stderr must not turn a valid attach into a refusal.
 	writeRecoveryReceipt(out.stderr, []byte(rootGrantsAttachNotice))
 	// The helper owns the terminal and has its own absolute budget. An interrupt
