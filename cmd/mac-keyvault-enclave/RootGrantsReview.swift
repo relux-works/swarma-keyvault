@@ -15,8 +15,8 @@ enum RootGrantsStatus: Int32 {
     case unsupportedOperation = 19, inputCanceled = 20
     case codeNotAdmitted = 21, aclRefused = 22, lockUnavailable = 23, inventoryChanged = 24
 
-    // The C archive still emits only ROOT1..20. Private helper frames have a
-    // separate extended table so a future C status cannot acquire a new meaning.
+    // Existing attach C calls remain 0..20. Grant-sign archive calls and private
+    // frames use the separate 1..24 closed table below.
     static func closed(_ raw: Int32) -> Self {
         guard (0...20).contains(raw) else { return .privateProtocolError }
         return Self(rawValue: raw) ?? .privateProtocolError

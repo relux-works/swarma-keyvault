@@ -2,6 +2,7 @@ package keyvault
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"slices"
@@ -46,11 +47,11 @@ type RootGrantsAuthority struct {
 }
 
 func rootGrantsOwnerPrincipal(s string) bool {
-	const prefix = "owner:id/"
-	if !strings.HasPrefix(s, prefix) {
+	const prefix = "owner:" + "id/"
+	if len(s) <= len(prefix) || s[:len(prefix)] != prefix {
 		return false
 	}
-	label := strings.TrimPrefix(s, prefix)
+	label := s[len(prefix):]
 	if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' || strings.Contains(label, "--") {
 		return false
 	}
@@ -160,8 +161,9 @@ func PrepareRootGrantsGrantV3(grant, contract, authority, metadata []byte, expec
 	return &RootGrantsGrantV3Plan{grant: grant, contract: contract, authority: authority, record: metadata, message: hash}, nil
 }
 
-// ReviewJSON includes every complete document as a JSON value, not a truncated
-// summary. It is a public display input, never proof of native presentation.
+// ReviewJSON includes every complete document. The contract travels as base64
+// of its exact canonical bytes so JSON HTML escaping cannot alter its binding.
+// This is public display input, never proof of native presentation.
 func (p *RootGrantsGrantV3Plan) ReviewJSON() ([]byte, error) {
 	if p == nil || len(p.grant) == 0 {
 		return nil, recoveryRefuse("operation_unavailable")
@@ -171,7 +173,7 @@ func (p *RootGrantsGrantV3Plan) ReviewJSON() ([]byte, error) {
 		Profile           string          `json:"profile"`
 		ObservationPolicy string          `json:"observation_policy"`
 		Grant             json.RawMessage `json:"grant"`
-		Contract          json.RawMessage `json:"contract"`
+		ContractBase64    string          `json:"contract_bytes_base64"`
 		Authority         json.RawMessage `json:"authority"`
 		Record            json.RawMessage `json:"record"`
 		GrantBytes        int             `json:"grant_bytes"`
@@ -181,7 +183,7 @@ func (p *RootGrantsGrantV3Plan) ReviewJSON() ([]byte, error) {
 		AuthoritySHA256   string          `json:"authority_sha256"`
 		RecordSHA256      string          `json:"record_sha256"`
 		MessageSHA256     string          `json:"message_sha256"`
-	}{rootGrantsGrantV3Operation, rootGrantsProfile, RootGrantsOfflineReview, p.grant, p.contract, p.authority, p.record,
+	}{rootGrantsGrantV3Operation, rootGrantsProfile, RootGrantsOfflineReview, p.grant, base64.StdEncoding.EncodeToString(p.contract), p.authority, p.record,
 		len(p.grant), len(p.contract), rootGrantsHashHex(p.grant), rootGrantsHashHex(p.contract), rootGrantsHashHex(p.authority), rootGrantsHashHex(p.record), hex.EncodeToString(p.message[:])})
 }
 

@@ -1,8 +1,50 @@
 import Foundation
+import CryptoKit
 import Testing
 @testable import KeyvaultNativeCore
 
 struct RootGrantsSignV3Tests {
+    // Claim: the full retained recovery record emitted by the real Go operation
+    // passes Swift validation, while its shorter pair summary is rejected. The
+    // exact printable contract bytes remain visible and bound to the grant hash.
+    @Test func productionRequestAcceptsFullRetainedRecordAndExactContractBytes() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("testdata/root-grants-sign-request-v2.json")
+        let bytes = try Data(contentsOf: fixture)
+        let request = try RootGrantsSignV3Request(ownedBytes: bytes)
+        let expectedContract = try #require(String(data: request.contract, encoding: .utf8))
+        #expect(expectedContract.contains("example<&>"))
+        #expect(expectedContract.contains("<") && expectedContract.contains(">") && expectedContract.contains("&"))
+        #expect(request.display.contains(expectedContract))
+
+        let contractHash = SHA256.hash(data: request.contract).map { String(format: "%02x", $0) }.joined()
+        let reviewNode = try NativeArchiveJSON.decode(request.reviewBytes, maximum: 1 << 20, canonical: true)
+        #expect(try reviewNode.field("contract_sha256").text() == contractHash)
+        let grantNode = try NativeArchiveJSON.decode(request.grant, maximum: 65536, canonical: true)
+        #expect(try grantNode.field("contract_sha256").text() == contractHash)
+
+        var signingMessage = Data("swarma-grant-v3".utf8)
+        signingMessage.append(request.grant)
+        let messageHash = SHA256.hash(data: signingMessage).map { String(format: "%02x", $0) }.joined()
+        #expect(request.messageSHA256 == messageHash)
+
+        let outer = try NativeArchiveJSON.decode(bytes, maximum: 262144, canonical: true)
+        let fields = try outer.fields(["schema", "operation", "review", "envelope", "pair_metadata"])
+        let fullHex = try fields[4].text()
+        let review = fields[2]
+        let record = try NativeArchiveJSON.decode(try review.field("record").canonical(), maximum: 32768, canonical: true)
+        let summary = try record.field("pair").canonical()
+        #expect(fullHex.utf8.count > summary.count * 2)
+        let summaryHex = summary.map { String(format: "%02x", $0) }.joined()
+        let source = try #require(String(data: bytes, encoding: .utf8))
+        let changed = source.replacingOccurrences(of: "\"pair_metadata\":\"\(fullHex)\"",
+                                                   with: "\"pair_metadata\":\"\(summaryHex)\"")
+        #expect(changed != source)
+        #expect(throws: RootGrantsReviewError.self) {
+            _ = try RootGrantsSignV3Request(ownedBytes: Data(changed.utf8))
+        }
+    }
+
     // Claim: one reviewed attempt advances through one Touch ID phase and is
     // consumed before private signing; a second use cannot replay it.
     @Test func oneFreshPresenceConsumesOneAttempt() throws {
@@ -49,6 +91,9 @@ struct RootGrantsSignV3Tests {
         #expect(signing.expiresAt == 220)
         try signing.check(at: 219)
         #expect(throws: RootGrantsReviewError.self) { try signing.check(at: 220) }
+        #expect(try RootGrantsPrivateDeadline.boundedGrantSigningBudget(remaining: 900_000_000_000) == 120_000_000_000)
+        #expect(try RootGrantsPrivateDeadline.boundedGrantSigningBudget(remaining: 40) == 40)
+        #expect(throws: RootGrantsReviewError.self) { try RootGrantsPrivateDeadline.boundedGrantSigningBudget(remaining: 0) }
         #expect(RootGrantsPrivateDeadline(startedAt: 100).expiresAt == 900_000_000_100)
     }
 

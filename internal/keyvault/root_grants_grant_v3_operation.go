@@ -147,7 +147,7 @@ func SignRootGrantsGrantV3With(ctx context.Context, q RootGrantsGrantV3SignReque
 		return empty, rootGrantsGrantV3Failed("invalid_envelope", "read", false)
 	}
 	requestBytes, err := json.Marshal(rootGrantsGrantV3HelperRequest{
-		Schema: "keyvault-root-grants-sign-request/1", Operation: rootGrantsGrantV3Operation,
+		Schema: "keyvault-root-grants-sign-request/2", Operation: rootGrantsGrantV3Operation,
 		Review: review, Envelope: envelopeJSON, PairMetadata: hex.EncodeToString(snapshot.PairMetadata),
 	})
 	clear(review)

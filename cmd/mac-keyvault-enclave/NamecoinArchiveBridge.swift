@@ -121,14 +121,16 @@ indirect enum NativeArchiveJSON {
             return UInt8(byte)
         })
     }
-    func canonical() throws -> Data {
+    func canonical(escapeHTML: Bool = true) throws -> Data {
         func quote(_ text: String) throws -> String {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.withoutEscapingSlashes]
             var value = String(decoding: try encoder.encode(text), as: UTF8.self)
-            for (source, target) in [("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
-                                     ("\u{2028}", "\\u2028"), ("\u{2029}", "\\u2029")] {
-                value = value.replacingOccurrences(of: source, with: target)
+            if escapeHTML {
+                for (source, target) in [("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
+                                         ("\u{2028}", "\\u2028"), ("\u{2029}", "\\u2029")] {
+                    value = value.replacingOccurrences(of: source, with: target)
+                }
             }
             return value
         }
@@ -138,20 +140,20 @@ indirect enum NativeArchiveJSON {
         case .number(let number): value = String(number)
         case .string(let text): value = try quote(text)
         case .array(let values):
-            value = "[" + (try values.map { String(decoding: try $0.canonical(), as: UTF8.self) }).joined(separator: ",") + "]"
+            value = "[" + (try values.map { String(decoding: try $0.canonical(escapeHTML: escapeHTML), as: UTF8.self) }).joined(separator: ",") + "]"
         case .object(let values):
-            value = "{" + (try values.map { try quote($0.0) + ":" + String(decoding: $0.1.canonical(), as: UTF8.self) }).joined(separator: ",") + "}"
+            value = "{" + (try values.map { try quote($0.0) + ":" + String(decoding: $0.1.canonical(escapeHTML: escapeHTML), as: UTF8.self) }).joined(separator: ",") + "}"
         }
         return Data(value.utf8)
     }
 
-    static func decode(_ raw: Data, maximum: Int, canonical: Bool) throws -> Self {
+    static func decode(_ raw: Data, maximum: Int, canonical: Bool, escapeHTML: Bool = true) throws -> Self {
         guard !raw.isEmpty, raw.count <= maximum else { throw NativeNamecoinArchiveFailure("display_refused") }
         var parser = NativeArchiveJSONReader(bytes: Array(raw))
         let value = try parser.value(depth: 0)
         parser.space()
         guard parser.offset == parser.bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
-        if canonical, try value.canonical() != raw { throw NativeNamecoinArchiveFailure("display_refused") }
+        if canonical, try value.canonical(escapeHTML: escapeHTML) != raw { throw NativeNamecoinArchiveFailure("display_refused") }
         return value
     }
 }

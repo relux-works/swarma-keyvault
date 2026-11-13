@@ -16,11 +16,11 @@ private func signV3Hex(_ bytes: Data) -> String {
     bytes.map { String(format: "%02x", $0) }.joined()
 }
 
-private func signV3DecodeHex(_ value: String, bytes: Int) throws -> Data {
-    try signV3Require(value.utf8.count == bytes * 2 && value.utf8.allSatisfy {
+private func signV3DecodeHex(_ value: String, maximum: Int) throws -> Data {
+	try signV3Require(value.utf8.count >= 2 && value.utf8.count <= maximum * 2 && value.utf8.count.isMultiple(of: 2) && value.utf8.allSatisfy {
         (48...57).contains($0) || (97...102).contains($0)
     })
-    var output = Data(); output.reserveCapacity(bytes)
+	var output = Data(); output.reserveCapacity(value.utf8.count / 2)
     let source = Array(value.utf8)
     for index in stride(from: 0, to: source.count, by: 2) {
         func nibble(_ byte: UInt8) -> UInt8 { byte <= 57 ? byte - 48 : byte - 87 }
@@ -31,12 +31,99 @@ private func signV3DecodeHex(_ value: String, bytes: Int) throws -> Data {
 
 private func signV3Hash(_ bytes: Data) -> Data { Data(SHA256.hash(data: bytes)) }
 
+private func signV3ValidateRetainedPairMetadata(_ raw: Data, binding: NativeArchiveJSON) throws {
+	let bound = try binding.fields([
+		"schema", "service", "version", "group_id", "metadata_sha256", "nostr_identity", "nostr_version",
+		"nostr_public_key", "nostr_npub", "namecoin_identity", "namecoin_version", "namecoin_xpub", "namecoin_origin"
+	])
+	let metadata = try NativeArchiveJSON.decode(raw, maximum: 32768, canonical: true)
+	let record = try metadata.fields(["schema", "group_id", "service", "version", "created", "nostr", "namecoin"])
+	let schema = try record[0].text()
+	let groupID = try record[1].text()
+	let retainedService = try record[2].text()
+	let retainedVersion = try record[3].uint()
+	let created = try record[4].text()
+	let bindingService = try bound[1].text()
+	let bindingVersion = try bound[2].uint()
+	try signV3Require((schema == "keyvault-recovery/1" || schema == "keyvault-recovery/2") &&
+					  groupID.utf8.count == 32 && groupID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) &&
+					  created.utf8.count == 20 && retainedService == bindingService && retainedVersion == bindingVersion,
+					  .retainedRecordMismatch)
+	let nostr = record[5]
+	let namecoin = record[6]
+	let nostrFields = try signV3RecoveryPurposeFields(nostr, schema: schema)
+	let namecoinFields = try signV3RecoveryPurposeFields(namecoin, schema: schema)
+	let nostrIdentity = schema == "keyvault-recovery/1" ? retainedService : try nostr.field("service").text()
+	let namecoinIdentity = schema == "keyvault-recovery/1" ? retainedService : try namecoin.field("service").text()
+	let metadataSHA256 = signV3Hex(signV3Hash(raw))
+	try signV3Require(try bound[0].text() == schema && bound[1].text() == retainedService &&
+					  bound[2].uint() == retainedVersion && bound[3].text() == groupID &&
+					  bound[4].text() == metadataSHA256 && bound[5].text() == nostrIdentity &&
+					  bound[6].uint() == nostrFields.version && bound[7].text() == nostrFields.publicKey &&
+					  bound[8].text() == nostrFields.npub && bound[9].text() == namecoinIdentity &&
+					  bound[10].uint() == namecoinFields.version && bound[11].text() == namecoinFields.xpub &&
+					  bound[12].text() == namecoinFields.origin,
+					  .retainedRecordMismatch)
+}
+
+private func signV3RecoveryPurposeFields(_ node: NativeArchiveJSON, schema: String) throws ->
+		(version: UInt64, publicKey: String, npub: String, xpub: String, origin: String) {
+	let names = schema == "keyvault-recovery/1"
+		? ["purpose", "version", "path", "algorithm", "presence", "public_key", "npub", "xpub", "origin", "wrapping_point", "wrapping_fingerprint"]
+		: ["service", "purpose", "version", "path", "algorithm", "presence", "public_key", "npub", "xpub", "origin", "wrapping_point", "wrapping_fingerprint"]
+	_ = try node.fields(names)
+	return (try node.field("version").uint(), try node.field("public_key").text(), try node.field("npub").text(),
+			try node.field("xpub").text(), try node.field("origin").text())
+}
+
 struct RootGrantsSignV3Envelope {
     let blob, point, ciphertext: Data
 }
 
+private final class RootGrantsSignV3Context {
+    private static let handleBit: UInt64 = 1 << 62
+    private let cancellation: RootGrantsPrivateCancellation
+    private let deadline: RootGrantsPrivateDeadline
+    let handle: UInt64
+    private var closed = false
+
+    init(cancellation: RootGrantsPrivateCancellation) throws {
+        self.cancellation = cancellation
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let budget = try RootGrantsPrivateDeadline.boundedGrantSigningBudget(remaining: cancellation.remainingNanoseconds())
+        deadline = RootGrantsPrivateDeadline(startedAt: startedAt, budget: budget)
+        var opened: UInt64 = 0
+        let code = kv_rg_sign_grant_v3_context_open_v1(budget, &opened)
+        try RootGrantsArchiveBindings.signingStatus(code)
+        guard opened & Self.handleBit != 0, opened & RootGrantsArchiveBindings.handleBit == 0,
+              opened & ~(Self.handleBit | RootGrantsArchiveBindings.handleBit) != 0 else {
+            throw RootGrantsReviewError(status: .privateProtocolError)
+        }
+        handle = opened
+        do {
+            try cancellation.setSigningCancellation { _ = kv_rg_sign_grant_v3_context_cancel_v1(opened) }
+        } catch {
+            _ = kv_rg_sign_grant_v3_context_close_v1(opened)
+            throw error
+        }
+    }
+
+    func remainingNanoseconds() throws -> UInt64 {
+        try cancellation.check()
+        return try deadline.remaining(at: DispatchTime.now().uptimeNanoseconds)
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        try? cancellation.setSigningCancellation(nil)
+        _ = kv_rg_sign_grant_v3_context_close_v1(handle)
+    }
+    deinit { close() }
+}
+
 struct RootGrantsSignV3Request {
-    static let schema = "keyvault-root-grants-sign-request/1"
+    static let schema = "keyvault-root-grants-sign-request/2"
     static let operation = "review-sign-grant-v3"
     static let profile = "namecoin-landlord-root/1"
     static let offlinePolicy = "offline-document-review/1"
@@ -59,7 +146,7 @@ struct RootGrantsSignV3Request {
         try signV3Require(requestSchema == Self.schema && requestOperation == Self.operation)
         let reviewNode = outerFields[2]
         let review = try reviewNode.fields([
-            "operation", "profile", "observation_policy", "grant", "contract", "authority", "record",
+			"operation", "profile", "observation_policy", "grant", "contract_bytes_base64", "authority", "record",
             "grant_bytes", "contract_bytes", "grant_sha256", "contract_sha256", "authority_sha256",
             "record_sha256", "message_sha256"
         ])
@@ -69,9 +156,14 @@ struct RootGrantsSignV3Request {
         try signV3Require(reviewOperation == Self.operation && reviewProfile == Self.profile &&
                           observationPolicy == Self.offlinePolicy, .unsupportedOperation)
         grant = try review[3].canonical()
-        contract = try review[4].canonical()
-        authority = try review[5].canonical()
-        record = try review[6].canonical()
+        contract = try review[4].base64(maximum: 65536)
+		do {
+			_ = try NativeArchiveJSON.decode(contract, maximum: 65536, canonical: true, escapeHTML: false)
+		} catch {
+			throw RootGrantsReviewError(status: .bindingMismatch)
+		}
+		authority = try review[5].canonical()
+		record = try review[6].canonical()
         try signV3Require((1...65536).contains(grant.count) && (1...65536).contains(contract.count) &&
                           (1...32768).contains(authority.count) && (1...32768).contains(record.count), .limitExceeded)
         let grantLength = try review[7].uint()
@@ -139,9 +231,15 @@ struct RootGrantsSignV3Request {
                           authorityMetadataHash == signV3Hex(signV3Hash(record)) &&
                           authorityPublicKey == publicKey && authoritySealScript == sealScript,
                           .publicPinMismatch)
-        let pairBytes = try rootFields[13].canonical()
-        let pairHex = try signV3DecodeHex(outerFields[4].text(), bytes: pairBytes.count)
-        try signV3Require(pairHex == pairBytes && pairBytes.count <= 32768, .retainedRecordMismatch)
+		let pairMetadata: Data
+		do {
+			pairMetadata = try signV3DecodeHex(outerFields[4].text(), maximum: 32768)
+				try signV3ValidateRetainedPairMetadata(pairMetadata, binding: rootFields[13])
+		} catch let refusal as RootGrantsReviewError {
+			throw refusal
+		} catch {
+			throw RootGrantsReviewError(status: .retainedRecordMismatch)
+		}
 
         let envelopeFields = try outerFields[3].fields(["schema", "algorithm", "enclave_blob", "point", "fingerprint", "ciphertext"])
         let envelopeSchema = try envelopeFields[0].text()
@@ -159,11 +257,15 @@ struct RootGrantsSignV3Request {
                           signV3Hex(signV3Hash(point)) == fingerprint,
                           .invalidEnvelope)
         envelope = RootGrantsSignV3Envelope(blob: blob, point: point, ciphertext: ciphertext)
-        let reviewBytes = try reviewNode.canonical()
-        guard let text = String(data: reviewBytes, encoding: .utf8), text.utf8.allSatisfy({ $0 == 10 || (32...126).contains($0) }),
+		let reviewBytes = try reviewNode.canonical()
+		guard let text = String(data: reviewBytes, encoding: .utf8),
+		      let exactContract = String(data: contract, encoding: .utf8),
+		      exactContract.utf8.allSatisfy({ (32...126).contains($0) }),
+		      text.utf8.allSatisfy({ $0 == 10 || (32...126).contains($0) }),
               text.utf8.count <= 1 << 20 else { throw RootGrantsReviewError(status: .operationUnavailable) }
         self.reviewBytes = reviewBytes
-        display = "REVIEW SIGN GRANT V3\n\n" + text + "\n\nNo chain observation is asserted. This operation signs only the displayed grant bytes."
+		display = "REVIEW SIGN GRANT V3\n\n" + text + "\n\nExact canonical contract bytes (\(contract.count), SHA-256 \(contractHash)):\n" + exactContract +
+			"\n\nNo chain observation is asserted. This operation signs only the displayed grant bytes."
         bytes = owned
     }
 }
@@ -255,6 +357,8 @@ private func signV3EvaluateTouchID(_ context: LAContext, cancellation: RootGrant
 
 private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCancellation,
                            transport: RootGrantsPrivateTransport) throws -> Data {
+	let signingContext = try RootGrantsSignV3Context(cancellation: cancellation)
+	defer { signingContext.close() }
     let request = try RootGrantsSignV3Request(ownedBytes: original)
     var attempt = RootGrantsSignV3Attempt()
     defer { attempt.close() }
@@ -278,20 +382,19 @@ private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCanc
     try attempt.acceptFreshTouchID(accepted)
     try cancellation.check()
     try transport.checkOutput()
-	var recheckInput = Array(request.bytes)
-	let recheckCount = recheckInput.count
-	let recheck = recheckInput.withUnsafeMutableBufferPointer { raw in
-		kv_rg_sign_grant_v3_check_v1(raw.baseAddress, size_t(recheckCount))
-	}
-	try RootGrantsArchiveBindings.status(recheck)
+	try transport.recheck(stage: 1, remainingNanoseconds: signingContext.remainingNanoseconds())
 	try cancellation.check()
 	try transport.checkOutput()
+	_ = try signingContext.remainingNanoseconds()
     try attempt.consumeForSigning()
 
     var plaintext = try signV3Decrypt(request, context: context)
     defer { plaintext.resetBytes(in: 0..<plaintext.count) }
     try cancellation.check()
     try transport.checkOutput()
+    try transport.recheck(stage: 2, remainingNanoseconds: signingContext.remainingNanoseconds())
+    try cancellation.check()
+	_ = try signingContext.remainingNanoseconds()
     var signature = Data(repeating: 0, count: 64)
     defer { signature.resetBytes(in: 0..<signature.count) }
     var written: size_t = 0
@@ -302,14 +405,15 @@ private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCanc
 	let code = requestBuffer.withUnsafeMutableBufferPointer { req in
         plaintext.withUnsafeMutableBytes { privateBytes in
             signature.withUnsafeMutableBytes { output in
-                kv_rg_sign_grant_v3_v1(
+				kv_rg_sign_grant_v3_v1(
+					signingContext.handle,
 					req.baseAddress, size_t(requestCount),
 					privateBytes.baseAddress?.assumingMemoryBound(to: UInt8.self), size_t(plaintextCount),
 					output.baseAddress?.assumingMemoryBound(to: UInt8.self), size_t(signatureCapacity), &written)
             }
         }
     }
-    try RootGrantsArchiveBindings.status(code)
+	try RootGrantsArchiveBindings.signingStatus(code)
     try signV3Require(written == 64, .privateProtocolError)
     try cancellation.check()
     try transport.checkOutput()
