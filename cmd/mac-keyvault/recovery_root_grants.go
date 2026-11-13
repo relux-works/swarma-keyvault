@@ -97,19 +97,28 @@ func runRecoveryAttachRootGrants(args []string, out output) int {
 		return recoveryFailureReceipt(out, err)
 	}
 	var q keyvault.RootGrantsAttachRequest
-	var err error
-	for _, step := range []func() error{
-		func() (e error) { q.NostrIdentity, e = f.identity("nostr-identity"); return },
-		func() (e error) { q.NamecoinIdentity, e = f.identity("namecoin-identity"); return },
-		func() (e error) { q.GrantsIdentity, e = f.identity("grants-identity"); return },
-		func() (e error) { q.Version, e = f.generation("version"); return },
-		func() (e error) { q.NostrVersion, e = f.generation("nostr-version"); return },
-		func() (e error) { q.NamecoinVersion, e = f.generation("namecoin-version"); return },
-		func() (e error) { q.GrantsVersion, e = f.generation("grants-version"); return },
-	} {
-		if err = step(); err != nil {
+	// Every identity and generation comes from its own flag through the validators
+	// below; the table names the flag and the destination, and the value is only
+	// ever the validated argument (never a literal in the assignment).
+	for _, identity := range []struct {
+		flag   string
+		target *string
+	}{{"nostr-identity", &q.NostrIdentity}, {"namecoin-identity", &q.NamecoinIdentity}, {"grants-identity", &q.GrantsIdentity}} {
+		value, err := f.identity(identity.flag)
+		if err != nil {
 			return recoveryFailureReceipt(out, err)
 		}
+		*identity.target = value
+	}
+	for _, generation := range []struct {
+		flag   string
+		target *int
+	}{{"version", &q.Version}, {"nostr-version", &q.NostrVersion}, {"namecoin-version", &q.NamecoinVersion}, {"grants-version", &q.GrantsVersion}} {
+		value, err := f.generation(generation.flag)
+		if err != nil {
+			return recoveryFailureReceipt(out, err)
+		}
+		*generation.target = value
 	}
 	q.ExpectedGroupID, q.ExpectedPairMetadataSHA256 = f.values["expected-group-id"], f.values["expected-pair-metadata-sha256"]
 	q.ExpectedNPub, q.ExpectedNamecoinXPub, q.ExpectedOrigin = f.values["expected-npub"], f.values["expected-namecoin-xpub"], f.values["expected-origin"]
