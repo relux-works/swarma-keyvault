@@ -35,6 +35,7 @@ var errPolicyTable = errors.New("root storage ACL policy table is unusable")
 type PolicyReason string
 
 const (
+	// ReasonUnavailable is the refusal of a nil or uninitialized policy.
 	ReasonUnavailable    PolicyReason = "unavailable"
 	ReasonOwner          PolicyReason = "owner"
 	ReasonAuthorizations PolicyReason = "authorizations"
@@ -165,19 +166,30 @@ func NewStoragePolicy(descriptor string) (*StoragePolicy, error) {
 	}, nil
 }
 
+// usable reports whether the policy was built by NewStoragePolicy. A nil pointer, the
+// zero value or a partly filled struct has no required entries, so matching against
+// it would admit the empty ACL set (which the decoder can represent) and every
+// observed form vacuously. Such a policy is refused before any matching.
+func (p *StoragePolicy) usable() bool {
+	return p != nil && p.descriptor != "" && len(p.requirement) > 0 &&
+		len(p.intended.entries) > 0 && len(p.stored.entries) > 0
+}
+
 // AdmitIntended admits the projection of the access object built in memory before
-// the add. Nil only for the observed intended form.
+// the add. Nil only for the observed intended form, and only from a policy built by
+// NewStoragePolicy: an uninitialized policy refuses everything as unavailable.
 func (p *StoragePolicy) AdmitIntended(projection Projection) error {
-	if p == nil {
+	if !p.usable() {
 		return &PolicyError{Form: "intended", Reason: ReasonUnavailable}
 	}
 	return p.admit(&p.intended, projection)
 }
 
 // AdmitStored admits the projection of the stored item's ACL read back from the
-// Keychain. Nil only for the observed stored form.
+// Keychain. Nil only for the observed stored form, and only from a policy built by
+// NewStoragePolicy: an uninitialized policy refuses everything as unavailable.
 func (p *StoragePolicy) AdmitStored(projection Projection) error {
-	if p == nil {
+	if !p.usable() {
 		return &PolicyError{Form: "stored", Reason: ReasonUnavailable}
 	}
 	return p.admit(&p.stored, projection)

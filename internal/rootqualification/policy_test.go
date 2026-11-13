@@ -1062,3 +1062,74 @@ func FuzzPolicyAdmit(f *testing.F) {
 		}
 	})
 }
+
+// Claim (regression, review blocker): a policy that was not built by NewStoragePolicy
+// refuses the empty projection at both entry points with the closed "unavailable"
+// reason, before any matching. The zero value has owner row 0, 0, 0 and no required
+// entries, so without the check the empty ACL set (which the decoder can represent)
+// matches it vacuously and is admitted. A policy built by the constructor still
+// refuses the empty projection, for the real reason (a missing required ACL), so the
+// two refusals are not confused. Limit: it covers the in-package ways to build an
+// unusable value, not memory corruption.
+func TestZeroValuePolicyRefusesTheEmptyProjectionAtBothEntryPoints(t *testing.T) {
+	var zero StoragePolicy
+	requireRefusal(t, zero.AdmitIntended(Projection{}), "intended", ReasonUnavailable)
+	requireRefusal(t, zero.AdmitStored(Projection{}), "stored", ReasonUnavailable)
+	requireRefusal(t, (&zero).AdmitIntended(Projection{}), "intended", ReasonUnavailable)
+	requireRefusal(t, (&zero).AdmitStored(Projection{}), "stored", ReasonUnavailable)
+	built := newTestPolicy(t, markerDescriptor)
+	requireRefusal(t, built.AdmitIntended(Projection{}), "intended", ReasonMultiplicity)
+	requireRefusal(t, built.AdmitStored(Projection{}), "stored", ReasonMultiplicity)
+}
+
+// Claim (regression, review blocker): the zero-value policy refuses the observed forms
+// too, at both entry points and in both directions (each frame through each entry
+// point), so an uninitialized policy cannot admit the real intended or stored frame
+// either. Positive control: a constructed policy still admits the observed intended
+// frame through the intended entry point and the stored frame through the stored one.
+func TestZeroValuePolicyRefusesTheObservedFormsAtBothEntryPoints(t *testing.T) {
+	obs := loadObserved(t)
+	var zero StoragePolicy
+	for _, frame := range []struct {
+		name string
+		p    Projection
+	}{{"observed intended frame", obs.Before}, {"observed stored frame", obs.After}} {
+		requireRefusal(t, zero.AdmitIntended(frame.p), "intended", ReasonUnavailable)
+		requireRefusal(t, zero.AdmitStored(frame.p), "stored", ReasonUnavailable)
+	}
+	built := newTestPolicy(t, markerDescriptor)
+	if err := built.AdmitIntended(obs.Before); err != nil {
+		t.Fatalf("the constructed policy refuses the observed intended frame: %v", err)
+	}
+	if err := built.AdmitStored(obs.After); err != nil {
+		t.Fatalf("the constructed policy refuses the observed stored frame: %v", err)
+	}
+}
+
+// Claim (regression, review blocker): a partly filled policy is unusable too: each
+// struct that lacks the descriptor, the requirement, the intended form or the stored
+// form refuses the empty projection and both observed frames at both entry points as
+// "unavailable". A policy that is usable for one form only is not trusted for either.
+func TestPartlyBuiltPolicyRefusesEverythingAtBothEntryPoints(t *testing.T) {
+	obs := loadObserved(t)
+	good := newTestPolicy(t, markerDescriptor)
+	for _, c := range []struct {
+		name   string
+		policy *StoragePolicy
+	}{
+		{"descriptor only", &StoragePolicy{descriptor: markerDescriptor}},
+		{"descriptor and requirement only", &StoragePolicy{descriptor: markerDescriptor, requirement: good.requirement}},
+		{"intended form only", &StoragePolicy{descriptor: markerDescriptor, requirement: good.requirement, intended: good.intended}},
+		{"stored form only", &StoragePolicy{descriptor: markerDescriptor, requirement: good.requirement, stored: good.stored}},
+		{"forms without a descriptor", &StoragePolicy{requirement: good.requirement, intended: good.intended, stored: good.stored}},
+		{"forms without a requirement", &StoragePolicy{descriptor: markerDescriptor, intended: good.intended, stored: good.stored}},
+	} {
+		for _, p := range []Projection{{}, obs.Before, obs.After} {
+			if err := c.policy.AdmitIntended(p); err == nil {
+				t.Fatalf("%s: admitted at the intended entry point", c.name)
+			}
+			requireRefusal(t, c.policy.AdmitIntended(p), "intended", ReasonUnavailable)
+			requireRefusal(t, c.policy.AdmitStored(p), "stored", ReasonUnavailable)
+		}
+	}
+}

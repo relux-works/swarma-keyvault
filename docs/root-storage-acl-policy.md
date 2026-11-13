@@ -43,6 +43,21 @@ listed, unreadable names, contents or prompt, another description, another
 application list, another requirement (the helper, a second application, a widened or
 truncated requirement, a missing or unreadable one), or another number of an ACL.
 
+### What the encrypt and change rows do and do not mean
+
+- **Encrypt (NULL application list).** The list is unrestricted, for its one
+  authorization, Encrypt. It grants none of Decrypt, Derive, ExportClear, ExportWrapped,
+  MAC, Sign or ChangeACL: those stay restricted to the owning vault's exact
+  requirement on the release ACL. Admitting this row is acceptable for the
+  secret-release boundary only. It does **not** establish sole-writer integrity of the
+  item's envelope or its public metadata: a refused foreign read is not a write,
+  overwrite or delete control, and no native control of that kind has been run.
+- **Change (explicitly empty list).** No application is preauthorized to change the
+  ACL. It is not the NULL subject (any application). It is not proof that a person can
+  never approve a change: an empty trusted list does not rule out an explicit
+  confirmation path, and a prompt-flags value of 0 does not turn an empty list into
+  NULL.
+
 ## Evidence
 
 The forms were recorded by the attended public-marker qualification of the signed
@@ -74,10 +89,13 @@ signing policy, and the team partition against the team of that policy.
 - Another macOS version may emit other forms. The predicate then refuses, which blocks
   root storage until new evidence extends the table and the change is reviewed. It is
   never loosened to make an add pass.
-- The encrypt ACL carries no application restriction in the observed object. Whether
-  that is acceptable for this item is a review question, not something the
-  observation settles; the release ACL, which carries every authorization that reads
-  or uses the item, is restricted to the owning vault.
+- The encrypt ACL carries no application restriction in the observed object. That is
+  acceptable for the secret-release boundary only (the release ACL, which carries
+  Decrypt, Derive, ExportClear, ExportWrapped, MAC and Sign, is restricted to the
+  owning vault); it does not establish sole-writer integrity of the item's envelope
+  or public metadata, and the empty change list means no preauthorized ACL writer,
+  not that no change can ever be approved. No native write, overwrite or delete
+  qualification of the item has been run.
 - The predicate reads ACLs only. The item's service, account, value and metadata are
   checked by the attach flow.
 

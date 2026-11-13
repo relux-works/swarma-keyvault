@@ -16,6 +16,9 @@ Still open:
   production item before the owner's own key is stored.
 - Whether the Integrity ACL's description differs per item (it is admitted by a
   64-hex pattern) needs a second observation.
-- Whether the encrypt ACL's absent application restriction is acceptable for a root
-  item is a review question; the observation records it and does not settle it.
+- The encrypt ACL's absent application restriction is acceptable for the
+  secret-release boundary only, and the empty change list means no preauthorized ACL
+  writer; neither establishes sole-writer integrity of the item's envelope or public
+  metadata, and no native write, overwrite or delete qualification has been run (see
+  `docs/root-storage-acl-policy.md`).
 - Forms on other macOS versions are unknown and refused until observed and reviewed.
