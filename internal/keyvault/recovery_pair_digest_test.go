@@ -11,8 +11,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -252,349 +252,591 @@ func TestRecoveryDescribeMissingOrAmbiguousPairHasNoDigest(t *testing.T) {
 // recoveryShared is the one function that may hash the pair metadata.
 const recoveryShared = "recoveryMetadataSHA256"
 
-// recoveryDigestSite names one place of the production source that produces a
-// pair metadata digest and what the guard requires of it.
-type recoveryDigestSite struct {
-	// key is "name" or "Type.name" of the function.
-	key string
-	// field is the composite-literal key that holds the digest; empty means the
-	// first result of every return that is not the empty string.
-	field string
-	// argument is the identifier the shared function must be called with.
-	argument string
-	// marshalOf, when set, means argument is defined exactly once as
-	// `argument, _ := json.Marshal(marshalOf)`; when empty, argument must be the
-	// function's first parameter and is never assigned.
-	marshalOf string
+// recoveryReviewedHashers is the reviewed inventory of the functions of the
+// non-test source files of this package that use a hash package. A new hashing
+// function anywhere in the package fails the guard by name until it is reviewed
+// and added here.
+var recoveryReviewedHashers = []string{
+	"EnclaveStore.signOwnerDocument", "ExportRootGrants", "NewRootGrantsRecord", "RootQualificationCreate",
+	"SSHAgent.signAudited", "deriveRecovery", "masterRecoveryNode", "mnemonicIndices", "newRecoveryAdoptionPlan",
+	"prepareRootGrantsAttach", "recoveryBinding", "recoveryHash160", "recoveryMetadataSHA256", "recoveryNode.derive",
+	"recoveryNode.xpub", "recoverySeal", "rootGrantsBIP85Entropy", "rootGrantsCompletionACK", "rootGrantsPlaintextBinding",
+	"sealRootGrantsWithRandom", "validRecoveryNamecoinPins", "validateWrapping",
 }
 
-var recoveryHashPackages = map[string]bool{"crypto": true, "crypto/md5": true, "crypto/sha1": true, "crypto/sha256": true, "crypto/sha512": true}
+func recoveryIsHashPath(path string) bool {
+	switch path {
+	case "crypto", "crypto/md5", "crypto/sha1", "crypto/sha256", "crypto/sha512", "crypto/hmac", "hash",
+		"golang.org/x/crypto/sha3", "golang.org/x/crypto/blake2b", "golang.org/x/crypto/blake2s",
+		"golang.org/x/crypto/ripemd160", "golang.org/x/crypto/pbkdf2", "golang.org/x/crypto/hkdf":
+		return true
+	}
+	return strings.HasPrefix(path, "hash/") || strings.HasPrefix(path, "github.com/btcsuite/btcd/chainhash")
+}
 
 func recoveryFuncKey(fd *ast.FuncDecl) string {
 	if fd.Recv != nil && len(fd.Recv.List) == 1 {
-		if id, ok := fd.Recv.List[0].Type.(*ast.Ident); ok {
+		typ := fd.Recv.List[0].Type
+		if star, ok := typ.(*ast.StarExpr); ok {
+			typ = star.X
+		}
+		if id, ok := typ.(*ast.Ident); ok {
 			return id.Name + "." + fd.Name.Name
 		}
 	}
 	return fd.Name.Name
 }
 
-// recoveryHashNames returns the local names under which the file imports a hash
-// package (only that package when only is set) and whether it dot-imports one,
-// which would hide every use.
-func recoveryHashNames(f *ast.File, only string) (map[string]bool, bool) {
-	names, dot := map[string]bool{}, false
-	for _, imp := range f.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || !recoveryHashPackages[path] || (only != "" && path != only) {
-			continue
+// recoveryWalk visits every node under root together with its parent.
+func recoveryWalk(root ast.Node, visit func(n, parent ast.Node)) {
+	var stack []ast.Node
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
 		}
-		switch {
-		case imp.Name == nil:
-			names[path[strings.LastIndex(path, "/")+1:]] = true
-		case imp.Name.Name == ".":
-			dot = true
-		case imp.Name.Name != "_":
-			names[imp.Name.Name] = true
+		var parent ast.Node
+		if len(stack) > 0 {
+			parent = stack[len(stack)-1]
 		}
-	}
-	return names, dot
+		visit(n, parent)
+		stack = append(stack, n)
+		return true
+	})
 }
 
-// recoveryDigestProblems checks the expression that PRODUCES the digest, not the
-// presence of a shared call: every digest-producing return result (or the
-// composite-literal field) must be exactly recoveryMetadataSHA256(argument); the
-// argument must be the unmodified input; the shared name must not be rebound; the
-// field must not be assigned afterwards; and the body must not touch a hash
-// package under any import name. An empty result means the site conforms.
-func recoveryDigestProblems(src string, site recoveryDigestSite) []string {
-	f, err := parser.ParseFile(token.NewFileSet(), "source.go", src, 0)
-	if err != nil {
-		return []string{"parse: " + err.Error()}
+// recoveryRefusingImporter loads nothing: every imported package becomes a fake
+// package that keeps its import path, so that identifiers of the package itself,
+// lexical bindings and package names resolve exactly while members of other
+// packages stay unresolved (their errors are ignored).
+type recoveryRefusingImporter struct{}
+
+func (recoveryRefusingImporter) Import(path string) (*types.Package, error) {
+	if path == "unsafe" {
+		return types.Unsafe, nil
 	}
-	var fd *ast.FuncDecl
-	for _, d := range f.Decls {
-		if decl, ok := d.(*ast.FuncDecl); ok && decl.Body != nil && recoveryFuncKey(decl) == site.key {
-			fd = decl
+	return nil, fmt.Errorf("package %s is not loaded", path)
+}
+
+// recoveryPackage is a set of source files type-checked as one package.
+type recoveryPackage struct {
+	files []*ast.File
+	pkg   *types.Package
+	info  *types.Info
+}
+
+func recoveryLoad(sources map[string]string) (*recoveryPackage, error) {
+	names := make([]string, 0, len(sources))
+	for name := range sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	fset := token.NewFileSet()
+	var files []*ast.File
+	for _, name := range names {
+		f, err := parser.ParseFile(fset, name, sources[name], parser.SkipObjectResolution)
+		if err != nil {
+			return nil, err
 		}
+		files = append(files, f)
 	}
-	if fd == nil {
-		return []string{site.key + ": function not found"}
+	info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}}
+	conf := types.Config{Importer: recoveryRefusingImporter{}, FakeImportC: true, DisableUnusedImportCheck: true, Error: func(error) {}}
+	pkg, _ := conf.Check("keyvault", fset, files, info)
+	if pkg == nil {
+		return nil, errors.New("the sources did not type-check into a package")
 	}
-	var problems []string
-	note := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
-	isIdent := func(e ast.Expr, name string) bool {
-		id, ok := e.(*ast.Ident)
-		return ok && id.Name == name
+	return &recoveryPackage{files: files, pkg: pkg, info: info}, nil
+}
+
+func (p *recoveryPackage) object(name string) types.Object { return p.pkg.Scope().Lookup(name) }
+
+// resolvesTo reports whether e is an identifier that denotes exactly obj.
+func (p *recoveryPackage) resolvesTo(e ast.Expr, obj types.Object) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && obj != nil && p.info.Uses[id] == obj
+}
+
+// isPackage reports whether e is an identifier that denotes the imported package
+// with the given path, under whatever local name.
+func (p *recoveryPackage) isPackage(e ast.Expr, path string) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
 	}
-	var produced []ast.Expr
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.FuncLit:
-			return false
-		case *ast.ReturnStmt:
-			if site.field == "" && len(x.Results) > 0 {
-				if lit, ok := x.Results[0].(*ast.BasicLit); !ok || lit.Value != `""` {
-					produced = append(produced, x.Results[0])
-				}
+	name, ok := p.info.Uses[id].(*types.PkgName)
+	return ok && name.Imported().Path() == path
+}
+
+func (p *recoveryPackage) isNil(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	_, nilObject := p.info.Uses[id].(*types.Nil)
+	return nilObject
+}
+
+func (p *recoveryPackage) findFunc(key string) *ast.FuncDecl {
+	for _, f := range p.files {
+		for _, d := range f.Decls {
+			if fd, ok := d.(*ast.FuncDecl); ok && fd.Body != nil && recoveryFuncKey(fd) == key {
+				return fd
 			}
-		case *ast.KeyValueExpr:
-			if site.field != "" && isIdent(x.Key, site.field) {
-				produced = append(produced, x.Value)
-			}
-		}
-		return true
-	})
-	if len(produced) == 0 {
-		note("no expression produces the digest")
-	}
-	for _, e := range produced {
-		call, ok := e.(*ast.CallExpr)
-		if !ok || !isIdent(call.Fun, recoveryShared) || len(call.Args) != 1 {
-			note("the digest is not exactly %s(%s)", recoveryShared, site.argument)
-			continue
-		}
-		if !isIdent(call.Args[0], site.argument) {
-			note("%s is not called with the identifier %s", recoveryShared, site.argument)
 		}
 	}
-	hashNames, dot := recoveryHashNames(f, "")
-	if dot {
-		note("the file dot-imports a hash package")
+	return nil
+}
+
+// sharedCall reports whether e is exactly recoveryMetadataSHA256(argument): the
+// callee resolves to the package-level function (a local binding of the same
+// name does not) and the single argument denotes exactly argObj.
+func (p *recoveryPackage) sharedCall(e ast.Expr, argObj types.Object) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 || call.Ellipsis != token.NoPos {
+		return false
 	}
-	checkFields := func(list *ast.FieldList) {
-		if list == nil {
+	shared, ok := p.object(recoveryShared).(*types.Func)
+	return ok && p.resolvesTo(call.Fun, shared) && p.resolvesTo(call.Args[0], argObj)
+}
+
+// uses counts the uses of obj under body and how many of them are NOT the single
+// argument of a call to one of the callees.
+func (p *recoveryPackage) uses(body ast.Node, obj types.Object, callees ...types.Object) (total, stray int) {
+	if obj == nil {
+		return 0, 0
+	}
+	recoveryWalk(body, func(n, parent ast.Node) {
+		id, ok := n.(*ast.Ident)
+		if !ok || p.info.Uses[id] != obj {
 			return
 		}
-		for _, field := range list.List {
-			for _, name := range field.Names {
-				if name.Name == recoveryShared {
-					note("%s is rebound as a parameter or result", recoveryShared)
+		total++
+		if call, ok := parent.(*ast.CallExpr); ok && len(call.Args) == 1 && call.Args[0] == ast.Expr(id) {
+			for _, callee := range callees {
+				if p.resolvesTo(call.Fun, callee) {
+					return
 				}
 			}
 		}
-	}
-	checkFields(fd.Type.Params)
-	checkFields(fd.Type.Results)
-	if site.field == "" && fd.Type.Results != nil {
-		for _, field := range fd.Type.Results.List {
-			if len(field.Names) > 0 {
-				note("named results hide the digest-producing expression")
-			}
-		}
-	}
-	defines := 0
-	var defining ast.Expr
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.FuncLit:
-			checkFields(x.Type.Params)
-			checkFields(x.Type.Results)
-		case *ast.ValueSpec:
-			for _, name := range x.Names {
-				if name.Name == recoveryShared {
-					note("%s is rebound by a declaration", recoveryShared)
-				}
-				if name.Name == site.argument {
-					defines++
-				}
-			}
-		case *ast.AssignStmt:
-			for i, lhs := range x.Lhs {
-				switch target := lhs.(type) {
-				case *ast.Ident:
-					if target.Name == recoveryShared {
-						note("%s is rebound by an assignment", recoveryShared)
-					}
-					if target.Name == site.argument {
-						defines++
-						if i == 0 && len(x.Rhs) == 1 {
-							defining = x.Rhs[0]
-						}
-					}
-				case *ast.IndexExpr:
-					if isIdent(target.X, site.argument) {
-						note("the bytes of %s are modified in place", site.argument)
-					}
-				case *ast.SelectorExpr:
-					if site.field != "" && target.Sel.Name == site.field {
-						note("the digest field is assigned after construction")
-					}
-				}
-			}
-		case *ast.CallExpr:
-			if id, ok := x.Fun.(*ast.Ident); ok && (id.Name == "copy" || id.Name == "clear") && len(x.Args) > 0 && isIdent(x.Args[0], site.argument) {
-				note("the bytes of %s are modified in place", site.argument)
-			}
-		case *ast.SelectorExpr:
-			if id, ok := x.X.(*ast.Ident); ok && hashNames[id.Name] {
-				note("the body uses a hash package directly")
-			}
-		}
-		return true
+		stray++
 	})
-	if site.marshalOf != "" {
-		conforming := false
-		if call, ok := defining.(*ast.CallExpr); ok && defines == 1 && len(call.Args) == 1 && isIdent(call.Args[0], site.marshalOf) {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && isIdent(sel.X, "json") && sel.Sel.Name == "Marshal" {
-				conforming = true
+	return total, stray
+}
+
+// shapeProblems reports named results, function literals and every statement form
+// other than a block, an if, a return and a := definition.
+func shapeProblems(body *ast.BlockStmt, note func(string, ...any)) {
+	recoveryWalk(body, func(n, _ ast.Node) {
+		switch s := n.(type) {
+		case *ast.BlockStmt, *ast.IfStmt, *ast.ReturnStmt:
+		case *ast.AssignStmt:
+			if s.Tok != token.DEFINE {
+				note("statement form not admitted: an assignment other than :=")
+			}
+		case *ast.FuncLit:
+			note("function literals are not admitted")
+		case ast.Stmt:
+			note("statement form not admitted: %T", s)
+		}
+	})
+}
+
+func namedResults(fd *ast.FuncDecl) bool {
+	if fd.Type.Results == nil {
+		return false
+	}
+	for _, field := range fd.Type.Results.List {
+		if len(field.Names) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// printerProblems checks the digest printer by construction: the input is defined
+// by the first statement as json.Marshal of the receiver and is only ever passed
+// to parseRecoveryRecord and to the shared function; every return is a refusal
+// (the empty string and a non-nil error) or exactly recoveryMetadataSHA256 of the
+// input with a nil error; no named results, closures, loops or other statements.
+func (p *recoveryPackage) printerProblems(key string) []string {
+	var problems []string
+	note := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	fd := p.findFunc(key)
+	if fd == nil {
+		return []string{key + ": function not found"}
+	}
+	if _, ok := p.object(recoveryShared).(*types.Func); !ok {
+		note("%s is not a package-level function", recoveryShared)
+	}
+	if namedResults(fd) {
+		note("named results are not admitted")
+	}
+	shapeProblems(fd.Body, note)
+	var raw types.Object
+	if fd.Recv != nil && len(fd.Recv.List) == 1 && len(fd.Recv.List[0].Names) == 1 && len(fd.Body.List) > 0 {
+		receiver := p.info.Defs[fd.Recv.List[0].Names[0]]
+		if as, ok := fd.Body.List[0].(*ast.AssignStmt); ok && as.Tok == token.DEFINE && len(as.Lhs) == 2 && len(as.Rhs) == 1 {
+			if call, ok := as.Rhs[0].(*ast.CallExpr); ok && len(call.Args) == 1 {
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Marshal" && p.isPackage(sel.X, "encoding/json") && p.resolvesTo(call.Args[0], receiver) {
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						raw = p.info.Defs[id]
+					}
+				}
 			}
 		}
-		if !conforming {
-			note("%s is not defined exactly once as json.Marshal(%s)", site.argument, site.marshalOf)
+	}
+	if raw == nil {
+		note("the first statement does not define the input as json.Marshal of the receiver")
+		return problems
+	}
+	if _, stray := p.uses(fd.Body, raw, p.object("parseRecoveryRecord"), p.object(recoveryShared)); stray > 0 {
+		note("the input is used outside parseRecoveryRecord and %s (%d uses)", recoveryShared, stray)
+	}
+	digests := 0
+	recoveryWalk(fd.Body, func(n, _ ast.Node) {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return
 		}
-	} else {
-		first := ""
-		if params := fd.Type.Params; params != nil && len(params.List) > 0 && len(params.List[0].Names) > 0 {
-			first = params.List[0].Names[0].Name
+		if len(ret.Results) != 2 {
+			note("a return does not have exactly two results")
+			return
 		}
-		if first != site.argument || defines != 0 {
-			note("%s must be the unmodified first parameter", site.argument)
+		if lit, ok := ret.Results[0].(*ast.BasicLit); ok && lit.Kind == token.STRING && lit.Value == `""` {
+			if p.isNil(ret.Results[1]) {
+				note("a refusal return carries no error")
+			}
+			return
 		}
+		if p.sharedCall(ret.Results[0], raw) && p.isNil(ret.Results[1]) {
+			digests++
+			return
+		}
+		note("a return does not produce the digest by exactly %s on the unmodified input", recoveryShared)
+	})
+	if digests == 0 {
+		note("no return produces the digest")
 	}
 	return problems
 }
 
-// recoveryHashers lists the functions of a source file that use the SHA-256
-// package under any import name.
-func recoveryHashers(src string) ([]string, error) {
-	f, err := parser.ParseFile(token.NewFileSet(), "source.go", src, 0)
+// bindingProblems checks the attach binding by construction: the body is exactly
+// one return of a keyed composite literal of RootGrantsPairBinding whose
+// MetadataSHA256 field is exactly recoveryMetadataSHA256 of the first parameter,
+// and that parameter is used nowhere else.
+func (p *recoveryPackage) bindingProblems(key string) []string {
+	var problems []string
+	note := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	fd := p.findFunc(key)
+	if fd == nil {
+		return []string{key + ": function not found"}
+	}
+	if namedResults(fd) {
+		note("named results are not admitted")
+	}
+	recoveryWalk(fd.Body, func(n, _ ast.Node) {
+		if _, ok := n.(*ast.FuncLit); ok {
+			note("function literals are not admitted")
+		}
+	})
+	if len(fd.Body.List) != 1 {
+		note("the body is not exactly one return statement")
+	}
+	var raw types.Object
+	if params := fd.Type.Params; params != nil && len(params.List) > 0 && len(params.List[0].Names) > 0 {
+		raw = p.info.Defs[params.List[0].Names[0]]
+	}
+	if raw == nil {
+		note("the function has no first parameter")
+		return problems
+	}
+	if total, stray := p.uses(fd.Body, raw, p.object(recoveryShared)); total != 1 || stray != 0 {
+		note("the first parameter is used %d times (%d outside the shared call); it must be used exactly once, in the shared call", total, stray)
+	}
+	var ret *ast.ReturnStmt
+	if len(fd.Body.List) > 0 {
+		ret, _ = fd.Body.List[len(fd.Body.List)-1].(*ast.ReturnStmt)
+	}
+	if ret == nil || len(ret.Results) != 1 {
+		note("the body does not end in a return of one value")
+		return problems
+	}
+	lit, ok := ret.Results[0].(*ast.CompositeLit)
+	if !ok || !p.resolvesTo(lit.Type, p.object("RootGrantsPairBinding")) {
+		note("the returned value is not a composite literal of RootGrantsPairBinding")
+		return problems
+	}
+	fields := 0
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			note("the binding literal has an unkeyed element")
+			continue
+		}
+		if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "MetadataSHA256" {
+			fields++
+			if !p.sharedCall(kv.Value, raw) {
+				note("the MetadataSHA256 field is not exactly %s on the unmodified first parameter", recoveryShared)
+			}
+		}
+	}
+	if fields != 1 {
+		note("the binding literal does not set MetadataSHA256 exactly once")
+	}
+	return problems
+}
+
+// hasherProblems compares the set of functions that use a hash package, resolved
+// by import path under any local name, with the reviewed inventory.
+func (p *recoveryPackage) hasherProblems(reviewed []string) []string {
+	var problems []string
+	allowed := map[string]bool{}
+	for _, key := range reviewed {
+		allowed[key] = true
+	}
+	seen := map[string]bool{}
+	for _, f := range p.files {
+		for _, imp := range f.Imports {
+			path, err := strconv.Unquote(imp.Path.Value)
+			if err == nil && imp.Name != nil && imp.Name.Name == "." && recoveryIsHashPath(path) {
+				problems = append(problems, "a hash package is dot-imported: "+path)
+			}
+		}
+		for _, d := range f.Decls {
+			key := "<package-level>"
+			switch decl := d.(type) {
+			case *ast.FuncDecl:
+				if decl.Body == nil {
+					continue
+				}
+				key = recoveryFuncKey(decl)
+			case *ast.GenDecl:
+				if decl.Tok == token.IMPORT {
+					continue
+				}
+			}
+			used := false
+			ast.Inspect(d, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					if name, ok := p.info.Uses[id].(*types.PkgName); ok && recoveryIsHashPath(name.Imported().Path()) {
+						used = true
+					}
+				}
+				return true
+			})
+			if used {
+				seen[key] = true
+			}
+		}
+	}
+	var unreviewed, missing []string
+	for key := range seen {
+		if !allowed[key] {
+			unreviewed = append(unreviewed, key)
+		}
+	}
+	for _, key := range reviewed {
+		if !seen[key] {
+			missing = append(missing, key)
+		}
+	}
+	sort.Strings(unreviewed)
+	sort.Strings(missing)
+	for _, key := range unreviewed {
+		problems = append(problems, "unreviewed hashing function "+key)
+	}
+	for _, key := range missing {
+		problems = append(problems, "reviewed hashing function not found: "+key)
+	}
+	return problems
+}
+
+// recoveryContractProblems type-checks the sources as one package and applies the
+// whole one-definition contract. An empty result means the sources conform.
+func recoveryContractProblems(sources map[string]string, reviewed []string) ([]string, error) {
+	p, err := recoveryLoad(sources)
 	if err != nil {
 		return nil, err
 	}
-	names, dot := recoveryHashNames(f, "crypto/sha256")
-	if dot {
-		return []string{"<dot-import>"}, nil
-	}
-	var out []string
-	for _, d := range f.Decls {
-		fd, ok := d.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
-		}
-		used := false
-		ast.Inspect(fd.Body, func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok {
-				if id, ok := sel.X.(*ast.Ident); ok && names[id.Name] {
-					used = true
-				}
-			}
-			return true
-		})
-		if used {
-			out = append(out, recoveryFuncKey(fd))
-		}
-	}
-	sort.Strings(out)
-	return out, nil
+	problems := p.printerProblems("RecoveryRecord.PairMetadataSHA256")
+	problems = append(problems, p.bindingProblems("rootGrantsPairBinding")...)
+	return append(problems, p.hasherProblems(reviewed)...), nil
 }
 
-func recoveryPrintSource(imports, body, extra string) string {
-	return "package p\nimport (\n" + imports + "\n)\nfunc (r RecoveryRecord) PairMetadataSHA256() (string, error) {\n" + body + "\n}\n" + extra
+const recoveryStubTypes = `package keyvault
+type RecoveryRecord struct{ Created string }
+type RootGrantsPairBinding struct{ Schema, MetadataSHA256 string }
+func recoveryRefuse(code string) error { return nil }
+func parseRecoveryRecord(raw []byte) (RecoveryRecord, error) { return RecoveryRecord{}, nil }
+`
+
+const recoveryStubShared = `package keyvault
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+func recoveryMetadataSHA256(raw []byte) string {
+	h := sha256.Sum256(raw)
+	return hex.EncodeToString(h[:])
+}
+`
+
+// recoveryStubCopy is an independent hashing helper in an ordinary source file.
+const recoveryStubCopy = `package keyvault
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+func recoveryMetadataCopy(raw []byte) string {
+	h := sha256.Sum256(raw)
+	return hex.EncodeToString(h[:])
+}
+func recoveryPairBindingCopy(raw []byte, r RecoveryRecord) RootGrantsPairBinding {
+	h := sha256.Sum256(raw)
+	return RootGrantsPairBinding{Schema: r.Created, MetadataSHA256: hex.EncodeToString(h[:])}
+}
+`
+
+func recoveryStubPrinter(imports, tail string) string {
+	return "package keyvault\nimport (\n\"encoding/json\"\n" + imports + "\n)\n" +
+		"func (r RecoveryRecord) PairMetadataSHA256() (string, error) {\n" +
+		"raw, err := json.Marshal(r)\nif err != nil {\nreturn \"\", recoveryRefuse(\"invalid_record\")\n}\n" +
+		"if _, err := parseRecoveryRecord(raw); err != nil {\nreturn \"\", err\n}\n" + tail + "\n}\n"
 }
 
-func recoveryBindingSource(body, extra string) string {
-	return "package p\nimport \"crypto/sha512\"\nfunc rootGrantsPairBinding(raw []byte, r RecoveryRecord) RootGrantsPairBinding {\n" + body + "\n}\n" + extra
+func recoveryStubBinding(body string) string {
+	return "package keyvault\nfunc rootGrantsPairBinding(raw []byte, r RecoveryRecord) RootGrantsPairBinding {\n" + body + "\n}\n"
+}
+
+func recoveryStubPackage(printer, binding string, extra map[string]string) map[string]string {
+	files := map[string]string{"types.go": recoveryStubTypes, "shared.go": recoveryStubShared, "printer.go": printer, "binding.go": binding}
+	for name, source := range extra {
+		files[name] = source
+	}
+	return files
 }
 
 // Claim: the printed digest and the attach binding each PRODUCE their digest by
-// exactly recoveryMetadataSHA256(raw) on the unmodified input, and no other
-// function of the two source files hashes with SHA-256 except the reviewed
-// ones. A shared call that is present but whose result is discarded in favour of
-// an independent hash (a helper, an alias, an import alias, an inline hash), a
-// rebound or shadowed shared name, a sliced, replaced, reassigned or edited
-// input, a transformed result and a digest field overwritten after construction
-// are each planted below and must each be reported for their own reason (never
-// by a parse error); the conforming forms must report nothing, and so must the
-// real source. Limit: source shape only, over the two named functions; a hashing
-// function added in a third file and called from them is caught at the call
-// (the digest is not exactly the shared call), and the behavioural equality is
+// exactly recoveryMetadataSHA256 of the unmodified input, established on the
+// type-checked package rather than on text. Identity comes from go/types: the
+// callee must RESOLVE to the package-level function, so a range variable, a
+// closure, a parameter or a local function value of the same name fails by
+// construction; the input must resolve to the variable defined by the first
+// statement and may only be passed to parseRecoveryRecord and the shared
+// function. The printer admits only := definitions, ifs and returns, every
+// return being a refusal or exactly the shared call; the binding is exactly one
+// return of a keyed RootGrantsPairBinding literal whose MetadataSHA256 is the
+// shared call on the first parameter (a discarded or other literal does not
+// count). The set of functions of ALL non-test source files that use a hash
+// package (by import path, under any local name) must equal the reviewed
+// inventory, so a new hashing helper anywhere is reported by name. Controls: the
+// conforming package and the real source report nothing; the plants (the
+// reviewer's two mutants among them) must each be reported for their own
+// reason on a package that type-checks the same way. Limits: the type check
+// loads no imports, so members of other packages are unresolved (identity of this
+// package's own symbols and of package names is exact); hash packages are known
+// by import path, so a hand-rolled hash that imports none is outside the
+// inventory (it can still not reach the two sites); the command-line printer's
+// call of PairMetadataSHA256 is not covered; behaviour is covered by
 // TestRecoveryPairDigestIsTheAttachPin.
 func TestRecoveryPairDigestHasOneDefinition(t *testing.T) {
-	printSite := recoveryDigestSite{key: "RecoveryRecord.PairMetadataSHA256", argument: "raw", marshalOf: "r"}
-	bindingSite := recoveryDigestSite{key: "rootGrantsPairBinding", field: "MetadataSHA256", argument: "raw"}
-	const imports = "\"crypto/sha256\"\n\"encoding/hex\"\n\"encoding/json\"\n\"strings\""
-	const prologue = "raw, err := json.Marshal(r)\nif err != nil {\nreturn \"\", recoveryRefuse(\"invalid_record\")\n}\nif _, err := parseRecoveryRecord(raw); err != nil {\nreturn \"\", err\n}\n"
-	const copyHelper = "func recoveryMetadataCopy(raw []byte) string {\nh := sha256.Sum256(raw)\nreturn hex.EncodeToString(h[:])\n}\n"
+	reviewed := []string{recoveryShared}
+	conformingPrinter := recoveryStubPrinter("", "return recoveryMetadataSHA256(raw), nil")
+	conformingBinding := recoveryStubBinding("return RootGrantsPairBinding{Schema: r.Created, MetadataSHA256: recoveryMetadataSHA256(raw)}")
+	copyFile := map[string]string{"copy.go": recoveryStubCopy}
 	type plant struct {
-		name, source, want string
-		site               recoveryDigestSite
+		name, want string
+		files      map[string]string
+		reviewed   []string
 	}
+	printer := func(name, imports, tail, want string, extra map[string]string) plant {
+		return plant{name, want, recoveryStubPackage(recoveryStubPrinter(imports, tail), conformingBinding, extra), reviewed}
+	}
+	binding := func(name, body, want string, extra map[string]string) plant {
+		return plant{name, want, recoveryStubPackage(conformingPrinter, recoveryStubBinding(body), extra), reviewed}
+	}
+	const notExactly = "a return does not produce the digest by exactly"
+	const strayInput = "the input is used outside"
+	const shaImports = "\"crypto/sha256\"\n\"encoding/hex\""
 	plants := []plant{
-		{"discarded shared result, helper copy", recoveryPrintSource(imports, prologue+"_ = recoveryMetadataSHA256(raw)\nreturn recoveryMetadataCopy(raw), nil", copyHelper), "is not exactly", printSite},
-		{"inline hash", recoveryPrintSource(imports, prologue+"h := sha256.Sum256(raw)\nreturn hex.EncodeToString(h[:]), nil", ""), "uses a hash package directly", printSite},
-		{"aliased hash function", recoveryPrintSource(imports, prologue+"hash := sha256.Sum256\nh := hash(raw)\nreturn hex.EncodeToString(h[:]), nil", ""), "uses a hash package directly", printSite},
-		{"import alias", recoveryPrintSource("shaX \"crypto/sha256\"\n\"encoding/hex\"\n\"encoding/json\"", prologue+"h := shaX.Sum256(raw)\nreturn hex.EncodeToString(h[:]), nil", ""), "uses a hash package directly", printSite},
-		{"shared name shadowed", recoveryPrintSource(imports, prologue+"recoveryMetadataSHA256 := func(b []byte) string { return \"00\" }\nreturn recoveryMetadataSHA256(raw), nil", ""), "is rebound", printSite},
-		{"sliced argument", recoveryPrintSource(imports, prologue+"return recoveryMetadataSHA256(raw[1:]), nil", ""), "is not called with the identifier", printSite},
-		{"other input", recoveryPrintSource(imports, prologue+"other := []byte(r.Created)\nreturn recoveryMetadataSHA256(other), nil", ""), "is not called with the identifier", printSite},
-		{"argument reassigned", recoveryPrintSource(imports, prologue+"raw = raw[1:]\nreturn recoveryMetadataSHA256(raw), nil", ""), "is not defined exactly once", printSite},
-		{"argument edited in place", recoveryPrintSource(imports, prologue+"raw[0] = 0\nreturn recoveryMetadataSHA256(raw), nil", ""), "modified in place", printSite},
-		{"result transformed", recoveryPrintSource(imports, prologue+"return strings.ToUpper(recoveryMetadataSHA256(raw)), nil", ""), "is not exactly", printSite},
-		{"named result with a bare return", "package p\nimport (\n" + imports + "\n)\nfunc (r RecoveryRecord) PairMetadataSHA256() (digest string, err error) {\n" + prologue + "digest = recoveryMetadataCopy(raw)\nreturn\n}\n" + copyHelper, "named results", printSite},
-		{"shared call without a digest result", recoveryPrintSource(imports, prologue+"_ = recoveryMetadataSHA256(raw)\nreturn \"\", nil", ""), "no expression produces the digest", printSite},
-		{"binding: helper copy in the field", recoveryBindingSource("_ = recoveryMetadataSHA256(raw)\nreturn RootGrantsPairBinding{MetadataSHA256: recoveryMetadataCopy(raw)}", ""), "is not exactly", bindingSite},
-		{"binding: sliced argument", recoveryBindingSource("return RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw[1:])}", ""), "is not called with the identifier", bindingSite},
-		{"binding: field overwritten later", recoveryBindingSource("b := RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}\nb.MetadataSHA256 = recoveryMetadataCopy(raw)\nreturn b", ""), "assigned after construction", bindingSite},
-		{"binding: parameter reassigned", recoveryBindingSource("raw = raw[1:]\nreturn RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}", ""), "must be the unmodified first parameter", bindingSite},
+		printer("discarded shared result, helper copy", "", "_ = recoveryMetadataSHA256(raw)\nreturn recoveryMetadataCopy(raw), nil", notExactly, copyFile),
+		printer("inline hash", shaImports, "h := sha256.Sum256(raw)\nreturn hex.EncodeToString(h[:]), nil", "unreviewed hashing function RecoveryRecord.PairMetadataSHA256", nil),
+		printer("aliased hash function value", shaImports, "hash := sha256.Sum256\nh := hash(raw)\nreturn hex.EncodeToString(h[:]), nil", "unreviewed hashing function RecoveryRecord.PairMetadataSHA256", nil),
+		printer("import alias", "shaX \"crypto/sha256\"\n\"encoding/hex\"", "h := shaX.Sum256(raw)\nreturn hex.EncodeToString(h[:]), nil", "unreviewed hashing function RecoveryRecord.PairMetadataSHA256", nil),
+		printer("shared name shadowed by a range variable (review mutant)", "", "for _, recoveryMetadataSHA256 := range []func([]byte) string{recoveryMetadataCopy} {\nreturn recoveryMetadataSHA256(raw), nil\n}\nreturn \"\", recoveryRefuse(\"invalid_record\")", notExactly, copyFile),
+		printer("shared name shadowed by a closure", "", "recoveryMetadataSHA256 := func(b []byte) string { return \"00\" }\nreturn recoveryMetadataSHA256(raw), nil", notExactly, nil),
+		printer("input shadowed by a range variable", "", "for _, raw := range [][]byte{nil} {\nreturn recoveryMetadataSHA256(raw), nil\n}\nreturn \"\", recoveryRefuse(\"invalid_record\")", notExactly, nil),
+		printer("sliced argument", "", "return recoveryMetadataSHA256(raw[1:]), nil", notExactly, nil),
+		printer("other input", "", "other := []byte(r.Created)\nreturn recoveryMetadataSHA256(other), nil", notExactly, nil),
+		printer("input reassigned", "", "raw = raw[1:]\nreturn recoveryMetadataSHA256(raw), nil", strayInput, nil),
+		printer("input aliased", "", "x := raw\nreturn recoveryMetadataSHA256(x), nil", strayInput, nil),
+		printer("input edited in place", "", "raw[0] = 0\nreturn recoveryMetadataSHA256(raw), nil", strayInput, nil),
+		printer("result transformed", "\"strings\"", "return strings.ToUpper(recoveryMetadataSHA256(raw)), nil", notExactly, nil),
+		printer("digest returned with a non-nil error", "", "return recoveryMetadataSHA256(raw), err", notExactly, nil),
+		printer("no return produces the digest", "", "_ = recoveryMetadataSHA256(raw)\nreturn \"\", nil", "no return produces the digest", nil),
+		{"named result with a bare return", "named results are not admitted", recoveryStubPackage("package keyvault\nimport \"encoding/json\"\nfunc (r RecoveryRecord) PairMetadataSHA256() (digest string, err error) {\nraw, err := json.Marshal(r)\ndigest = recoveryMetadataCopy(raw)\nreturn\n}\n", conformingBinding, copyFile), reviewed},
+		{"input marshals another value", "the first statement does not define the input", recoveryStubPackage("package keyvault\nimport \"encoding/json\"\nfunc (r RecoveryRecord) PairMetadataSHA256() (string, error) {\nraw, err := json.Marshal(RecoveryRecord{})\nif err != nil {\nreturn \"\", err\n}\nreturn recoveryMetadataSHA256(raw), nil\n}\n", conformingBinding, nil), reviewed},
+		binding("discarded literal, returned helper (review mutant)", "_ = RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}\nreturn recoveryPairBindingCopy(raw, r)", "the body is not exactly one return statement", copyFile),
+		binding("helper copy in the field", "return RootGrantsPairBinding{MetadataSHA256: recoveryMetadataCopy(raw)}", "the MetadataSHA256 field is not exactly", copyFile),
+		binding("sliced argument", "return RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw[1:])}", "the MetadataSHA256 field is not exactly", nil),
+		binding("field overwritten after construction", "b := RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}\nb.MetadataSHA256 = recoveryMetadataCopy(raw)\nreturn b", "the body is not exactly one return statement", copyFile),
+		binding("variable returned", "b := RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}\nreturn b", "the body is not exactly one return statement", nil),
+		binding("parameter reassigned", "raw = raw[1:]\nreturn RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}", "the body is not exactly one return statement", nil),
+		binding("unkeyed element", "return RootGrantsPairBinding{\"x\", recoveryMetadataSHA256(raw)}", "the binding literal has an unkeyed element", nil),
+		binding("literal of another type", "return RootGrantsOther{MetadataSHA256: recoveryMetadataSHA256(raw)}", "the returned value is not a composite literal of RootGrantsPairBinding", nil),
+		binding("parameter used twice", "return RootGrantsPairBinding{Schema: recoveryMetadataSHA256(raw), MetadataSHA256: recoveryMetadataSHA256(raw)}", "the first parameter is used 2 times", nil),
+		binding("shared name shadowed by a closure", "recoveryMetadataSHA256 := func(b []byte) string { return \"00\" }\nreturn RootGrantsPairBinding{MetadataSHA256: recoveryMetadataSHA256(raw)}", "function literals are not admitted", nil),
+		{"hashing helper in a third file, never called", "unreviewed hashing function recoveryMetadataCopy", recoveryStubPackage(conformingPrinter, conformingBinding, copyFile), reviewed},
+		{"hashing helper through an import alias", "unreviewed hashing function aliased", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"alias.go": "package keyvault\nimport shaX \"crypto/sha256\"\nfunc aliased(b []byte) [32]byte {\nreturn shaX.Sum256(b)\n}\n"}), reviewed},
+		{"hash constructor through hmac and sha512", "unreviewed hashing function macCopy", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"mac.go": "package keyvault\nimport (\n\"crypto/hmac\"\n\"crypto/sha512\"\n)\nfunc macCopy(key []byte) []byte {\nreturn hmac.New(sha512.New, key).Sum(nil)\n}\n"}), reviewed},
+		{"method with a pointer receiver", "unreviewed hashing function thing.sum", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"thing.go": "package keyvault\nimport \"crypto/sha256\"\ntype thing struct{}\nfunc (t *thing) sum(b []byte) [32]byte {\nreturn sha256.Sum256(b)\n}\n"}), reviewed},
+		{"package-level hash constructor", "unreviewed hashing function <package-level>", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"var.go": "package keyvault\nimport \"crypto/sha256\"\nvar newDigest = sha256.New\n"}), reviewed},
+		{"dot-imported hash package", "a hash package is dot-imported", recoveryStubPackage(conformingPrinter, conformingBinding, map[string]string{"dot.go": "package keyvault\nimport . \"crypto/sha256\"\nfunc dotted(b []byte) [32]byte {\nreturn Sum256(b)\n}\n"}), reviewed},
+		{"reviewed function no longer hashes", "reviewed hashing function not found: ghost", recoveryStubPackage(conformingPrinter, conformingBinding, nil), []string{recoveryShared, "ghost"}},
 	}
 	for _, p := range plants {
-		problems := recoveryDigestProblems(p.source, p.site)
+		problems, err := recoveryContractProblems(p.files, p.reviewed)
+		if err != nil {
+			t.Fatalf("%s: the plant is not valid source for the guard: %v", p.name, err)
+		}
 		matched := false
 		for _, problem := range problems {
-			if strings.HasPrefix(problem, "parse:") || strings.HasSuffix(problem, "function not found") {
-				t.Fatalf("%s: the plant is not valid source for the guard: %v", p.name, problems)
-			}
 			matched = matched || strings.Contains(problem, p.want)
 		}
 		if !matched {
 			t.Fatalf("%s: the guard did not report %q: %v", p.name, p.want, problems)
 		}
 	}
-	for name, source := range map[string]string{
-		"conforming print form":   recoveryPrintSource(imports, prologue+"return recoveryMetadataSHA256(raw), nil", ""),
-		"conforming binding form": recoveryBindingSource("return RootGrantsPairBinding{Schema: r.Schema, MetadataSHA256: recoveryMetadataSHA256(raw), Version: r.Version}", ""),
-	} {
-		site := printSite
-		if strings.Contains(name, "binding") {
-			site = bindingSite
+	if problems, err := recoveryContractProblems(recoveryStubPackage(conformingPrinter, conformingBinding, nil), reviewed); err != nil || len(problems) != 0 {
+		t.Fatalf("the conforming package was rejected: %v %v", problems, err)
+	}
+	// The real source: every non-test file of the package, whatever its build
+	// constraint, so that the result is the same on every platform.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
 		}
-		if problems := recoveryDigestProblems(source, site); len(problems) != 0 {
-			t.Fatalf("%s was rejected: %v", name, problems)
-		}
-	}
-	// The package-level layer: a function that hashes with SHA-256 must be one of
-	// the reviewed ones.
-	if hashers, err := recoveryHashers("package p\nimport shaX \"crypto/sha256\"\nfunc helper(raw []byte) [32]byte {\nreturn shaX.Sum256(raw)\n}\nfunc other() {}\n"); err != nil || !reflect.DeepEqual(hashers, []string{"helper"}) {
-		t.Fatalf("a helper hashing through an import alias was not listed: %v %v", hashers, err)
-	}
-	if hashers, err := recoveryHashers("package p\nimport \"crypto/sha256\"\n" + copyHelper + "func other() {}\n"); err != nil || !reflect.DeepEqual(hashers, []string{"recoveryMetadataCopy"}) {
-		t.Fatalf("the helper copy was not listed: %v %v", hashers, err)
-	}
-	read := func(name string) string {
 		raw, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return string(raw)
+		sources[name] = string(raw)
 	}
-	binding, record := read("recovery_root_grants.go"), read("recovery_record.go")
-	if problems := recoveryDigestProblems(record, printSite); len(problems) != 0 {
-		t.Fatalf("the printed digest does not conform: %v", problems)
+	if len(sources) < 50 {
+		t.Fatalf("only %d source files were read", len(sources))
 	}
-	if problems := recoveryDigestProblems(binding, bindingSite); len(problems) != 0 {
-		t.Fatalf("the attach binding does not conform: %v", problems)
+	problems, err := recoveryContractProblems(sources, recoveryReviewedHashers)
+	if err != nil {
+		t.Fatal(err)
 	}
-	reviewed := map[string][]string{
-		"recovery_record.go": {"recoveryBinding", "recoveryMetadataSHA256", "recoverySeal", "validRecoveryNamecoinPins", "validateWrapping"},
-	}
-	for name, source := range map[string]string{"recovery_record.go": record, "recovery_root_grants.go": binding} {
-		hashers, err := recoveryHashers(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if want := reviewed[name]; len(want) == 0 && len(hashers) != 0 || len(want) != 0 && !reflect.DeepEqual(hashers, want) {
-			t.Fatalf("%s: the functions that hash with SHA-256 are %v, not the reviewed %v; a new hashing function needs review", name, hashers, want)
-		}
+	if len(problems) != 0 {
+		t.Fatalf("the real source does not conform to the one-definition contract: %v", problems)
 	}
 }
