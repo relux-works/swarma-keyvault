@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,9 +23,11 @@ const (
 var rgFlagOrder = []string{"nostr-identity", "namecoin-identity", "version", "nostr-version", "namecoin-version", "grants-identity", "grants-version",
 	"expected-group-id", "expected-pair-metadata-sha256", "expected-npub", "expected-namecoin-xpub", "expected-origin"}
 
+// The three identities and the four generations are pairwise different, so a flag
+// that lands in another field changes the request and fails the receipt test.
 func rgAttachValues() map[string]string {
-	return map[string]string{"nostr-identity": "test", "namecoin-identity": "test", "version": "1", "nostr-version": "2", "namecoin-version": "1",
-		"grants-identity": "example-root", "grants-version": "1", "expected-group-id": strings.Repeat("0", 32),
+	return map[string]string{"nostr-identity": "north-social", "namecoin-identity": "south-wallet", "version": "3", "nostr-version": "5", "namecoin-version": "7",
+		"grants-identity": "example-root", "grants-version": "11", "expected-group-id": strings.Repeat("0", 32),
 		"expected-pair-metadata-sha256": strings.Repeat("a", 64), "expected-npub": rgNPub, "expected-namecoin-xpub": rgXPub, "expected-origin": rgOrigin}
 }
 
@@ -203,10 +206,32 @@ func TestRootGrantsAttachCLIStoredReceipt(t *testing.T) {
 		if len(f.attachCalls) != 1 {
 			t.Fatal("attach route not called exactly once")
 		}
-		want := keyvault.RootGrantsAttachRequest{NostrIdentity: "test", NamecoinIdentity: "test", Version: 1, NostrVersion: 2, NamecoinVersion: 1, GrantsIdentity: "example-root", GrantsVersion: 1,
+		want := keyvault.RootGrantsAttachRequest{NostrIdentity: "north-social", NamecoinIdentity: "south-wallet", Version: 3, NostrVersion: 5, NamecoinVersion: 7, GrantsIdentity: "example-root", GrantsVersion: 11,
 			ExpectedGroupID: strings.Repeat("0", 32), ExpectedPairMetadataSHA256: strings.Repeat("a", 64), ExpectedNPub: rgNPub, ExpectedNamecoinXPub: rgXPub, ExpectedOrigin: rgOrigin}
 		if f.attachCalls[0] != want {
 			t.Fatalf("request differs: %+v", f.attachCalls[0])
+		}
+		// Each flag lands in its own field: the expected value of every field is the
+		// value given to its own flag, and the seven values are pairwise different, so a
+		// swapped flag-to-field mapping cannot pass.
+		values, got := rgAttachValues(), f.attachCalls[0]
+		seen := map[string]string{}
+		for _, field := range []struct{ flag, got string }{
+			{"nostr-identity", got.NostrIdentity}, {"namecoin-identity", got.NamecoinIdentity}, {"grants-identity", got.GrantsIdentity},
+			{"version", strconv.Itoa(got.Version)}, {"nostr-version", strconv.Itoa(got.NostrVersion)},
+			{"namecoin-version", strconv.Itoa(got.NamecoinVersion)}, {"grants-version", strconv.Itoa(got.GrantsVersion)},
+		} {
+			if field.got != values[field.flag] {
+				t.Fatalf("--%s landed in the wrong field: got %q, want %q", field.flag, field.got, values[field.flag])
+			}
+			kind := "identity"
+			if _, err := strconv.Atoi(field.got); err == nil {
+				kind = "generation"
+			}
+			if other, dup := seen[kind+field.got]; dup {
+				t.Fatalf("the test values of --%s and --%s are equal, so a swap between them would go unnoticed", other, field.flag)
+			}
+			seen[kind+field.got] = field.flag
 		}
 		if !jsonMode {
 			for _, line := range []string{"outcome: stored\n", "root_grants: example-root/root-grants@1\n", "private_export: false\n", "pair_unchanged: true\n", "storage: enclave-wrapped-keychain\n"} {
