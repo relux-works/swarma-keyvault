@@ -200,11 +200,11 @@ struct RootGrantsPrivateTests {
     // Synthetic error classification only; generic/auth/hardware errors cannot
     // stand in for the REAL required silent ECDH refusal. No key is constructed.
     @Test func silentProbeRequiresKnownNoninteractiveDenial() {
-        #expect(RootGrantsSilentProbe.refused(NSError(domain: NSOSStatusErrorDomain, code: Int(errSecInteractionNotAllowed))))
+        #expect(RootGrantsSilentProbe.refused(NSError(domain: NSOSStatusErrorDomain, code: Int(Security.errSecInteractionNotAllowed))))
         #expect(RootGrantsSilentProbe.refused(NSError(domain: LAError.errorDomain, code: LAError.Code.notInteractive.rawValue)))
-        for error in [NSError(domain: NSOSStatusErrorDomain, code: Int(errSecAuthFailed)),
-                      NSError(domain: NSOSStatusErrorDomain, code: Int(errSecNotAvailable)),
-                      NSError(domain: "public-fixture", code: Int(errSecInteractionNotAllowed))] {
+        for error in [NSError(domain: NSOSStatusErrorDomain, code: Int(Security.errSecAuthFailed)),
+                      NSError(domain: NSOSStatusErrorDomain, code: Int(Security.errSecNotAvailable)),
+                      NSError(domain: "public-fixture", code: Int(Security.errSecInteractionNotAllowed))] {
             #expect(!RootGrantsSilentProbe.refused(error))
         }
     }

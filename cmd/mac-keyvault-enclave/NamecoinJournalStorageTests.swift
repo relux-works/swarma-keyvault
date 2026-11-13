@@ -121,8 +121,9 @@ private func fixtureHex(_ value: Data) -> String { value.map { String(format: "%
     fixture.append(Data(repeating: 0, count: 8))
     fixture.append(selection.genesisHead)
     fixture.append(Data(repeating: 21, count: 64))
-    try fixture.withUnsafeBytes {
-        #expect(try nativeJournalAnchorSequence($0, selection: selection, initializing: true) == 0)
+    try fixture.withUnsafeBytes { bytes in
+        let sequence = try nativeJournalAnchorSequence(bytes, selection: selection, initializing: true)
+        #expect(sequence == 0)
     }
     for length in 0..<fixture.count {
         expectNativeRefusal(.mismatch) {
@@ -144,8 +145,9 @@ private func fixtureHex(_ value: Data) -> String { value.map { String(format: "%
     expectNativeRefusal(.mismatch) {
         _ = try notInitialization.withUnsafeBytes { try nativeJournalAnchorSequence($0, selection: selection, initializing: true) }
     }
-    try notInitialization.withUnsafeBytes {
-        #expect(try nativeJournalAnchorSequence($0, selection: selection) == 1)
+    try notInitialization.withUnsafeBytes { bytes in
+        let sequence = try nativeJournalAnchorSequence(bytes, selection: selection)
+        #expect(sequence == 1)
     }
 }
 
