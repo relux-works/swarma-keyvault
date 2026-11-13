@@ -7,7 +7,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"regexp"
+	"fmt"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -208,6 +211,15 @@ func TestRootGrantsAttachPinnedInvalidArgumentsTouchNothing(t *testing.T) {
 	}
 	if len(x.fake.calls) != 0 || recorder.calls != 0 {
 		t.Fatal("refused collaborators reached native or the helper")
+	}
+	// A vault without an ACL policy is a definite refusal before any native call, not
+	// a panic (a Go panic would exit 2 and read as a usage error).
+	y := newRootGrantsVaultFixture(t, "keyvault-recovery/2")
+	y.vault.policy = nil
+	result, err := attachRootGrantsPinned(context.Background(), y.vault, q, rootGrantsFixedNow, recorder.run)
+	rootGrantsAttachFailure13(t, result, err, "invalid_arguments", "preflight", "not_applied")
+	if len(y.fake.calls) != 0 || recorder.calls != 0 {
+		t.Fatal("a vault without a policy reached native or the helper")
 	}
 }
 
@@ -522,6 +534,9 @@ func rootGrantsAttachOrderViolations(src string) []string {
 		strings.Count(body, "run(") != 1 || strings.Count(body, "admitIntendedACL(") != 1 {
 		violations = append(violations, "helper stage is not exactly one call after the pin comparison, the ACL admission and the request build")
 	}
+	if !strings.Contains(body, "vault.policy == nil") {
+		violations = append(violations, "the nil check before the helper does not cover the ACL policy")
+	}
 	if !strings.Contains(src, "return attachRootGrantsPinned(ctx, vault, q, time.Now, attachRootGrantsWithHelper)") || strings.Count(src, "attachRootGrantsWithHelper") != 2 {
 		violations = append(violations, "the exported entry no longer fixes the production helper stage and clock")
 	}
@@ -550,6 +565,9 @@ func TestRootGrantsAttachPinnedSourceOrder(t *testing.T) {
 		{"admission-removed", "not exactly one call after the pin comparison", func(s string) string {
 			return strings.Replace(s, "if err := vault.admitIntendedACL(); err != nil {", "if err := error(nil); err != nil {", 1)
 		}},
+		{"nil-policy-check-removed", "does not cover the ACL policy", func(s string) string {
+			return strings.Replace(s, "vault.policy == nil || ", "", 1)
+		}},
 		{"second-helper-call", "not exactly one call after the pin comparison", func(s string) string {
 			return strings.Replace(s, "\tresult, err := run(ctx, vault, encoded)", "\t_, _ = run(ctx, vault, encoded)\n\tresult, err := run(ctx, vault, encoded)", 1)
 		}},
@@ -561,13 +579,16 @@ func TestRootGrantsAttachPinnedSourceOrder(t *testing.T) {
 		if planted == src {
 			t.Fatalf("%s: the plant was not applied", plant.name)
 		}
-		found := false
+		caught := ""
 		for _, v := range rootGrantsAttachOrderViolations(planted) {
-			found = found || strings.Contains(v, plant.want)
+			if caught == "" && strings.Contains(v, plant.want) {
+				caught = v
+			}
 		}
-		if !found {
+		if caught == "" {
 			t.Fatalf("%s: the guard did not report %q", plant.name, plant.want)
 		}
+		t.Logf("plant %q caught: %s", plant.name, caught)
 	}
 }
 
@@ -615,16 +636,35 @@ func TestRootGrantsAttachPinnedRefusesUnadmittedACLBeforeHelper(t *testing.T) {
 	}
 }
 
-// rootGrantsInputSources lists every non-argument input source a source file uses.
-func rootGrantsInputSources(src string) []string {
+// rootGrantsAllowedImports is the closed set of package paths each attach source may
+// import, by path and whatever the alias: none of them can read an environment,
+// stdin, a file, a socket or a process.
+var rootGrantsAllowedImports = map[string]map[string]bool{
+	"root_grants_attach_export.go": rootGrantsSet("context", "encoding/hex", "encoding/json", "errors", "time", "github.com/btcsuite/btcd/btcutil/bech32"),
+	"root_grants_vault.go": rootGrantsSet("bytes", "context", "errors", "strings", "sync",
+		"github.com/relux-works/swarma-keyvault/internal/rootqualification"),
+	"root_grants_vault_darwin.go": rootGrantsSet("C", "unsafe"),
+}
+
+// rootGrantsInputSources lists every way a source file can reach an input other than
+// its typed request: an import outside its allowlist (parsed, so an alias, a dot or a
+// blank import changes nothing) and the spellings of the usual readers.
+func rootGrantsInputSources(name, src string) []string {
 	var found []string
+	file, err := parser.ParseFile(token.NewFileSet(), name, src, parser.ImportsOnly)
+	if err != nil {
+		return []string{"unparsable source: " + err.Error()}
+	}
+	for _, imp := range file.Imports {
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || !rootGrantsAllowedImports[name][path] {
+			found = append(found, fmt.Sprintf("import %s is not in the allowlist", imp.Path.Value))
+		}
+	}
 	for _, forbidden := range []string{"os.Stdin", "Getenv", "LookupEnv", "Environ(", "os.ReadFile", "os.Open", "ioutil", "os.Args", "bufio", "exec.Command"} {
 		if strings.Contains(src, forbidden) {
 			found = append(found, forbidden)
 		}
-	}
-	if regexp.MustCompile(`(?m)^\s*"os"\s*$`).MatchString(src) {
-		found = append(found, `import "os"`)
 	}
 	return found
 }
@@ -636,25 +676,46 @@ func rootGrantsInputSources(src string) []string {
 // them. A source guard with control plants, including an environment variable that
 // carries a timeout into the orchestration, that it must report.
 func TestRootGrantsKeyvaultSourcesHaveNoOtherInputSource(t *testing.T) {
-	for _, name := range []string{"root_grants_attach_export.go", "root_grants_vault.go", "root_grants_vault_darwin.go"} {
-		if found := rootGrantsInputSources(string(mustRead(t, name))); len(found) != 0 {
+	for name := range rootGrantsAllowedImports {
+		if found := rootGrantsInputSources(name, string(mustRead(t, name))); len(found) != 0 {
 			t.Fatalf("%s gained an input source: %v", name, found)
 		}
 	}
 	src := string(mustRead(t, "root_grants_attach_export.go"))
-	timeout := strings.Replace(strings.Replace(src, "\t\"errors\"\n\t\"time\"\n", "\t\"errors\"\n\t\"os\"\n\t\"time\"\n", 1),
-		"\taddress, expected, err := q.expectedPair()\n", "\tif v, ok := os.LookupEnv(\"KEYVAULT_ROOT_GRANTS_TIMEOUT\"); ok {\n\t\t_ = v\n\t}\n\taddress, expected, err := q.expectedPair()\n", 1)
-	if timeout == src {
-		t.Fatal("the environment-timeout plant was not applied")
+	withImports := func(imports string) string {
+		return strings.Replace(src, "\t\"errors\"\n\t\"time\"\n", "\t\"errors\"\n"+imports+"\t\"time\"\n", 1)
+	}
+	withBlock := func(s, block string) string {
+		return strings.Replace(s, "\taddress, expected, err := q.expectedPair()\n", block+"\taddress, expected, err := q.expectedPair()\n", 1)
 	}
 	for name, planted := range map[string]string{
-		"environment-timeout": timeout,
-		"stdin":               src + "\nvar _ = os.Stdin",
-		"file":                src + "\nvar _, _ = os.ReadFile(\"x\")",
-		"os-import-only":      strings.Replace(src, "\t\"errors\"\n", "\t\"errors\"\n\t\"os\"\n", 1),
+		"environment-timeout (MG1)": withBlock(withImports("\t\"os\"\n"), "\tif v, ok := os.LookupEnv(\"KEYVAULT_ROOT_GRANTS_TIMEOUT\"); ok {\n\t\t_ = v\n\t}\n"),
+		"aliased-os-stdin-timeout (MG3)": withBlock(withImports("\t\"fmt\"\n\tosx \"os\"\n"),
+			"\tif q.GrantsVersion == 2147483647 { // mutant MG3\n\t\tvar seconds int\n\t\t_, _ = fmt.Fscan(osx.NewFile(0, \"in\"), &seconds)\n\t\tvar cancel context.CancelFunc\n\t\tctx, cancel = context.WithTimeout(ctx, time.Duration(seconds)*time.Second)\n\t\tdefer cancel()\n\t}\n"),
+		"blank-os-import":        withImports("\t_ \"os\"\n"),
+		"dot-os-import":          withImports("\t. \"os\"\n"),
+		"aliased-syscall-import": withImports("\tsc \"syscall\"\n"),
+		"ioutil-import":          withImports("\t\"io/ioutil\"\n"),
+		"bufio-import":           withImports("\t\"bufio\"\n"),
+		"exec-import":            withImports("\t\"os/exec\"\n"),
+		"stdin-spelling":         src + "\nvar _ = os.Stdin",
+		"file-spelling":          src + "\nvar _, _ = os.ReadFile(\"x\")",
 	} {
-		if planted == src || len(rootGrantsInputSources(planted)) == 0 {
+		reported := rootGrantsInputSources("root_grants_attach_export.go", planted)
+		if planted == src || len(reported) == 0 {
 			t.Fatalf("%s: the guard did not report the planted input source", name)
+		}
+		t.Logf("plant %q caught: %s", name, reported[0])
+	}
+	// The vault file and the cgo binding have the same closed import sets.
+	for _, c := range []struct{ name, old, new string }{
+		{"root_grants_vault.go", "\t\"bytes\"\n", "\t\"bytes\"\n\tosx \"os\"\n"},
+		{"root_grants_vault_darwin.go", "import \"unsafe\"", "import (\n\t\"unsafe\"\n\tosx \"os\"\n)"},
+	} {
+		original := string(mustRead(t, c.name))
+		planted := strings.Replace(original, c.old, c.new, 1)
+		if planted == original || len(rootGrantsInputSources(c.name, planted)) == 0 {
+			t.Fatalf("%s: the guard did not report a planted aliased os import", c.name)
 		}
 	}
 }

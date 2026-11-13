@@ -137,7 +137,7 @@ type rootGrantsAttachRunner func(context.Context, rootGrantsAttachVault, []byte)
 func attachRootGrantsPinned(ctx context.Context, vault *rootGrantsProductionVault, q RootGrantsAttachRequest, now func() time.Time, run rootGrantsAttachRunner) (RootGrantsAttachResult, error) {
 	var empty RootGrantsAttachResult
 	refuse := func(code string) error { return rootGrantsAttachFailed(code, "preflight", "not_applied", nil) }
-	if ctx == nil || vault == nil || vault.native == nil || now == nil || run == nil {
+	if ctx == nil || vault == nil || vault.native == nil || vault.policy == nil || now == nil || run == nil {
 		return empty, refuse("invalid_arguments")
 	}
 	address, expected, err := q.expectedPair()
