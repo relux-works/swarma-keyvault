@@ -149,8 +149,9 @@ prompt and before any lock effect, and checks again under the lock. The check
 reads the root-grants inventory, and only the admitted vault identity (the
 release-signed `works.relux.keyvault`, hardened runtime, no entitlements) may
 read it. An unadmitted or development build therefore refuses `recovery delete`
-for every pair, attached or not, with `recovery_code_not_admitted` and no
-Keychain query; an inventory that cannot be read refuses with
+for every pair, attached or not, with `recovery_code_not_admitted`, without
+reading the root-grants inventory (the listing of the paired records still runs
+first); an inventory that cannot be read refuses with
 `recovery_inventory_changed`. "Not attached" is proven, never assumed. Delete
 with the release vault.
 

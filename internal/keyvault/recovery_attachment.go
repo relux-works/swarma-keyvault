@@ -14,8 +14,8 @@ var _ RootGrantsAttachmentInventory = (*NostrSecurityStore)(nil)
 // or ambiguous inventory refuses (error) instead of reading as "not attached".
 //
 // The root inventory can be read only by the admitted vault identity. Any other
-// executable (an unadmitted or development build) gets code_not_admitted before a
-// Keychain query is made, so recovery delete refuses for it: "not attached" is
+// executable (an unadmitted or development build) gets code_not_admitted before the
+// root inventory is queried, so recovery delete refuses for it: "not attached" is
 // never assumed.
 func (*NostrSecurityStore) RootGrantsAttached(pair RecoveryRecord) (bool, error) {
 	native := newRootGrantsNative()
