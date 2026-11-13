@@ -20,7 +20,7 @@ func TestRootGrantsNativeNamespaceAgrees(t *testing.T) {
 // that is not the signed vault, with the pre-query status, BEFORE any Keychain
 // access: Startup and PrepareAdd report the code refusal, the inventories and the
 // readback fail with errSecAuthFailed, and no add object is created. This is a
-// native negative control for the startup ordering (note 55), run from the
+// native negative control for the startup ordering, run from the
 // unsigned test executable in the confined lane. It does NOT show that the signed
 // vault is admitted or what the OS stores: that needs the attended native lane.
 func TestRootGrantsNativeUnsignedExecutableRefusesBeforeKeychain(t *testing.T) {

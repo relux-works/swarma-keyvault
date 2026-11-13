@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -80,14 +81,15 @@ func TestRootGrantsAttachPinnedCanonicalRequestGolden(t *testing.T) {
 			if _, err := rootGrantsHelperRequest(recorder.request); err != nil {
 				t.Fatal("request does not pass the helper's own admission")
 			}
-			// Public reads only, before the helper stage: no lock, add or readback.
+			// Public reads and one discarded access-object admission before the helper
+			// stage: no lock, add or readback, and the prepared object is closed.
 			for _, call := range x.fake.calls {
-				if call != "startup" && call != "pair-rows" {
+				if call != "startup" && call != "pair-rows" && call != "prepare" && call != "close" {
 					t.Fatalf("unexpected native call before the helper stage: %s", call)
 				}
 			}
-			if x.fake.commits != 0 || rootGrantsLockHeld(t, x.lock) {
-				t.Fatal("pre-helper stage mutated or held the guard")
+			if x.fake.prepares != 1 || x.fake.closes != 1 || x.fake.commits != 0 || rootGrantsLockHeld(t, x.lock) {
+				t.Fatal("pre-helper stage did not admit and discard exactly one access object, or mutated or held the guard")
 			}
 		})
 	}
@@ -284,7 +286,7 @@ func TestRootGrantsAttachPinnedRunnerOutcomes(t *testing.T) {
 }
 
 // Claim: the receipt exists only for a completed, verified attach; it carries the
-// contract's fields in order, the device-wrapped storage label, no private export,
+// specified fields in order, the device-wrapped storage label, no private export,
 // and none of the sealed material. Limit: the Go shape, not a CLI emitter test.
 func TestRootGrantsReceiptShape(t *testing.T) {
 	root, _ := rootGrantsRecordFixture13(t, "keyvault-recovery/2")
@@ -513,10 +515,12 @@ func rootGrantsAttachOrderViolations(src string) []string {
 		body = body[:j]
 	}
 	match := strings.Index(body, "rootGrantsMatchPair(pairRaw, expected)")
+	admit := strings.Index(body, "vault.admitIntendedACL()")
 	build := strings.Index(body, "rootGrantsPrivateRequest{")
 	call := strings.Index(body, "run(ctx, vault, encoded)")
-	if match < 0 || build < 0 || call < 0 || !(match < build && build < call) || strings.Count(body, "run(") != 1 {
-		violations = append(violations, "helper stage is not exactly one call after the pin comparison and request build")
+	if match < 0 || admit < 0 || build < 0 || call < 0 || !(match < admit && admit < build && build < call) ||
+		strings.Count(body, "run(") != 1 || strings.Count(body, "admitIntendedACL(") != 1 {
+		violations = append(violations, "helper stage is not exactly one call after the pin comparison, the ACL admission and the request build")
 	}
 	if !strings.Contains(src, "return attachRootGrantsPinned(ctx, vault, q, time.Now, attachRootGrantsWithHelper)") || strings.Count(src, "attachRootGrantsWithHelper") != 2 {
 		violations = append(violations, "the exported entry no longer fixes the production helper stage and clock")
@@ -525,10 +529,11 @@ func rootGrantsAttachOrderViolations(src string) []string {
 }
 
 // Claim: in the exported orchestration the helper stage is called exactly once,
-// only after every pin comparison, and the production entry fixes the real helper
-// stage and the real clock. A source-order guard in the style of the helper
-// boundary test, with control plants (a missing comparison, a second call, a
-// configurable stage) that it must report. Limit: source text, not behavior
+// only after every pin comparison and the access-object admission, and the
+// production entry fixes the real helper stage and the real clock. A source-order
+// guard in the style of the helper boundary test, with control plants (a missing
+// comparison, a missing admission, a second call, a configurable stage) that it
+// must report. Limit: source text, not behavior
 // (behavior is the recorder tests above).
 func TestRootGrantsAttachPinnedSourceOrder(t *testing.T) {
 	src := string(mustRead(t, "root_grants_attach_export.go"))
@@ -541,6 +546,9 @@ func TestRootGrantsAttachPinnedSourceOrder(t *testing.T) {
 	}{
 		{"comparison-removed", "not exactly one call after the pin comparison", func(s string) string {
 			return strings.Replace(s, "rootGrantsMatchPair(pairRaw, expected)", "false", 1)
+		}},
+		{"admission-removed", "not exactly one call after the pin comparison", func(s string) string {
+			return strings.Replace(s, "if err := vault.admitIntendedACL(); err != nil {", "if err := error(nil); err != nil {", 1)
 		}},
 		{"second-helper-call", "not exactly one call after the pin comparison", func(s string) string {
 			return strings.Replace(s, "\tresult, err := run(ctx, vault, encoded)", "\t_, _ = run(ctx, vault, encoded)\n\tresult, err := run(ctx, vault, encoded)", 1)
@@ -559,6 +567,94 @@ func TestRootGrantsAttachPinnedSourceOrder(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("%s: the guard did not report %q", plant.name, plant.want)
+		}
+	}
+}
+
+// Claim: the access object the add would use is admitted BEFORE the helper starts,
+// so the owner never types the words only to be refused at the add. Every refusal
+// of that early admission (code not admitted, access object refused, nothing
+// prepared, undecodable or empty projection, the fail-closed production policy and
+// seven well-formed forbidden synthetic forms) is a definite preflight refusal with
+// its closed code, zero helper stages, no guard taken, no add, and the prepared
+// object closed exactly once. The admitted form (the golden test above) reaches the
+// helper stage once, so refusing everything fails the pair.
+func TestRootGrantsAttachPinnedRefusesUnadmittedACLBeforeHelper(t *testing.T) {
+	type refusal struct {
+		name, code string
+		configure  func(*testing.T, *rootGrantsVaultFixture)
+	}
+	cases := []refusal{
+		{"prepare-code-refused", "code_not_admitted", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.prepareErr = errRootGrantsNativeCode }},
+		{"prepare-acl-refused", "acl_refused", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.prepareErr = errRootGrantsNativeACL }},
+		{"prepare-other-failure", "operation_unavailable", func(t *testing.T, x *rootGrantsVaultFixture) {
+			x.fake.prepareErr = errors.New("PUBLIC_TEST_PRIVATE_SENTINEL")
+		}},
+		{"prepare-returned-nothing", "operation_unavailable", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.prepareNil = true }},
+		{"undecodable-frame", "acl_refused", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.frame = []byte("not a KVQP1 frame") }},
+		{"empty-frame", "acl_refused", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.frame = nil }},
+		{"production-default-policy", "acl_refused", func(t *testing.T, x *rootGrantsVaultFixture) { x.vault.policy = productionRootGrantsACLPolicy() }},
+	}
+	for _, v := range rootGrantsSyntheticVariants {
+		v := v
+		cases = append(cases, refusal{"policy-refuses-" + v.name, "acl_refused", func(t *testing.T, x *rootGrantsVaultFixture) { x.fake.frame = rootGrantsSyntheticFrame(t, v.mutate) }})
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			x := newRootGrantsVaultFixture(t, "keyvault-recovery/2")
+			locks := 0
+			x.vault.lockSource = func() (FileLock, error) { locks++; return x.lock, nil }
+			c.configure(t, x)
+			recorder := &rootGrantsRunRecorder{}
+			result, err := attachRootGrantsPinned(context.Background(), x.vault, rootGrantsAttachRequestFor(t, "keyvault-recovery/2"), rootGrantsFixedNow, recorder.run)
+			rootGrantsAttachFailure13(t, result, err, c.code, "preflight", "not_applied")
+			if recorder.calls != 0 || locks != 0 || x.fake.commits != 0 || x.fake.stored != nil || x.fake.closes != x.fake.added {
+				t.Fatal("the early refusal reached the helper stage, the guard or the add, or leaked the prepared object")
+			}
+		})
+	}
+}
+
+// rootGrantsInputSources lists every non-argument input source a source file uses.
+func rootGrantsInputSources(src string) []string {
+	var found []string
+	for _, forbidden := range []string{"os.Stdin", "Getenv", "LookupEnv", "Environ(", "os.ReadFile", "os.Open", "ioutil", "os.Args", "bufio", "exec.Command"} {
+		if strings.Contains(src, forbidden) {
+			found = append(found, forbidden)
+		}
+	}
+	if regexp.MustCompile(`(?m)^\s*"os"\s*$`).MatchString(src) {
+		found = append(found, `import "os"`)
+	}
+	return found
+}
+
+// Claim: the keyvault side of the attach has no input source other than its typed
+// request: the orchestration, the production vault and its cgo binding import no
+// os package and read no environment, stdin, file or raw argument, so no word,
+// scalar, path, namespace, helper location or timeout can reach the attach from
+// them. A source guard with control plants, including an environment variable that
+// carries a timeout into the orchestration, that it must report.
+func TestRootGrantsKeyvaultSourcesHaveNoOtherInputSource(t *testing.T) {
+	for _, name := range []string{"root_grants_attach_export.go", "root_grants_vault.go", "root_grants_vault_darwin.go"} {
+		if found := rootGrantsInputSources(string(mustRead(t, name))); len(found) != 0 {
+			t.Fatalf("%s gained an input source: %v", name, found)
+		}
+	}
+	src := string(mustRead(t, "root_grants_attach_export.go"))
+	timeout := strings.Replace(strings.Replace(src, "\t\"errors\"\n\t\"time\"\n", "\t\"errors\"\n\t\"os\"\n\t\"time\"\n", 1),
+		"\taddress, expected, err := q.expectedPair()\n", "\tif v, ok := os.LookupEnv(\"KEYVAULT_ROOT_GRANTS_TIMEOUT\"); ok {\n\t\t_ = v\n\t}\n\taddress, expected, err := q.expectedPair()\n", 1)
+	if timeout == src {
+		t.Fatal("the environment-timeout plant was not applied")
+	}
+	for name, planted := range map[string]string{
+		"environment-timeout": timeout,
+		"stdin":               src + "\nvar _ = os.Stdin",
+		"file":                src + "\nvar _, _ = os.ReadFile(\"x\")",
+		"os-import-only":      strings.Replace(src, "\t\"errors\"\n", "\t\"errors\"\n\t\"os\"\n", 1),
+	} {
+		if planted == src || len(rootGrantsInputSources(planted)) == 0 {
+			t.Fatalf("%s: the guard did not report the planted input source", name)
 		}
 	}
 }

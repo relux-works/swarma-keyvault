@@ -305,6 +305,45 @@ func rootGrantsItemAccount(item rootGrantsSealedItem) (string, error) {
 	return account, nil
 }
 
+// prepareAdmittedAdd verifies the running code, builds the intended access object
+// natively and applies the ACL policy to its projection. Nothing is stored. Every
+// refusal is a definite no-effect error with a closed reason; on success the caller
+// owns the prepared add, whose access object is exactly the admitted one.
+func (v *rootGrantsProductionVault) prepareAdmittedAdd() (rootGrantsNativeAdd, error) {
+	refuse := func(reason rootGrantsAddRefusal) error { return &rootGrantsAddNotApplied{reason: reason} }
+	if err := v.native.Startup(); err != nil {
+		return nil, refuse(rootGrantsAddCodeRefused)
+	}
+	add, err := v.native.PrepareAdd()
+	if err != nil || add == nil {
+		switch {
+		case errors.Is(err, errRootGrantsNativeCode):
+			return nil, refuse(rootGrantsAddCodeRefused)
+		case errors.Is(err, errRootGrantsNativeACL):
+			return nil, refuse(rootGrantsAddACLRefused)
+		}
+		return nil, refuse(rootGrantsAddUnavailable)
+	}
+	intended, err := rootqualification.DecodeNativeProjection(add.ACLFrame())
+	if err != nil || v.policy.Admit(intended) != nil {
+		add.Close()
+		return nil, refuse(rootGrantsAddACLRefused)
+	}
+	return add, nil
+}
+
+// admitIntendedACL is the same check made before the helper starts, so an owner
+// never enters the recovery words only to learn that the access object would be
+// refused at the add. The prepared object is discarded; the add repeats the check.
+func (v *rootGrantsProductionVault) admitIntendedACL() error {
+	add, err := v.prepareAdmittedAdd()
+	if err != nil {
+		return err
+	}
+	add.Close()
+	return nil
+}
+
 // AddRootGrantsOnly is the sole mutation. Order: packet shape, running code and
 // SPI (before any query), intended access object, policy admission of that very
 // object, then ONE create-only add. Every refusal before the add is a definite
@@ -321,24 +360,11 @@ func (l *rootGrantsProductionLocked) AddRootGrantsOnly(item rootGrantsSealedItem
 	if err != nil {
 		return refuse(rootGrantsAddInvalidItem)
 	}
-	if err := l.vault.native.Startup(); err != nil {
-		return refuse(rootGrantsAddCodeRefused)
-	}
-	add, err := l.vault.native.PrepareAdd()
-	if err != nil || add == nil {
-		switch {
-		case errors.Is(err, errRootGrantsNativeCode):
-			return refuse(rootGrantsAddCodeRefused)
-		case errors.Is(err, errRootGrantsNativeACL):
-			return refuse(rootGrantsAddACLRefused)
-		}
-		return refuse(rootGrantsAddUnavailable)
+	add, err := l.vault.prepareAdmittedAdd()
+	if err != nil {
+		return err
 	}
 	defer add.Close()
-	intended, err := rootqualification.DecodeNativeProjection(add.ACLFrame())
-	if err != nil || l.vault.policy.Admit(intended) != nil {
-		return refuse(rootGrantsAddACLRefused)
-	}
 	envelope := []byte(item.envelope)
 	defer clear(envelope)
 	attempted, status := add.Commit(account, item.metadata, envelope)

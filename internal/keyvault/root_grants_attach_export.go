@@ -10,7 +10,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil/bech32"
 )
 
-// Public schemas of the root-grants receipts (S-D contract, section 2).
+// Public schemas of the root-grants receipts.
 const (
 	RootGrantsReceiptSchema = "keyvault-root-grants-receipt/1"
 	RootGrantsPublicSchema  = "keyvault-root-grants-public/1"
@@ -168,6 +168,15 @@ func attachRootGrantsPinned(ctx context.Context, vault *rootGrantsProductionVaul
 	expected.Schema = record.Schema
 	if validateRootGrantsPair(expected) != nil || rootGrantsMatchPair(pairRaw, expected) != nil {
 		return empty, refuse("retained_record_mismatch")
+	}
+	// The access object that the add would use must be admissible BEFORE the owner
+	// is asked for the words. Nothing is stored here; the add checks it again.
+	if err := vault.admitIntendedACL(); err != nil {
+		code := rootGrantsAddRefusalCode(err)
+		if code == "" {
+			code = "operation_unavailable"
+		}
+		return empty, refuse(code)
 	}
 	request := rootGrantsPrivateRequest{Protocol: "keyvault-root-grants-private/1", Engine: "namecoin-root-grants-engine/1",
 		Profile: rootGrantsProfile, Mode: "attach", PairMetadata: pairRaw, Pair: expected,
