@@ -54,9 +54,13 @@ func runRecoveryReviewSignGrantV3(args []string, out output) int {
 	if err := f.parse(args); err != nil {
 		return recoveryFailureReceipt(out, err)
 	}
-	identity, err := f.identity("grants-identity")
-	if err != nil {
-		return recoveryFailureReceipt(out, err)
+	var grantsIdentity string
+	for _, identityFlag := range []string{"grants-identity"} {
+		value, err := f.identity(identityFlag)
+		if err != nil {
+			return recoveryFailureReceipt(out, err)
+		}
+		grantsIdentity = value
 	}
 	version, err := f.generation("grants-version")
 	if err != nil {
@@ -75,7 +79,7 @@ func runRecoveryReviewSignGrantV3(args []string, out output) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	receipt, err := reviewSignRootGrants(ctx, keyvault.RootGrantsGrantV3SignRequest{
-		Address: keyvault.RootGrantsAddress{Service: identity, Version: version}, OwnerPrincipal: f.values["owner-principal"],
+		Address: keyvault.RootGrantsAddress{Service: grantsIdentity, Version: version}, OwnerPrincipal: f.ownerPrincipal,
 		Grant: grant, Contract: contract,
 	})
 	if err != nil {

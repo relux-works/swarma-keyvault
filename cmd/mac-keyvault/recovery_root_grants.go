@@ -35,10 +35,11 @@ const (
 // a repeated flag, an unknown flag, a positional argument or a missing required
 // flag is a usage error, decided before any custody, lock, helper or Keychain call.
 type rootGrantsFlags struct {
-	fs       *flag.FlagSet
-	seen     map[string]bool
-	values   map[string]string
-	required []string
+	fs             *flag.FlagSet
+	seen           map[string]bool
+	values         map[string]string
+	ownerPrincipal string
+	required       []string
 }
 
 func newRootGrantsFlags(name string, required []string, optional ...string) *rootGrantsFlags {
@@ -51,6 +52,9 @@ func newRootGrantsFlags(name string, required []string, optional ...string) *roo
 			}
 			f.seen[flagName] = true
 			f.values[flagName] = v
+			if flagName == "owner-principal" {
+				f.ownerPrincipal = v
+			}
 			return nil
 		})
 	}

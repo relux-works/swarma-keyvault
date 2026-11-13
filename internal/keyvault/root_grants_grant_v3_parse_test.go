@@ -2,6 +2,7 @@ package keyvault
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"strings"
 	"testing"
@@ -19,6 +20,24 @@ func TestRootGrantsGrantV3PinnedReference(t *testing.T) {
 	}
 	_, err := ParseRootGrantsGrantV3(raw, time.Unix(98, 0))
 	rootGrantsWantRefusal(t, err, "consent_invalid")
+}
+
+// Claim: the accepted owner-principal grammar has representative valid labels
+// and rejects prefix near-misses, normalization variants and invalid edges.
+func TestRootGrantsOwnerPrincipalClosedGrammar(t *testing.T) {
+	valid := []string{"owner:id/a", "owner:id/0", "owner:id/example-owner", "owner:id/" + strings.Repeat("a", 63)}
+	for _, principal := range valid {
+		if !rootGrantsOwnerPrincipal(principal) {
+			t.Errorf("valid owner principal refused: %q", principal)
+		}
+	}
+	invalid := []string{"", "owner:id/", "owner:other/a", "owner:id/-a", "owner:id/a-", "owner:id/a--b",
+		"owner:id/A", "owner:id/a_b", "owner:id/é", "owner:id/" + strings.Repeat("a", 64), "owner:id/a/"}
+	for _, principal := range invalid {
+		if rootGrantsOwnerPrincipal(principal) {
+			t.Errorf("invalid owner principal accepted: %q", principal)
+		}
+	}
 }
 
 // Every representation mutant refuses instead of being normalized. Tests use a
@@ -129,7 +148,8 @@ func TestRootGrantsGrantV3FullPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	review, err := p.ReviewJSON()
-	if err != nil || !bytes.Contains(review, []byte(RootGrantsOfflineReview)) || !bytes.Contains(review, []byte(f.c.PaymentAddress)) || !bytes.Contains(review, []byte(f.p.OwnerPrincipal)) {
+	contractBase64 := base64.StdEncoding.EncodeToString(contract)
+	if err != nil || !bytes.Contains(review, []byte(RootGrantsOfflineReview)) || !bytes.Contains(review, []byte(contractBase64)) || !bytes.Contains(review, []byte(f.p.OwnerPrincipal)) {
 		t.Fatal("complete review missing terms or offline limitation")
 	}
 	hash, _ := rootGrantsGrantV3Digest(grant)
