@@ -57,7 +57,7 @@ func main() {
 		os.Exit(rootQualificationChildProcess(entered))
 	}
 	if recoveryQualificationOnly == "" && rootQualificationParentInvocation(os.Args[1:]) {
-		os.Exit(rootQualificationParentProcess(entered, os.Args[1:], os.Stdout))
+		os.Exit(rootQualificationParentProcess(entered, os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }

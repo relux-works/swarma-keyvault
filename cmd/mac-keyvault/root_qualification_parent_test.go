@@ -103,7 +103,7 @@ func TestRootQualificationParentRefusesUntimedAndInvalidEntry(t *testing.T) {
 		}
 	}
 	for _, ctx := range []context.Context{nil, canceledQualificationContext()} {
-		result, digest, code := rootQualificationParentCase(ctx, rootQualificationArguments{operation: rootQualificationCreate})
+		result, digest, code := rootQualificationParentCase(ctx, rootQualificationArguments{operation: rootQualificationCreate}, io.Discard)
 		if result != "unqualified" || digest != "" || code != exitFailure {
 			t.Fatal("invalid context admitted")
 		}

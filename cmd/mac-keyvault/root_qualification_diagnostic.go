@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 
 	"github.com/relux-works/swarma-keyvault/internal/rootqualification"
 )
@@ -14,10 +13,6 @@ import (
 // Security OSStatus; it never carries item data, a path or a reference, and it is
 // not part of the stdout result or of any receipt.
 const rootQualificationDiagnosticSchema = "keyvault-root-acl-qualification-diagnostic/1"
-
-// rootQualificationDiagnosticOutput is where the diagnostic line goes. It is a
-// variable only so a test can capture it; the product value is stderr.
-var rootQualificationDiagnosticOutput io.Writer = os.Stderr
 
 type rootQualificationDiagnosticLine struct {
 	Schema    string `json:"schema"`

@@ -47,7 +47,7 @@ func writeRootQualificationParent(w io.Writer, operation, result, digest string,
 // includes code observation, file checks and native work; it is never renewed
 // by a phase or child. A separate bounded grace permits TERM/reaping after
 // expiry. Hard process exit also bounds a synchronous Security API hang.
-func rootQualificationParentProcess(entered time.Time, args []string, stdout io.Writer) int {
+func rootQualificationParentProcess(entered time.Time, args []string, stdout, stderr io.Writer) int {
 	if recoveryQualificationOnly != "" {
 		return exitRefused
 	}
@@ -62,7 +62,7 @@ func rootQualificationParentProcess(entered time.Time, args []string, stdout io.
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	time.AfterFunc(time.Until(deadline.Add(2*rootQualificationReapGrace+time.Second)), func() { os.Exit(exitFailure) })
-	result, digest, code := rootQualificationParentCase(ctx, parsed)
+	result, digest, code := rootQualificationParentCase(ctx, parsed, stderr)
 	if ctx.Err() != nil {
 		code = exitFailure
 		if result == "created" || result == "deleted" {
@@ -74,7 +74,7 @@ func rootQualificationParentProcess(entered time.Time, args []string, stdout io.
 	return writeRootQualificationParent(stdout, args[4], result, digest, code)
 }
 
-func rootQualificationParentCase(ctx context.Context, args rootQualificationArguments) (string, string, int) {
+func rootQualificationParentCase(ctx context.Context, args rootQualificationArguments, diagnostic io.Writer) (string, string, int) {
 	if ctx == nil || ctx.Err() != nil {
 		return "unqualified", "", exitFailure
 	}
@@ -97,7 +97,7 @@ func rootQualificationParentCase(ctx context.Context, args rootQualificationArgu
 			return "unqualified", "", exitFailure
 		}
 		created, nativeErr := keyvault.RootQualificationCreate(reservation)
-		return finishRootQualificationCreate(ctx, reservation, candidate, created, nativeErr, rootQualificationDiagnosticOutput)
+		return finishRootQualificationCreate(ctx, reservation, candidate, created, nativeErr, diagnostic)
 	}
 	loaded, err := rootqualification.LoadCreatedReceipt(args.receiptSHA256, candidate)
 	if err != nil {
