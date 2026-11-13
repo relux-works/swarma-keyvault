@@ -266,6 +266,18 @@ Read [the KEK contract](docs/kek.md) and [SSH/new-key onboarding](docs/keyvault-
 before selecting an interface. Generic signing is not typed grant or release
 authority. Same-user sockets and code binding do not prove per-agent identity.
 
+Use pinned actionlint to check workflow syntax and expressions:
+`GOBIN="$(pwd)/.temp/tool-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.10`,
+then `.temp/tool-bin/actionlint .github/workflows/hosted-ci.yml > .temp/actionlint.log`.
+The temporary binary and log stay under ignored `.temp/`.
+
+The Linux-only [verifier attribution coordinator](tools/verifierdiagnostic/README.md)
+runs a fixed four-collection ABBA experiment with isolated evidence and the
+reviewed process supervisor. Validate it with
+`go test -race -count=1 ./tools/verifierdiagnostic`; its README gives the exact
+build/run commands and output layout. Instrumented results do not qualify a
+product head.
+
 ## Certificate work
 
 Owner direction, 2026-10-31: certificates and grants always remain stored locally,
