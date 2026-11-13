@@ -3,6 +3,7 @@
 package keyvault
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/relux-works/swarma-keyvault/internal/rootqualification"
@@ -103,18 +104,14 @@ func TestFaultedIntendedAccessStagesNameThemselves(t *testing.T) {
 
 // Claim: arming one projection group makes the call record the BEFORE id when the
 // first projection fails and the AFTER id when the second does, never the internal
-// projection id, with the armed OSStatus. A group the natural projection fails before
-// reaching cannot be armed, and the AFTER ids need a natural BEFORE projection that
-// completes; both are printed as SKIPPED and are not counted as proven. Limit: a plain
+// projection id, with the armed OSStatus. All ten ids are armed and none may be
+// skipped: the natural projection of the plain access object completes on this
+// system, so every group and the AFTER projection are reachable. Limit: a plain
 // in-memory access object is projected, not the intended one.
 func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
 	natural := runProjectFault(0, 0, false, false)
-	reach := 74 // the highest projection id the BEFORE projection can reach
-	if !natural.Completed {
-		if natural.Stage < 30 || natural.Stage > 34 {
-			t.Fatalf("a failed natural projection must name a BEFORE group: %+v", natural)
-		}
-		reach = 70 + (natural.Stage - 30)
+	if !natural.Completed || natural.Stage != 0 {
+		t.Fatalf("the natural projection of a plain access object must complete: %+v", natural)
 	}
 	proven := 0
 	for generic := 70; generic <= 74; generic++ {
@@ -122,10 +119,6 @@ func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
 			want := 30 + (generic - 70)
 			if after {
 				want = 50 + (generic - 70)
-			}
-			if generic > reach || (after && !natural.Completed) {
-				t.Logf("SKIPPED projection id %d after=%v: the natural projection already fails at stage %d (status %d)", generic, after, natural.Stage, natural.OSStatus)
-				continue
 			}
 			got := runProjectFault(generic, injected(generic), after, false)
 			assertReportable(t, "projection", got)
@@ -136,46 +129,69 @@ func TestFaultedProjectionStagesNameBeforeAndAfter(t *testing.T) {
 			proven++
 		}
 	}
-	t.Logf("projection ids proven by injection: %d of 10", proven)
-	if proven == 0 {
-		t.Fatal("no projection stage could be armed")
+	if proven != 10 {
+		t.Fatalf("%d of 10 projection ids proven, none may be skipped", proven)
 	}
 }
 
-// Claim: the unmasked projection of a plain access either completes with no record or
-// fails with a BEFORE-family stage and a nonzero status; a failure without a record
-// fails this test. The verdict is logged: it is the natural diagnosis of this system.
-func TestNaturalProjectionRunReportsConsistently(t *testing.T) {
+// Claim: the natural projection of a plain access object completes with no failure
+// recorded. Before the fix it failed at stage 31 (the list it read held strings).
+func TestNaturalProjectionRunCompletes(t *testing.T) {
 	run := runProjectFault(0, 0, false, false)
 	t.Logf("natural projection run: completed=%v stage=%d status=%d", run.Completed, run.Stage, run.OSStatus)
-	assertReportable(t, "natural projection", run)
-	if run.Completed {
-		if run.Stage != 0 || run.Result != 0 {
-			t.Fatalf("a completed run recorded a failure: %+v", run)
-		}
-		return
-	}
-	if run.Stage < 30 || run.Stage > 34 || run.OSStatus == 0 || run.Result == 0 {
-		t.Fatalf("a failed projection must name a BEFORE group with a status: %+v", run)
+	if !run.Completed || run.Stage != 0 || run.OSStatus != 0 || run.Result != 0 {
+		t.Fatalf("the natural projection must complete: %+v", run)
 	}
 }
 
 // Claim: the first half of the create call, run unarmed (symbols, intended access,
-// BEFORE projection), either completes with no record or fails with a reported stage
-// and a nonzero status. This reproduces, in process and without signing, the point
-// where the create call refused on a real system; the verdict is logged.
+// BEFORE projection), completes with no failure recorded. This is the point where the
+// create call refused on a real system before the fix, reproduced here in process and
+// without signing. Beside the negative control below, a projection that cannot read
+// the ACL objects fails this test.
 func TestNaturalBeforeProjectionOfTheIntendedAccess(t *testing.T) {
 	run := runBeforeNatural()
 	t.Logf("natural create front half: completed=%v stage=%d status=%d result=%d", run.Completed, run.Stage, run.OSStatus, run.Result)
-	assertReportable(t, "natural before", run)
-	if run.Completed {
-		if run.Stage != 0 || run.Result != 0 {
-			t.Fatalf("a completed run recorded a failure: %+v", run)
-		}
-		return
+	if !run.Completed || run.Stage != 0 || run.OSStatus != 0 || run.Result != 0 {
+		t.Fatalf("the front half of the create call must complete: %+v", run)
 	}
-	if run.Stage == 0 || run.OSStatus == 0 || run.Result == 0 {
-		t.Fatalf("the run failed without a recorded stage and status: %+v", run)
+}
+
+// errSecDecode is the Security status the projection returns for a list element that
+// is not an ACL object.
+const errSecDecode = -26275
+
+// Claim (negative control): a list element that is not an ACL object is still refused,
+// at the BEFORE authorizations stage 31 with errSecDecode, so the fix did not weaken the
+// check. The element is replaced under the kvqfault tag by a string, the shape
+// SecAccessCopyOwnerAndACL returns.
+func TestProjectionRefusesAListElementThatIsNotAnACL(t *testing.T) {
+	run := runProjectNonACL()
+	assertReportable(t, "non-ACL element", run)
+	if run.Completed || run.Stage != 31 || run.OSStatus != errSecDecode || run.Result != errSecDecode {
+		t.Fatalf("a non-ACL list element must refuse at stage 31 with errSecDecode: %+v", run)
+	}
+}
+
+// Claim: the projection output is byte-stable. The same access object projected twice
+// gives the same frame, and so do two separately built intended access objects; every
+// frame is a valid KVQP1 projection that the Go decoder accepts and that lists at least
+// one ACL. Limit: one machine and one run; it shows determinism, not that the observed
+// ACL forms are admissible.
+func TestProjectionIsByteStable(t *testing.T) {
+	for _, fresh := range []bool{false, true} {
+		first, second, run := projectTwice(fresh)
+		if !run.Completed || len(first) == 0 || len(second) == 0 {
+			t.Fatalf("fresh=%v: the projections must complete: %+v lengths %d %d", fresh, run, len(first), len(second))
+		}
+		if !bytes.Equal(first, second) {
+			t.Fatalf("fresh=%v: two projections of the same input differ (%d and %d bytes)", fresh, len(first), len(second))
+		}
+		projection, err := rootqualification.DecodeNativeProjection(first)
+		if err != nil || len(projection.ACLs) == 0 {
+			t.Fatalf("fresh=%v: the frame is not a valid KVQP1 projection (%v, %d ACLs)", fresh, err, len(projection.ACLs))
+		}
+		t.Logf("fresh=%v: %d bytes, %d ACLs, owner %d/%d type %d, identical twice", fresh, len(first), len(projection.ACLs), projection.OwnerUID, projection.OwnerGID, projection.OwnerType)
 	}
 }
 

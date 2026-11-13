@@ -64,6 +64,9 @@ static _Thread_local int kvqMaskRequirement;
 // A test may likewise ignore the natural verdict of the projection groups, so that
 // the BEFORE and AFTER ids can be armed on a system where a group fails naturally.
 static _Thread_local int kvqMaskProjection;
+// A test may make the projection see a string where it expects an ACL object, the
+// shape SecAccessCopyOwnerAndACL returns, to prove that such an element is refused.
+static _Thread_local int kvqFaultNonACL;
 #define KVQ_NATURAL_MASKED() (kvqMaskProjection)
 #define KVQ_FAULT(stage, var) do { if (kvqFaultStage == (stage)) (var) = kvqFaultStatus; } while (0)
 #else
@@ -310,9 +313,14 @@ static int KVQApplication(CFMutableDataRef out, CFTypeRef application, KVQSymbol
 OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out) {
     *out = NULL;
     uid_t uid = 0; gid_t gid = 0; SecAccessOwnerType owner = 0;
-    CFArrayRef list = NULL;
+    // SecAccessCopyOwnerAndACL is read for the owner only: its list holds strings, not
+    // ACL objects, on current macOS. The ACL objects come from SecAccessCopyACLList, the
+    // call the access constructor and its bindings already read.
+    CFArrayRef ownerList = NULL, list = NULL;
     OSStatus status = errSecSuccess;
-    KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, SecAccessCopyOwnerAndACL(access, &uid, &gid, &owner, &list));
+    KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, SecAccessCopyOwnerAndACL(access, &uid, &gid, &owner, &ownerList));
+    if (ownerList) CFRelease(ownerList);
+    KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, SecAccessCopyACLList(access, &list));
     CFMutableDataRef frame = CFDataCreateMutable(NULL, 0);
     KVQ_FAIL_IF(KVQ_STAGE_PROJECT_OWNER_ACL, status,
         !frame || !list || CFGetTypeID(list) != CFArrayGetTypeID() || CFArrayGetCount(list) > 64 ||
@@ -320,6 +328,9 @@ OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out) {
         errSecDecode);
     for (CFIndex i = 0; status == errSecSuccess && i < CFArrayGetCount(list); i++) {
         CFTypeRef candidate = CFArrayGetValueAtIndex(list, i);
+#ifdef KVQ_FAULT_INJECTION
+        if (kvqFaultNonACL) candidate = CFSTR("not an ACL");
+#endif
         KVQ_FAIL_IF(KVQ_STAGE_PROJECT_AUTHORIZATIONS, status, !candidate || CFGetTypeID(candidate) != SecACLGetTypeID(), errSecDecode);
         if (status != errSecSuccess) break;
         SecACLRef acl = (SecACLRef)candidate;
@@ -766,6 +777,76 @@ int KVQFaultProbeOwnerACL(int *out) {
     }
     CFRelease(access);
     return 0;
+}
+
+// Projects a plain in-memory access object while the projection sees a string in place
+// of every ACL object, and reports the recorded failure retagged as the create call
+// does. The expected record is the BEFORE authorizations stage with errSecDecode.
+int KVQFaultRunProjectNonACL(int *stage, int *status, int *completed) {
+    KVQDiagReset();
+    kvqFaultStage = 0;
+    kvqFaultStatus = errSecSuccess;
+    kvqFaultNonACL = 1;
+    *stage = 0; *status = 0; *completed = 0;
+    KVQSymbols symbols = {0};
+    OSStatus result = KVQResolve(&symbols) ? errSecSuccess : errSecUnimplemented;
+    SecAccessRef access = NULL;
+    CFDataRef frame = NULL;
+    if (result == errSecSuccess) result = SecAccessCreate(CFSTR("Root ACL fault test"), NULL, &access);
+    if (result == errSecSuccess && !access) result = errSecDecode;
+    if (result == errSecSuccess) {
+        result = KVQProject(access, symbols, &frame);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (frame) CFRelease(frame);
+    if (access) CFRelease(access);
+    kvqFaultNonACL = 0;
+    OSStatus recorded = errSecSuccess; int recordedStage = 0;
+    if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    *completed = result == errSecSuccess;
+    return (int)result;
+}
+
+// Builds the intended access object and projects it twice. With fresh the second
+// projection is of a second, separately built access object; otherwise it is the same
+// object again. Both frames are copied out so a test can compare their bytes and decode
+// them with the Go decoder.
+int KVQFaultProjectTwice(int fresh, unsigned char *a, unsigned char *b, int capacity, int *la, int *lb, int *stage, int *status) {
+    KVQDiagReset();
+    kvqFaultStage = 0;
+    kvqFaultStatus = errSecSuccess;
+    *la = 0; *lb = 0; *stage = 0; *status = 0;
+    KVQSymbols symbols = {0};
+    OSStatus result = KVQResolve(&symbols) ? errSecSuccess : errSecUnimplemented;
+    SecAccessRef x = NULL, y = NULL;
+    CFDataRef frameA = NULL, frameB = NULL;
+    if (result == errSecSuccess) result = KVQIntendedAccess(symbols, "Root ACL fault test", "keyvault-root-acl-fault-test:/vault", &x);
+    if (result == errSecSuccess) {
+        if (fresh) result = KVQIntendedAccess(symbols, "Root ACL fault test", "keyvault-root-acl-fault-test:/vault", &y);
+        else y = (SecAccessRef)CFRetain(x);
+    }
+    if (result == errSecSuccess) {
+        result = KVQProject(x, symbols, &frameA);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (result == errSecSuccess) {
+        result = KVQProject(y, symbols, &frameB);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_AFTER_OWNER_ACL);
+    }
+    if (result == errSecSuccess && (CFDataGetLength(frameA) > capacity || CFDataGetLength(frameB) > capacity)) result = errSecAllocate;
+    if (result == errSecSuccess) {
+        memcpy(a, CFDataGetBytePtr(frameA), (size_t)CFDataGetLength(frameA));
+        memcpy(b, CFDataGetBytePtr(frameB), (size_t)CFDataGetLength(frameB));
+        *la = (int)CFDataGetLength(frameA);
+        *lb = (int)CFDataGetLength(frameB);
+    }
+    if (frameA) CFRelease(frameA);
+    if (frameB) CFRelease(frameB);
+    if (x) CFRelease(x);
+    if (y) CFRelease(y);
+    OSStatus recorded = errSecSuccess; int recordedStage = 0;
+    if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    return (int)result;
 }
 
 // Runs only the login-keychain step with one fault armed (0 = a natural run).

@@ -9,11 +9,15 @@ int KVQFaultRunProject(int armStage, int armStatus, int armAfter, int maskNatura
 int KVQFaultRunBefore(int *stage, int *status, int *completed);
 int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize);
 int KVQFaultProbeOwnerACL(int *out);
+int KVQFaultRunProjectNonACL(int *stage, int *status, int *completed);
+int KVQFaultProjectTwice(int fresh, unsigned char *a, unsigned char *b, int capacity, int *la, int *lb, int *stage, int *status);
 int KVQFaultRunLogin(int armStage, int armStatus, int *stage, int *status, int *completed);
 int KVQFaultRunSelf(int armStage, int armStatus, int *stage, int *status);
 void KVQFaultNoteTwice(int firstStage, int firstStatus, int secondStage, int secondStatus, int *stage, int *status);
 */
 import "C"
+
+import "unsafe"
 
 // This file exists only in a build with the kvqfault tag. It is the test-only way
 // to arm one native failure stage; a normal build compiles none of it and the
@@ -124,4 +128,33 @@ func probeOwnerACL() ([16]int, int) {
 		values[i] = int(out[i])
 	}
 	return values, int(status)
+}
+
+// runProjectNonACL projects a plain access object while the projection sees a string
+// where it expects an ACL object.
+func runProjectNonACL() faultRun {
+	var stage, osStatus, completed C.int
+	result := C.KVQFaultRunProjectNonACL(&stage, &osStatus, &completed)
+	return faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: completed != 0}
+}
+
+// projectTwice builds the intended access object and returns two projections of it.
+// With fresh the second one is of a second, separately built object.
+func projectTwice(fresh bool) (first, second []byte, run faultRun) {
+	const capacity = 65536
+	a, b := make([]byte, capacity), make([]byte, capacity)
+	var la, lb, stage, osStatus C.int
+	flag := C.int(0)
+	if fresh {
+		flag = 1
+	}
+	result := C.KVQFaultProjectTwice(flag, (*C.uchar)(unsafe.Pointer(&a[0])), (*C.uchar)(unsafe.Pointer(&b[0])), C.int(capacity), &la, &lb, &stage, &osStatus)
+	run = faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: result == 0}
+	if la > 0 && int(la) <= capacity {
+		first = a[:la]
+	}
+	if lb > 0 && int(lb) <= capacity {
+		second = b[:lb]
+	}
+	return first, second, run
 }
