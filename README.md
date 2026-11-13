@@ -198,6 +198,11 @@ account's home. The tool creates only a new `artifacts` directory and retains it
 matching archive/header generation, helper, owning and foreign executables,
 build log and unsigned receipt. It does not sign or execute the artifacts.
 Existing outputs and failed generations are retained without repair or retry.
+The builder resolves `go` from an absolute toolchain directory in `PATH`, so a
+retained driver built with `-trimpath` does not require an embedded GOROOT.
+A nonempty `GOROOT`, relative/current-directory lookup, or a Go version/target
+other than exactly `go1.26.10 darwin/<host architecture>` is refused before
+native compilation. Tool discovery is not native custody qualification.
 
 These commands run only from the matched `artifacts/mac-keyvault` layout under
 an existing private qualification directory. Sign and verify the exact artifacts

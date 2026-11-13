@@ -135,10 +135,65 @@ func TestRootQualificationOfflineEnvironment(t *testing.T) {
 	}
 	_, err := qualificationGoTool()
 	qualificationError(t, err)
-	t.Setenv("GOROOT", "")
-	tool, err := qualificationGoTool()
-	if err != nil || tool != filepath.Join(runtime.GOROOT(), "bin", "go") {
-		t.Fatal("actual runtime Go tool form refused")
+}
+
+// Exercise real PATH lookup with inert public files, never execute them. This
+// positive control must also pass when the test binary is built with -trimpath.
+// Relative/current-directory lookup, missing/non-executable go and GOROOT
+// replacement return the fixed refusal and no selected tool path.
+func TestRootQualificationGoToolPath(t *testing.T) {
+	for _, form := range []string{"absolute", "relative", "dot", "missing", "not-executable", "goroot"} {
+		t.Run(form, func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, "bin")
+			if err := os.Mkdir(bin, 0700); err != nil {
+				t.Fatal(err)
+			}
+			tool := filepath.Join(bin, "go")
+			marker := []byte("PUBLIC lookup fixture; never execute\n")
+			mode := os.FileMode(0700)
+			if form == "not-executable" {
+				mode = 0600
+			}
+			if form != "missing" {
+				if err := os.WriteFile(tool, marker, mode); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("GOROOT", "")
+			t.Setenv("PATH", bin)
+			switch form {
+			case "relative":
+				t.Chdir(dir)
+				t.Setenv("PATH", "bin")
+			case "dot":
+				t.Chdir(bin)
+				t.Setenv("PATH", ".")
+			case "goroot":
+				t.Setenv("GOROOT", "/PUBLIC/replacement")
+			}
+			got, err := qualificationGoTool()
+			if form == "absolute" {
+				if err != nil || got != tool {
+					t.Fatal("absolute PATH go refused")
+				}
+				// The retained -trimpath lane must record false here; only a
+				// boolean is logged, never a host/toolchain path.
+				t.Logf("embedded GOROOT present: %t", runtime.GOROOT() != "")
+			} else {
+				qualificationError(t, err)
+				if got != "" {
+					t.Fatal("refusal returned a tool path")
+				}
+			}
+			if form != "missing" {
+				b, err := os.ReadFile(tool)
+				st, statErr := os.Stat(tool)
+				if err != nil || statErr != nil || !bytes.Equal(b, marker) || st.Mode().Perm() != mode {
+					t.Fatal("lookup changed its inert fixture")
+				}
+			}
+		})
 	}
 }
 
@@ -338,6 +393,12 @@ func (f *qualificationFake) run(ctx context.Context, c nativebuild.Command) ([]b
 	}
 	if c.Program == "/public/go" {
 		if reflect.DeepEqual(c.Args, []string{"version"}) {
+			if f.fail == "go-version" {
+				return []byte("go version go1.26.9 darwin/" + runtime.GOARCH + "\n"), nil
+			}
+			if f.fail == "go-platform" {
+				return []byte("go version go1.26.10 linux/" + runtime.GOARCH + "\n"), nil
+			}
 			return []byte("go version go1.26.10 darwin/" + runtime.GOARCH + "\n"), nil
 		}
 		if len(c.Args) == 0 || c.Args[0] != "build" || qualificationArg(c.Args, "-p") != "1" {
@@ -512,7 +573,7 @@ func TestRootQualificationBuildPlanAndUnsignedReceipt(t *testing.T) {
 // Each closed fault preserves any public work already produced, returns no
 // receipt path and never retries the native generation or later failed phase.
 func TestRootQualificationFailuresRetainAndDoNotRetry(t *testing.T) {
-	for _, fault := range []string{"dirty", "unsigned", "bad-head", "bad-tree", "ignored-source", "archive", "swift", "owning", "foreign", "source-drift", "head-drift", "pair-drift", "helper-drift", "receipt-drift", "work-collision", "receipt-collision"} {
+	for _, fault := range []string{"dirty", "unsigned", "bad-head", "bad-tree", "ignored-source", "go-version", "go-platform", "archive", "swift", "owning", "foreign", "source-drift", "head-drift", "pair-drift", "helper-drift", "receipt-drift", "work-collision", "receipt-collision"} {
 		t.Run(fault, func(t *testing.T) {
 			root, q := qualificationFixture(t)
 			f := &qualificationFake{t: t, root: root, fail: fault}
@@ -529,6 +590,13 @@ func TestRootQualificationFailuresRetainAndDoNotRetry(t *testing.T) {
 			if fault == "dirty" || fault == "unsigned" || fault == "bad-head" || fault == "bad-tree" || fault == "ignored-source" {
 				if f.archives != 0 {
 					t.Fatal("source admission failure compiled")
+				}
+			}
+			// A discovered executable with the wrong version/target must not reach
+			// archive, Swift or role compilation, or publish a success receipt.
+			if fault == "go-version" || fault == "go-platform" {
+				if f.archives != 0 || f.scratch != "" || f.owning != 0 || f.foreign != 0 {
+					t.Fatal("unqualified Go toolchain reached a build phase")
 				}
 			}
 			if fault == "owning" || fault == "source-drift" || fault == "head-drift" || fault == "pair-drift" || fault == "helper-drift" || fault == "receipt-drift" || fault == "work-collision" {

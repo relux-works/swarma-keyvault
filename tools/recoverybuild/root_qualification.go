@@ -62,15 +62,17 @@ func qualificationSwiftTarget(arch string) (string, error) {
 }
 
 func qualificationGoTool() (string, error) {
-	// runtime.GOROOT can honor GOROOT from the parent environment. Refuse that
-	// selector instead of treating an ambient replacement as the running tool.
+	// An explicit GOROOT remains forbidden. A -trimpath build omits the runtime's
+	// embedded GOROOT, so select go through the admitted toolchain PATH instead.
 	if value, present := os.LookupEnv("GOROOT"); present && value != "" {
 		return "", errQualificationBuild
 	}
-	tool := filepath.Join(runtime.GOROOT(), "bin", "go")
-	if !filepath.IsAbs(tool) || filepath.Clean(tool) != tool {
+	tool, err := exec.LookPath("go")
+	if err != nil || !filepath.IsAbs(tool) || filepath.Clean(tool) != tool || filepath.Base(tool) != "go" {
 		return "", errQualificationBuild
 	}
+	// runQualificationBuild checks the exact Go version/target before compilation;
+	// finding an executable is not toolchain or custody qualification.
 	return tool, nil
 }
 
