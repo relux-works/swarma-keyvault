@@ -265,6 +265,7 @@ var recoveryReviewedHashers = []string{
 	"prepareRootGrantsAttach", "recoveryBinding", "recoveryHash160", "recoveryMetadataSHA256", "recoveryNode.derive",
 	"recoveryNode.xpub", "recoverySeal", "rootGrantsBIP85Entropy", "rootGrantsCompletionACK", "rootGrantsPlaintextBinding",
 	"sealRootGrantsWithRandom", "validRecoveryNamecoinPins", "validateWrapping",
+	"SignRootGrantsGrantV3With", "rootGrantsGrantV3Digest", "rootGrantsHashHex",
 }
 
 // recoveryIsHashPath is a BOUNDED list of the hash packages the inventory knows,
