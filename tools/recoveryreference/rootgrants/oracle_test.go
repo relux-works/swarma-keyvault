@@ -161,10 +161,12 @@ func TestPublishedAnchorsRejectWrongTransforms(t *testing.T) {
 // the algebraic opposite-parity control n-3, which must give the SAME K as the
 // published scalar 3 while reporting odd Y before normalization. Limit: the
 // curve arithmetic is the upstream module; BIP340 and NIP-06 publish its outputs.
+// Rows 0-3 are restated from bitcoin/bips bip-0340/test-vectors.csv at
+// 200f9b26fe0a2f235a2af8b30c4be9f12f6bc9cb, not regenerated from this oracle.
 func TestBIP340PublishedKeysAndParity(t *testing.T) {
 	for _, v := range []struct{ secret, public string }{
 		{"0000000000000000000000000000000000000000000000000000000000000003", "f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"},
-		{"b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef", "dff1d77f2a671c5f36183726db2341be58feae1da2decad843240f7b502ba659"},
+		{"b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef", "dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"},
 		{"c90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b14e5c9", "dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8"},
 		{"0b432b2677937381aef05bb02a66ecd012773062cf3fa2549e44f58ed2401710", "25d1dff95105f5253c4022f628a996ad3a0d95fbf21d468a1b33f8c160d8f517"},
 	} {
