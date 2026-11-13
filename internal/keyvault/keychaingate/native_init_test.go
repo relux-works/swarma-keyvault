@@ -41,6 +41,7 @@ var reviewedNativeInputs = []string{
 	"internal/keyvault/recoveryfixture/native_darwin.go",
 	"internal/keyvault/root_acl_darwin.c",
 	"internal/keyvault/root_acl_darwin.h",
+	"internal/keyvault/root_acl_fault_darwin.go",
 	"internal/keyvault/root_grants_store_darwin.c",
 	"internal/keyvault/root_grants_store_darwin.h",
 	"internal/keyvault/root_grants_vault_darwin.go",

@@ -10,6 +10,63 @@ enum {
     MacKeyVaultRecordSeparator = 0x1e,
 };
 
+// Public failure-stage ids of the public-marker qualification create call. They are
+// fixed integers reported next to the Security OSStatus of the failing step; they
+// carry no item data. The values are a public contract: never renumber or reuse an
+// id, only append. The KVQ_STAGE_PROJECT_* ids are internal to the projection and
+// are always mapped to a BEFORE or AFTER id before they leave the create call;
+// KVQ_STAGE_RESERVED is never reported.
+enum {
+    KVQ_STAGE_NONE = 0,
+    KVQ_STAGE_RESOLVE = 1,
+    KVQ_STAGE_SELF_CODE = 2,
+    KVQ_STAGE_LOGIN_INTERACTION = 3,
+    KVQ_STAGE_LOGIN_ACCOUNT_PATH = 4,
+    KVQ_STAGE_LOGIN_OPEN = 5,
+    KVQ_STAGE_LOGIN_PATH_CHECK = 6,
+    KVQ_STAGE_LOGIN_STATUS = 7,
+    KVQ_STAGE_LOGIN_LOCKED = 8,
+    KVQ_STAGE_ACCESS_REQUIREMENT = 10,
+    KVQ_STAGE_ACCESS_APPLICATION = 11,
+    KVQ_STAGE_ACCESS_APPLICATION_EXACT = 12,
+    KVQ_STAGE_ACCESS_CREATE = 13,
+    KVQ_STAGE_ACCESS_ACL_LIST = 14,
+    KVQ_STAGE_ACCESS_PARTITION_DESCRIPTION = 15,
+    KVQ_STAGE_ACCESS_ACL_WALK = 16,
+    KVQ_STAGE_ACCESS_PARTITION_ACL = 17,
+    KVQ_STAGE_BIND_ACL_LIST = 20,
+    KVQ_STAGE_BIND_ACL_READ = 21,
+    KVQ_STAGE_BIND_RELEASE_COUNT = 22,
+    KVQ_STAGE_BIND_RELEASE_REQUIREMENT_READ = 23,
+    KVQ_STAGE_BIND_RELEASE_REQUIREMENT_DIFFERS = 24,
+    KVQ_STAGE_BIND_PARTITION = 25,
+    KVQ_STAGE_BIND_COUNTS = 26,
+    KVQ_STAGE_BEFORE_OWNER_ACL = 30,
+    KVQ_STAGE_BEFORE_ACL_AUTHORIZATIONS = 31,
+    KVQ_STAGE_BEFORE_ACL_CONTENTS = 32,
+    KVQ_STAGE_BEFORE_ACL_RAW_CONTENTS = 33,
+    KVQ_STAGE_BEFORE_ACL_APPLICATIONS = 34,
+    KVQ_STAGE_BEFORE_COPY = 35,
+    KVQ_STAGE_ADD_PREPARE = 40,
+    KVQ_STAGE_ADD = 41,
+    KVQ_STAGE_READBACK_REFERENCE = 42,
+    KVQ_STAGE_READBACK_FIND = 43,
+    KVQ_STAGE_READBACK_MARKER = 44,
+    KVQ_STAGE_READBACK_ACCESS = 45,
+    KVQ_STAGE_READBACK_COPY = 46,
+    KVQ_STAGE_AFTER_OWNER_ACL = 50,
+    KVQ_STAGE_AFTER_ACL_AUTHORIZATIONS = 51,
+    KVQ_STAGE_AFTER_ACL_CONTENTS = 52,
+    KVQ_STAGE_AFTER_ACL_RAW_CONTENTS = 53,
+    KVQ_STAGE_AFTER_ACL_APPLICATIONS = 54,
+    KVQ_STAGE_PROJECT_OWNER_ACL = 70,
+    KVQ_STAGE_PROJECT_AUTHORIZATIONS = 71,
+    KVQ_STAGE_PROJECT_CONTENTS = 72,
+    KVQ_STAGE_PROJECT_RAW_CONTENTS = 73,
+    KVQ_STAGE_PROJECT_APPLICATIONS = 74,
+    KVQ_STAGE_RESERVED = 99,
+};
+
 int MacKeyVaultCreate(const char *label, const char *tag, int enclave, int userPresence,
                       unsigned char **outPub, size_t *outPubLen);
 int MacKeyVaultList(const char *prefix, char **out, size_t *outLen);
@@ -37,8 +94,11 @@ int MacKeyVaultRecoveryCode(int pid, const unsigned char *expectedHash, size_t h
 int MacKeyVaultRootQualificationRead(int role, const unsigned char *reference, size_t length, int *result);
 int MacKeyVaultRootQualificationCode(int role, int pid, const unsigned char *hash, size_t length);
 int MacKeyVaultRootQualificationSnapshot(const unsigned char *reference, size_t length, unsigned char **out, size_t *outLength);
+// stage and osStatus report the first failing step (KVQ_STAGE_*) and its Security
+// OSStatus; both are zero on success. They never change outcome or the return value.
 int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *referenceLength,
-    unsigned char **before, size_t *beforeLength, unsigned char **after, size_t *afterLength, int *outcome);
+    unsigned char **before, size_t *beforeLength, unsigned char **after, size_t *afterLength, int *outcome,
+    int *stage, int *osStatus);
 int MacKeyVaultRootQualificationDelete(const unsigned char *reference, size_t referenceLength,
     const unsigned char *expectedProjectionSHA256, size_t digestLength, int *outcome);
 

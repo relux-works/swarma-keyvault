@@ -94,7 +94,8 @@ func RootQualificationCreate(reservation *rootqualification.CreationReservation)
 	var reference, before, after *C.uchar
 	var referenceSize, beforeSize, afterSize C.size_t
 	var outcome C.int = 3
-	status := C.MacKeyVaultRootQualificationCreate(&reference, &referenceSize, &before, &beforeSize, &after, &afterSize, &outcome)
+	var stage, osStatus C.int
+	status := C.MacKeyVaultRootQualificationCreate(&reference, &referenceSize, &before, &beforeSize, &after, &afterSize, &outcome, &stage, &osStatus)
 	for _, p := range []*C.uchar{reference, before, after} {
 		if p != nil {
 			defer C.free(unsafe.Pointer(p))
@@ -105,6 +106,9 @@ func RootQualificationCreate(reservation *rootqualification.CreationReservation)
 	} else {
 		result.Outcome = rootqualification.CreationUnknown
 	}
+	// The first failing step and its OSStatus are public diagnostics only: they are
+	// admitted through the closed stage table and never change Outcome or the error.
+	result.Diagnostic = rootqualification.DiagnosticFromNative(int(stage), int(osStatus))
 	if referenceSize > 16384 || beforeSize > 1048576 || afterSize > 1048576 || (referenceSize > 0 && reference == nil) || (beforeSize > 0 && before == nil) || (afterSize > 0 && after == nil) {
 		return result, rootqualification.ErrProjection
 	}
@@ -162,4 +166,53 @@ func RootQualificationDelete(reservation *rootqualification.CleanupReservation) 
 		return rootqualification.CleanupRefused, rootqualification.ErrReceipt
 	}
 	return rootqualification.CleanupUnknown, rootqualification.ErrReceipt
+}
+
+// nativeStageIDs returns the id compiled into the native unit for every reported
+// stage. A test compares it with the Go table, so a stage id cannot drift or shift
+// by one between the two without a failing test.
+func nativeStageIDs() map[rootqualification.Stage]int {
+	return map[rootqualification.Stage]int{
+		rootqualification.StageResolve:                       int(C.KVQ_STAGE_RESOLVE),
+		rootqualification.StageSelfCode:                      int(C.KVQ_STAGE_SELF_CODE),
+		rootqualification.StageLoginInteraction:              int(C.KVQ_STAGE_LOGIN_INTERACTION),
+		rootqualification.StageLoginAccountPath:              int(C.KVQ_STAGE_LOGIN_ACCOUNT_PATH),
+		rootqualification.StageLoginOpen:                     int(C.KVQ_STAGE_LOGIN_OPEN),
+		rootqualification.StageLoginPathCheck:                int(C.KVQ_STAGE_LOGIN_PATH_CHECK),
+		rootqualification.StageLoginStatus:                   int(C.KVQ_STAGE_LOGIN_STATUS),
+		rootqualification.StageLoginLocked:                   int(C.KVQ_STAGE_LOGIN_LOCKED),
+		rootqualification.StageAccessRequirement:             int(C.KVQ_STAGE_ACCESS_REQUIREMENT),
+		rootqualification.StageAccessApplication:             int(C.KVQ_STAGE_ACCESS_APPLICATION),
+		rootqualification.StageAccessApplicationExact:        int(C.KVQ_STAGE_ACCESS_APPLICATION_EXACT),
+		rootqualification.StageAccessCreate:                  int(C.KVQ_STAGE_ACCESS_CREATE),
+		rootqualification.StageAccessACLList:                 int(C.KVQ_STAGE_ACCESS_ACL_LIST),
+		rootqualification.StageAccessPartitionDescription:    int(C.KVQ_STAGE_ACCESS_PARTITION_DESCRIPTION),
+		rootqualification.StageAccessACLWalk:                 int(C.KVQ_STAGE_ACCESS_ACL_WALK),
+		rootqualification.StageAccessPartitionACL:            int(C.KVQ_STAGE_ACCESS_PARTITION_ACL),
+		rootqualification.StageBindACLList:                   int(C.KVQ_STAGE_BIND_ACL_LIST),
+		rootqualification.StageBindACLRead:                   int(C.KVQ_STAGE_BIND_ACL_READ),
+		rootqualification.StageBindReleaseCount:              int(C.KVQ_STAGE_BIND_RELEASE_COUNT),
+		rootqualification.StageBindReleaseRequirementRead:    int(C.KVQ_STAGE_BIND_RELEASE_REQUIREMENT_READ),
+		rootqualification.StageBindReleaseRequirementDiffers: int(C.KVQ_STAGE_BIND_RELEASE_REQUIREMENT_DIFFERS),
+		rootqualification.StageBindPartition:                 int(C.KVQ_STAGE_BIND_PARTITION),
+		rootqualification.StageBindCounts:                    int(C.KVQ_STAGE_BIND_COUNTS),
+		rootqualification.StageBeforeOwnerACL:                int(C.KVQ_STAGE_BEFORE_OWNER_ACL),
+		rootqualification.StageBeforeACLAuthorizations:       int(C.KVQ_STAGE_BEFORE_ACL_AUTHORIZATIONS),
+		rootqualification.StageBeforeACLContents:             int(C.KVQ_STAGE_BEFORE_ACL_CONTENTS),
+		rootqualification.StageBeforeACLRawContents:          int(C.KVQ_STAGE_BEFORE_ACL_RAW_CONTENTS),
+		rootqualification.StageBeforeACLApplications:         int(C.KVQ_STAGE_BEFORE_ACL_APPLICATIONS),
+		rootqualification.StageBeforeCopy:                    int(C.KVQ_STAGE_BEFORE_COPY),
+		rootqualification.StageAddPrepare:                    int(C.KVQ_STAGE_ADD_PREPARE),
+		rootqualification.StageAdd:                           int(C.KVQ_STAGE_ADD),
+		rootqualification.StageReadbackRef:                   int(C.KVQ_STAGE_READBACK_REFERENCE),
+		rootqualification.StageReadbackFind:                  int(C.KVQ_STAGE_READBACK_FIND),
+		rootqualification.StageReadbackMarker:                int(C.KVQ_STAGE_READBACK_MARKER),
+		rootqualification.StageReadbackAccess:                int(C.KVQ_STAGE_READBACK_ACCESS),
+		rootqualification.StageReadbackCopy:                  int(C.KVQ_STAGE_READBACK_COPY),
+		rootqualification.StageAfterOwnerACL:                 int(C.KVQ_STAGE_AFTER_OWNER_ACL),
+		rootqualification.StageAfterACLAuth:                  int(C.KVQ_STAGE_AFTER_ACL_AUTHORIZATIONS),
+		rootqualification.StageAfterACLContents:              int(C.KVQ_STAGE_AFTER_ACL_CONTENTS),
+		rootqualification.StageAfterACLRaw:                   int(C.KVQ_STAGE_AFTER_ACL_RAW_CONTENTS),
+		rootqualification.StageAfterACLApps:                  int(C.KVQ_STAGE_AFTER_ACL_APPLICATIONS),
+	}
 }

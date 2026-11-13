@@ -105,4 +105,9 @@ type NativeCreation struct {
 	After        *Projection
 	BeforeSHA256 string
 	AfterSHA256  string
+
+	// Diagnostic names the first failing native step and its Security OSStatus.
+	// It is printed as one public stderr line by the caller and never changes
+	// Outcome or any receipt byte.
+	Diagnostic Diagnostic
 }

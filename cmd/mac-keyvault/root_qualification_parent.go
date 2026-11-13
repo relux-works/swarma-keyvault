@@ -97,21 +97,7 @@ func rootQualificationParentCase(ctx context.Context, args rootQualificationArgu
 			return "unqualified", "", exitFailure
 		}
 		created, nativeErr := keyvault.RootQualificationCreate(reservation)
-		defer clear(created.Reference)
-		if ctx.Err() != nil && created.Outcome != rootqualification.CreationRefused {
-			created.Outcome = rootqualification.CreationUnknown
-		}
-		publication, publishErr := reservation.Publish(candidate, created)
-		if publishErr != nil {
-			return "unknown", "", exitFailure
-		}
-		if nativeErr == nil && publication.State == "created" {
-			return "created", publication.SHA256, exitOK
-		}
-		if publication.State == "refused" {
-			return "refused", publication.SHA256, exitRefused
-		}
-		return "unknown", publication.SHA256, exitFailure
+		return finishRootQualificationCreate(ctx, reservation, candidate, created, nativeErr, rootQualificationDiagnosticOutput)
 	}
 	loaded, err := rootqualification.LoadCreatedReceipt(args.receiptSHA256, candidate)
 	if err != nil {

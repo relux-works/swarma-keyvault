@@ -3,6 +3,7 @@
 
 // Shared root-item ACL unit (root_acl_darwin.c). Native-only header: it exposes
 // Security.framework types and is never included by a Go cgo preamble.
+#include "security_darwin.h"
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 #include <stddef.h>
@@ -30,5 +31,18 @@ OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out);
 // descriptor (the access name shown in system dialogs, also the description of the
 // projected ACLs) and applicationLabel are fixed strings owned by each caller.
 OSStatus KVQIntendedAccess(KVQSymbols symbols, const char *descriptor, const char *applicationLabel, SecAccessRef *out);
+
+// Failure diagnostics of the functions of this unit (stage ids: security_darwin.h).
+// The FIRST failure recorded on the calling thread wins; later statuses never
+// overwrite it. One cgo call runs on one thread, so a caller resets before its
+// first step and takes the record before it returns. The record holds a stage id
+// and the Security OSStatus only; it never carries item data.
+void KVQDiagReset(void);
+void KVQDiagNote(int stage, OSStatus status);
+// Returns 1 and the recorded failure, or 0 when nothing failed.
+int KVQDiagTake(int *stage, OSStatus *status);
+// Maps a recorded KVQ_STAGE_PROJECT_* id to the id family starting at base
+// (KVQ_STAGE_BEFORE_OWNER_ACL or KVQ_STAGE_AFTER_OWNER_ACL); any other id is kept.
+void KVQDiagRetagProjection(int base);
 
 #endif

@@ -173,11 +173,10 @@ static int KVQCopyPublicData(CFDataRef value, unsigned char **out, size_t *lengt
 // outcome2 created/readback, outcome3 uncertain after the ONE add attempt.
 // Caller reserves its exclusive receipt BEFORE entering; uncertainty never
 // causes search, overwrite, retry, automatic delete or old-item inspection.
-int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *referenceLength,
+// Every failing step records its stage id and Security OSStatus (first failure
+// wins, root_acl_darwin.h); the notes never change outcome or the return value.
+static int KVQCreateRun(unsigned char **reference, size_t *referenceLength,
     unsigned char **before, size_t *beforeLength, unsigned char **after, size_t *afterLength, int *outcome) {
-    if (!reference || !referenceLength || !before || !beforeLength || !after || !afterLength || !outcome) return 1;
-    *reference = *before = *after = NULL;
-    *referenceLength = *beforeLength = *afterLength = 0; *outcome = 1;
     KVQSymbols symbols = {0};
     if (!KVQResolve(&symbols) || KVQSelf(1) != errSecSuccess) return 1;
     SecKeychainRef keychain = NULL;
@@ -188,17 +187,29 @@ int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *refere
     CFTypeRef added = NULL;
     CFMutableDictionaryRef query = NULL;
     OSStatus status = KVQIntendedAccess(symbols, KVQDescriptor, KVQApplicationLabel, &intended);
-    if (status == errSecSuccess) status = KVQProject(intended, symbols, &beforeFrame);
-    if (status == errSecSuccess && !KVQCopyPublicData(beforeFrame, before, beforeLength, 1048576)) status = errSecAllocate;
+    if (status == errSecSuccess) {
+        status = KVQProject(intended, symbols, &beforeFrame);
+        if (status != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (status == errSecSuccess && !KVQCopyPublicData(beforeFrame, before, beforeLength, 1048576)) {
+        status = errSecAllocate;
+        KVQDiagNote(KVQ_STAGE_BEFORE_COPY, status);
+    }
     if (status == errSecSuccess) {
         query = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-        if (!query) status = errSecAllocate;
+        if (!query) {
+            status = errSecAllocate;
+            KVQDiagNote(KVQ_STAGE_ADD_PREPARE, status);
+        }
     }
     CFDataRef marker = NULL;
     if (status == errSecSuccess) {
         const char *value = "keyvault-root-acl-qualification/1";
         marker = CFDataCreate(NULL, (const unsigned char *)value, (CFIndex)strlen(value));
-        if (!marker) status = errSecAllocate;
+        if (!marker) {
+            status = errSecAllocate;
+            KVQDiagNote(KVQ_STAGE_ADD_PREPARE, status);
+        }
     }
     if (status == errSecSuccess) {
         CFDictionarySetValue(query, kSecClass, kSecClassGenericPassword);
@@ -211,14 +222,36 @@ int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *refere
         CFDictionarySetValue(query, kSecReturnPersistentRef, kCFBooleanTrue);
         *outcome = 3;
         status = SecItemAdd(query, &added); // Sole native mutation; no update.
+        KVQDiagNote(KVQ_STAGE_ADD, status);
         if (status == errSecDuplicateItem) *outcome = 1;
-        if (status == errSecSuccess && !KVQCopyPublicData(added, reference, referenceLength, 16384)) status = errSecDecode;
-        if (status == errSecSuccess) status = KVQFind(keychain, *reference, *referenceLength, &item);
-        if (status == errSecSuccess) status = KVQOwnMarker(item);
-        if (status == errSecSuccess) status = SecKeychainItemCopyAccess(item, &actual);
-        if (status == errSecSuccess && !actual) status = errSecDecode;
-        if (status == errSecSuccess) status = KVQProject(actual, symbols, &afterFrame);
-        if (status == errSecSuccess && !KVQCopyPublicData(afterFrame, after, afterLength, 1048576)) status = errSecAllocate;
+        if (status == errSecSuccess && !KVQCopyPublicData(added, reference, referenceLength, 16384)) {
+            status = errSecDecode;
+            KVQDiagNote(KVQ_STAGE_READBACK_REFERENCE, status);
+        }
+        if (status == errSecSuccess) {
+            status = KVQFind(keychain, *reference, *referenceLength, &item);
+            KVQDiagNote(KVQ_STAGE_READBACK_FIND, status);
+        }
+        if (status == errSecSuccess) {
+            status = KVQOwnMarker(item);
+            KVQDiagNote(KVQ_STAGE_READBACK_MARKER, status);
+        }
+        if (status == errSecSuccess) {
+            status = SecKeychainItemCopyAccess(item, &actual);
+            KVQDiagNote(KVQ_STAGE_READBACK_ACCESS, status);
+        }
+        if (status == errSecSuccess && !actual) {
+            status = errSecDecode;
+            KVQDiagNote(KVQ_STAGE_READBACK_ACCESS, status);
+        }
+        if (status == errSecSuccess) {
+            status = KVQProject(actual, symbols, &afterFrame);
+            if (status != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_AFTER_OWNER_ACL);
+        }
+        if (status == errSecSuccess && !KVQCopyPublicData(afterFrame, after, afterLength, 1048576)) {
+            status = errSecAllocate;
+            KVQDiagNote(KVQ_STAGE_READBACK_COPY, status);
+        }
         if (status == errSecSuccess) *outcome = 2;
     }
     if (added) CFRelease(added);
@@ -231,6 +264,24 @@ int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *refere
     if (item) CFRelease(item);
     CFRelease(keychain);
     return status == errSecSuccess ? 0 : 1;
+}
+
+int MacKeyVaultRootQualificationCreate(unsigned char **reference, size_t *referenceLength,
+    unsigned char **before, size_t *beforeLength, unsigned char **after, size_t *afterLength, int *outcome,
+    int *stage, int *osStatus) {
+    if (!reference || !referenceLength || !before || !beforeLength || !after || !afterLength || !outcome || !stage || !osStatus) return 1;
+    *reference = *before = *after = NULL;
+    *referenceLength = *beforeLength = *afterLength = 0; *outcome = 1;
+    *stage = 0; *osStatus = 0;
+    KVQDiagReset();
+    int result = KVQCreateRun(reference, referenceLength, before, beforeLength, after, afterLength, outcome);
+    int recordedStage = 0;
+    OSStatus recorded = errSecSuccess;
+    if (KVQDiagTake(&recordedStage, &recorded)) {
+        *stage = recordedStage;
+        *osStatus = (int)recorded;
+    }
+    return result;
 }
 
 // Separate attended cleanup, exact same public item and full unchanged
