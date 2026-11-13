@@ -45,6 +45,7 @@ func TestRecoveryDeleteRefusesAttachedPair(t *testing.T) {
 		{"unattached-deletes", func(int) (bool, error) { return false, nil }, "", 1, true},
 		{"attached-refuses-before-prompt", func(int) (bool, error) { return true, nil }, "attachment_exists", 0, false},
 		{"unreadable-inventory-refuses-before-prompt", func(int) (bool, error) { return false, errors.New("PUBLIC_TEST_PRIVATE_SENTINEL") }, "recovery_inventory_changed", 0, false},
+		{"unadmitted-executable-refuses-before-prompt", func(int) (bool, error) { return false, recoveryRefuse("code_not_admitted") }, "recovery_code_not_admitted", 0, false},
 		{"appears-after-prompt-refuses-under-lock", func(call int) (bool, error) { return call > 1, nil }, "attachment_exists", 1, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -359,7 +359,8 @@ func (m *RecoveryManager) Delete(q RecoveryDeleteRequest, terminal RecoveryTermi
 
 // refuseAttached refuses a pair that a stored root-grants item references
 // (attachment_exists, definite, no effect). An inventory that cannot be read
-// refuses too (inventory_changed): "no attachment" must be proven, not assumed.
+// refuses too (inventory_changed, or code_not_admitted for an executable that may
+// not read it): "no attachment" must be proven, not assumed.
 func (m *RecoveryManager) refuseAttached(r RecoveryRecord) error {
 	inventory, ok := m.backend.(RootGrantsAttachmentInventory)
 	if !ok {
@@ -367,6 +368,10 @@ func (m *RecoveryManager) refuseAttached(r RecoveryRecord) error {
 	}
 	attached, err := inventory.RootGrantsAttached(r)
 	if err != nil {
+		var refusal *Refusal
+		if errors.As(err, &refusal) && refusal.Code == "recovery_code_not_admitted" {
+			return err // the executable may not read the root inventory at all
+		}
 		return recoveryRefuse("inventory_changed")
 	}
 	if attached {

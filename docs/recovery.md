@@ -143,6 +143,17 @@ If either output channel is lost, retain UNKNOWN. Reconcile the public reference
 do not automatically retry or delete. Several removals are separate
 effects, not a transaction. Retained retired keys are not an active identity.
 
+A pair that a root-grants item is attached to is never deleted from here:
+`recovery delete` refuses it with `attachment_exists` (exit 3) before the owner
+prompt and before any lock effect, and checks again under the lock. The check
+reads the root-grants inventory, and only the admitted vault identity (the
+release-signed `works.relux.keyvault`, hardened runtime, no entitlements) may
+read it. An unadmitted or development build therefore refuses `recovery delete`
+for every pair, attached or not, with `recovery_code_not_admitted` and no
+Keychain query; an inventory that cannot be read refuses with
+`recovery_inventory_changed`. "Not attached" is proven, never assumed. Delete
+with the release vault.
+
 ## Attended seed setup release
 
 On the supported macOS architecture, verify the release archive and its
