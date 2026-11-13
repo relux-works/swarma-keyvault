@@ -226,6 +226,15 @@ write or delete right. They also do not resist a process with the same UID or
 an owner who can replace local files. Independently reviewed receipt digests,
 artifact/native identity checks and attended cleanup remain separate boundaries.
 
+When `create-project` does not succeed, the vault also writes one public diagnostic
+line to stderr: `{"schema":"keyvault-root-acl-qualification-diagnostic/1","case":"create-project","stage":N,"stage_name":"...","os_status":S}`.
+It names the first native step that failed (for example `bind_release_requirement_read`
+or `add`) and its Security `OSStatus`. The ids are fixed and published in
+`internal/rootqualification/stage.go`; the line carries no item data, path or
+reference. It is not part of the stdout result or of any receipt, whose schemas are
+unchanged. A native build with the `kvqfault` tag adds test-only fault injection for
+`go test -tags kvqfault ./internal/keyvault`; a normal build contains none of it.
+
 ## Nostr keys
 
 `mac-keyvault nostr` provides secp256k1 list/describe, public x-only hex or
