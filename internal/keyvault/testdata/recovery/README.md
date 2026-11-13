@@ -19,6 +19,12 @@ Source:
 [`06.md`](https://github.com/nostr-protocol/nips/blob/b587c619c2ea662d40b40976aeccf6ac8d6ba9eb/06.md),
 SHA-256 `a7d86f43c3723b7a67765e81910a2478007d4655024e2899a163a09e2c834b3a`.
 
+`reference-root-grants.json` holds the independently generated index-7 root
+grants expectations (x-only K, `02||K`, seal script) for four public 24-word
+phrases. It is reproduced exactly by the isolated
+[`rootgrants`](../../../../tools/recoveryreference/README.md) oracle and is
+never produced from the product derivation.
+
 The production English list lives in `../../recoverydata/english.txt` and is
 embedded verbatim. Source:
 [`english.txt`](https://github.com/bitcoin/bips/blob/d71d60687b4c250ae9c73c1cc29897dbd56e9903/bip-0039/english.txt),

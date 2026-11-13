@@ -1,0 +1,36 @@
+{
+  "schema": "keyvault-root-grants-reference/1",
+  "profile": "namecoin-landlord-root/1",
+  "derivation": "bip85-hdseed-wif/1",
+  "path": "m/83696968h/2h/7h",
+  "rows": [
+    {
+      "phrase": "what bleak badge arrange retreat wolf trade produce cricket blur garlic valid proud rude strong choose busy staff weather area salt hollow arm fade",
+      "public_key": "a98cbb1bdb296a1513b0133187dd823922b019835cf47cbc03c450b765346259",
+      "seal_public_key": "02a98cbb1bdb296a1513b0133187dd823922b019835cf47cbc03c450b765346259",
+      "seal_script": "76a914d18031f3319d32f95d68beb7b7fad45bef1b2d2e88ac",
+      "odd_y_before_normalization": false
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "public_key": "0348a12235885dae6fdedaac4ea8fc40c4bcf05a712ba1bed96ae50e58a10699",
+      "seal_public_key": "020348a12235885dae6fdedaac4ea8fc40c4bcf05a712ba1bed96ae50e58a10699",
+      "seal_script": "76a9144f545f997410af2b4beb5341f168aa381e00718c88ac",
+      "odd_y_before_normalization": true
+    },
+    {
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+      "public_key": "37dac9e8f3ae20006994f5958bf913db9202de4e39e9082debf38e0095202ab9",
+      "seal_public_key": "0237dac9e8f3ae20006994f5958bf913db9202de4e39e9082debf38e0095202ab9",
+      "seal_script": "76a91425ca236fc8c018b4b31a778c08bef8c9c4eeea2e88ac",
+      "odd_y_before_normalization": true
+    },
+    {
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math era live bid rhythm alien crouch range attend journey unaware",
+      "public_key": "af9f0f967f3629f48227a0fe7af05509b59e024891e300451cf5e85adbf1a0e8",
+      "seal_public_key": "02af9f0f967f3629f48227a0fe7af05509b59e024891e300451cf5e85adbf1a0e8",
+      "seal_script": "76a91417c583bca41ea25ebe039c1050cb5018ec9187bf88ac",
+      "odd_y_before_normalization": false
+    }
+  ]
+}

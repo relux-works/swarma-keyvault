@@ -43,6 +43,25 @@ jobs:
         run: |
           go run . > "$RUNNER_TEMP/recovery-public.json"
           cmp "$RUNNER_TEMP/recovery-public.json" ../../internal/keyvault/testdata/recovery/reference-public.json
+      - name: Reproduce the committed index-7 root grants fixture bytes
+        working-directory: tools/recoveryreference
+        run: |
+          go run ./rootgrants > "$RUNNER_TEMP/root-grants-reference.json"
+          test -s "$RUNNER_TEMP/root-grants-reference.json"
+          cmp "$RUNNER_TEMP/root-grants-reference.json" ../../internal/keyvault/testdata/recovery/reference-root-grants.json
+      - name: Regeneration diff detects a planted index-7 fixture change
+        working-directory: tools/recoveryreference
+        run: |
+          fixture=../../internal/keyvault/testdata/recovery/reference-root-grants.json
+          sed 's/"public_key": "a98cbb1b/"public_key": "a98cbb1c/' "$fixture" > "$RUNNER_TEMP/root-grants-planted.json"
+          if cmp -s "$fixture" "$RUNNER_TEMP/root-grants-planted.json"; then
+            echo 'the planted change was not applied' >&2
+            exit 1
+          fi
+          if cmp -s "$RUNNER_TEMP/root-grants-reference.json" "$RUNNER_TEMP/root-grants-planted.json"; then
+            echo 'the regeneration diff did not detect the planted change' >&2
+            exit 1
+          fi
 
   linux:
     name: Go vet and race tests (Linux)

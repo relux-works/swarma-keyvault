@@ -30,9 +30,13 @@ wrong key spelling, raw child substitution, truncation or serialization mistakes
 addition, followed by standard HMAC-SHA512. It shares SHA512 and curve arithmetic
 with production; the official BIP85/BIP32/BIP340 controls ground those primitives.
 The fixed-index public comparison is an algorithmic expectation, **not a
-separately published index7 public vector**. No independently generated index7 K
-has been recorded here. The isolated reference lane and independent integrated
-review remain required; two implementations agreeing alone is insufficient.
+separately published index7 public vector**. The independently generated index7
+expectations live in `reference-root-grants.json`, produced by the isolated
+`tools/recoveryreference/rootgrants` oracle (unmodified upstream modules, grounded
+in the official BIP85 index0, BIP340 and NIP06 vectors) and compared byte for byte
+in hosted CI; `recovery_root_grants_reference_test.go` compares the product with
+it. The independent integrated review remains required; two implementations
+agreeing alone is insufficient.
 
 ## Claims and limits
 
