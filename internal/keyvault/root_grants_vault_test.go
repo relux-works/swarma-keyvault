@@ -698,19 +698,23 @@ func TestRootGrantsVaultDefaultPolicyFailsClosed(t *testing.T) {
 	}
 }
 
-// rootGrantsCStrip removes preprocessor lines and comments and blanks the string
-// literals of a C source, returning the remaining code and the literals in order.
-func rootGrantsCStrip(src string) (string, []string) {
+// rootGrantsCStrip removes comments, collects the preprocessor directives (a
+// directive may continue over backslash-newline) and blanks the string literals of
+// a C source, returning the remaining code, the literals and the directives, each
+// in order.
+func rootGrantsCStrip(src string) (string, []string, []string) {
 	var code strings.Builder
-	var literals []string
+	var literals, directives []string
 	lineStart := true
 	for i := 0; i < len(src); {
 		c := src[i]
 		switch {
 		case lineStart && c == '#':
-			for i < len(src) && src[i] != '\n' {
+			start := i
+			for i < len(src) && (src[i] != '\n' || src[i-1] == '\\') {
 				i++
 			}
+			directives = append(directives, strings.TrimSpace(src[start:i]))
 		case strings.HasPrefix(src[i:], "//"):
 			for i < len(src) && src[i] != '\n' {
 				i++
@@ -747,7 +751,7 @@ func rootGrantsCStrip(src string) (string, []string) {
 			i++
 		}
 	}
-	return code.String(), literals
+	return code.String(), literals, directives
 }
 
 // rootGrantsCFunctionBody returns the braces of one top-level function definition.
@@ -815,6 +819,12 @@ var (
 		"MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsReadback"}
 	rootGrantsStoreAllFunctions = append(append([]string{}, rootGrantsStoreGatedEntries...),
 		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsAddClose", "KVRGStartup", "KVRGCopy", "KVRGRows", "KVRGQuery")
+	// The preprocessor lines of the file, exactly: a macro can hide any call, literal
+	// or access-object use behind an innocent identifier, so no other directive exists.
+	rootGrantsStoreDirectives = []string{
+		`#include "root_grants_store_darwin.h"`, `#include "root_acl_darwin.h"`, `#include "security_darwin.h"`,
+		`#include <CoreFoundation/CoreFoundation.h>`, `#include <Security/Security.h>`, `#include <stdlib.h>`, `#include <string.h>`,
+		`#pragma clang diagnostic ignored "-Wdeprecated-declarations"`}
 	rootGrantsCIdentifier = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\b(\s*\()?`)
 )
 
@@ -834,7 +844,16 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 			violations = append(violations, message)
 		}
 	}
-	code, literals := rootGrantsCStrip(src)
+	code, literals, directives := rootGrantsCStrip(src)
+	allowedDirectives := rootGrantsSet(rootGrantsStoreDirectives...)
+	for _, d := range directives {
+		if !allowedDirectives[d] {
+			add("preprocessor directive %q is not in the allowlist", d)
+		}
+	}
+	if !reflect.DeepEqual(directives, rootGrantsStoreDirectives) {
+		add("preprocessor directives are not exactly the allowed list")
+	}
 	if len(literals) != 3 || strings.Count(code, `static const char *KVRGNamespace = "";`) != 1 ||
 		strings.Count(code, `static const char *KVRGAccessDescriptor = "";`) != 1 || strings.Count(code, `static const char *KVRGApplicationLabel = "";`) != 1 {
 		add("string literals are not exactly the three declared constants (%d found)", len(literals))
@@ -904,8 +923,25 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 	if !regexp.MustCompile(`\*attempted = 1;\s*status = SecItemAdd\(query, NULL\);`).MatchString(commit) {
 		add("dispatch flag is not immediately before the single add")
 	}
-	if body := bodies["KVRGStartup"]; !strings.Contains(body, "KVQResolve(") || !strings.Contains(body, "KVQSelf(1)") {
-		add("the startup gate no longer resolves the SPI and verifies the running vault")
+	// The startup gate: its body is exactly the SPI resolve and the running-vault
+	// check (no other role, no extra branch), it is used exactly once per entry as
+	// the first non-validation statement with its result tested, and nowhere else.
+	norm := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+	if norm(bodies["KVRGStartup"]) != "{ return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess; }" {
+		add("the startup gate is not exactly the SPI resolve and the running-vault check")
+	}
+	if got := strings.Count(code, "KVRGStartup("); got != 7 {
+		add("KVRGStartup( occurs %d times, want 7 (definition, startup entry, one gate per entry)", got)
+	}
+	if norm(bodies["MacKeyVaultRootGrantsStartup"]) != "{ KVQSymbols symbols = {0}; return KVRGStartup(&symbols) ? 0 : 1; }" {
+		add("MacKeyVaultRootGrantsStartup is not exactly the gate result")
+	}
+	for entry, ret := range map[string]string{"MacKeyVaultRootGrantsPairList": "errSecAuthFailed", "MacKeyVaultRootGrantsList": "errSecAuthFailed",
+		"MacKeyVaultRootGrantsAddPrepare": "1", "MacKeyVaultRootGrantsAddCommit": "errSecAuthFailed", "MacKeyVaultRootGrantsReadback": "errSecAuthFailed"} {
+		n := norm(bodies[entry])
+		if strings.Count(n, "KVRGStartup(") != 1 || !strings.Contains(n, "KVQSymbols symbols = {0}; if (!KVRGStartup(&symbols)) return "+ret+";") {
+			add("%s does not use the exact startup gate statement whose result is tested", entry)
+		}
 	}
 	for _, entry := range rootGrantsStoreGatedEntries {
 		body := bodies[entry]
@@ -970,14 +1006,34 @@ func TestRootGrantsStoreSourceBoundary(t *testing.T) {
 		{"access-escapes-to-a-helper", "referenced outside its owners", replace("    CFArrayRef search = CFArrayCreate(", "    SecAccessRef leaked = plan->access; /* planted */\n    CFArrayRef search = CFArrayCreate(")},
 		{"consumed-check-removed", "the commit is not one-shot", replace("    if (plan->consumed) return errSecParam; // one-shot: a second commit never reaches the add\n", "")},
 		{"consume-removed", "the commit is not one-shot", replace("    plan->consumed = 1;\n", "")},
-		{"startup-removed", "MacKeyVaultRootGrantsAddPrepare does not verify the running vault", replace("    if (!KVRGStartup(&symbols)) return 1;\n", "")},
+		{"startup-removed", "MacKeyVaultRootGrantsAddPrepare does not use the exact startup gate statement", replace("    if (!KVRGStartup(&symbols)) return 1;\n", "")},
 		{"keychain-before-startup", "MacKeyVaultRootGrantsList calls KVQLogin before the startup check", replace(
 			"    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);",
 			"    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);")},
 		{"hidden-helper-before-startup", "MacKeyVaultRootGrantsPairList calls KVRGCopy before the startup check", replace(
 			"    *out = NULL; *outLength = 0;\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    return MacKeyVaultNostrList(",
 			"    *out = NULL; *outLength = 0;\n    KVRGCopy(NULL, 0, NULL, NULL); /* planted */\n    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    return MacKeyVaultNostrList(")},
-		{"gate-neutered", "the startup gate no longer resolves the SPI and verifies the running vault", replace("return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;", "return KVQResolve(symbols);")},
+		{"gate-neutered", "the startup gate is not exactly the SPI resolve", replace("return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;", "return KVQResolve(symbols);")},
+		{"gate-also-admits-the-helper-role (MC5)", "the startup gate is not exactly the SPI resolve", replace("    return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;",
+			"    return KVQResolve(symbols) && (KVQSelf(1) == errSecSuccess || KVQSelf(2) == errSecSuccess); // mutant MC5")},
+		{"gate-extra-role-line (anchor-preserving MC5)", "the startup gate is not exactly the SPI resolve", replace("    return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;",
+			"    if (KVQResolve(symbols) && KVQSelf(2) == errSecSuccess) return 1;\n    return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess;")},
+		{"gate-result-ignored-in-the-root-list (MC6)", "MacKeyVaultRootGrantsList does not use the exact startup gate statement", replace(
+			"    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);",
+			"    KVQSymbols symbols = {0};\n    (void)KVRGStartup(&symbols); // mutant MC6\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = KVRGQuery(keychain, NULL, 0);")},
+		{"gate-result-inverted-in-the-commit", "MacKeyVaultRootGrantsAddCommit does not use the exact startup gate statement", replace(
+			"    KVQSymbols symbols = {0};\n    if (!KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = CFDictionaryCreateMutable(",
+			"    KVQSymbols symbols = {0};\n    if (KVRGStartup(&symbols)) return errSecAuthFailed;\n    SecKeychainRef keychain = NULL;\n    OSStatus status = KVQLogin(&keychain);\n    if (status != errSecSuccess) return (int)status;\n    CFMutableDictionaryRef query = CFDictionaryCreateMutable(")},
+		{"macro-hides-an-acl-change (MC4)", "preprocessor directive", func(s string) string {
+			s = replace("#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n",
+				"#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n#define kvrg_admitted_object_extended (SecACLCreateWithSimpleContents(plan->access, NULL, CFSTR(\"mutant\"), 0, (SecACLRef *)&extra) == errSecSuccess)\n")(s)
+			return replace("    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, envelope, (CFIndex)envelopeLength, kCFAllocatorNull);\n",
+				"    CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, envelope, (CFIndex)envelopeLength, kCFAllocatorNull);\n    CFTypeRef extra = NULL; // mutant MC4\n    if (kvrg_admitted_object_extended && extra) CFRelease(extra);\n")(s)
+		}},
+		{"macro-define-only", "preprocessor directive", replace("#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n", "#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n#define kvrg_x 1\n")},
+		{"continued-macro", "preprocessor directive", replace("#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n", "#pragma clang diagnostic ignored \"-Wdeprecated-declarations\"\n#define kvrg_x \\\n  1\n")},
+		{"include-added", "preprocessor directive", replace("#include <string.h>\n", "#include <string.h>\n#include <unistd.h>\n")},
+		{"pragma-changed", "preprocessor directive", replace("-Wdeprecated-declarations", "-Wall")},
 		{"production-labels-replaced", "the access object is not built with the production descriptor", replace("KVQIntendedAccess(symbols, KVRGAccessDescriptor, KVRGApplicationLabel, &access)", "KVQIntendedAccess(symbols, \"Root ACL public qualification\", KVRGApplicationLabel, &access)")},
 		{"namespace-drift", "namespace literal differs", replace("works.relux.mac-keyvault.root-grants.v1", "works.relux.mac-keyvault.root-grants.v2")},
 	} {
@@ -985,13 +1041,16 @@ func TestRootGrantsStoreSourceBoundary(t *testing.T) {
 		if planted == src {
 			t.Fatalf("%s: the plant was not applied (a skipped plant is not a control)", plant.name)
 		}
-		found := false
+		caught := ""
 		for _, v := range rootGrantsStoreSourceViolations(planted, record) {
-			found = found || strings.Contains(v, plant.want)
+			if caught == "" && strings.Contains(v, plant.want) {
+				caught = v
+			}
 		}
-		if !found {
+		if caught == "" {
 			t.Fatalf("%s: the guard did not report %q; reported %v", plant.name, plant.want, rootGrantsStoreSourceViolations(planted, record))
 		}
+		t.Logf("plant %q caught: %s", plant.name, caught)
 	}
 }
 
