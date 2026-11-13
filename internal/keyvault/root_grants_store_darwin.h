@@ -5,9 +5,11 @@
 
 // Production root-grants item operations (root_grants_store_darwin.c). Go-visible
 // header: no Security.framework types. Every function first resolves the ACL SPI
-// and verifies the ACTUAL running vault before any Keychain query. No function
-// reads an item VALUE, updates or deletes an item. The only mutation is one
-// create-only SecItemAdd of an access object that Go has already admitted.
+// and verifies the ACTUAL running vault before any Keychain query or value read.
+// The only value read is a one-shot second phase on the exact item reference
+// returned by ReadPrepare, after Go admits its actual ACL and public bindings. No
+// function updates or deletes an item. The only mutation is one create-only
+// SecItemAdd of an access object that Go has already admitted.
 
 // Fixed namespace literal; a Go test compares it with RootGrantsNamespace.
 const char *MacKeyVaultRootGrantsNamespace(void);
@@ -40,5 +42,21 @@ void MacKeyVaultRootGrantsAddClose(MacKeyVaultRootGrantsAdd *plan);
 // KVQP1 projection of its actual ACL. The item value is never requested.
 int MacKeyVaultRootGrantsReadback(const char *account, unsigned char **metadata, size_t *metadataLength,
     unsigned char **frame, size_t *frameLength);
+
+// Two-phase read of one exact stored root item. ReadPrepare queries only the
+// exact account's attributes and item reference and returns canonical metadata
+// plus the actual ACL projection; it never requests the item value. It returns
+// 0, 1 for a startup/code refusal, or an OSStatus. ReadValue consumes the plan
+// before its one SecKeychainItemCopyContent call and is only safe after the caller
+// has admitted the returned ACL and checked its metadata/pair pins. The opaque
+// plan retains that same SecKeychainItemRef from selection through value read.
+// ReadValue returns 0, 1 for a startup/code refusal, or an OSStatus. ReadClose is
+// mandatory on every successful prepare path. The returned value is the exact
+// sealed envelope bytes; it is never decrypted here.
+typedef struct MacKeyVaultRootGrantsRead MacKeyVaultRootGrantsRead;
+int MacKeyVaultRootGrantsReadPrepare(const char *account, MacKeyVaultRootGrantsRead **plan,
+    unsigned char **metadata, size_t *metadataLength, unsigned char **frame, size_t *frameLength);
+int MacKeyVaultRootGrantsReadValue(MacKeyVaultRootGrantsRead *plan, unsigned char **value, size_t *valueLength);
+void MacKeyVaultRootGrantsReadClose(MacKeyVaultRootGrantsRead *plan);
 
 #endif

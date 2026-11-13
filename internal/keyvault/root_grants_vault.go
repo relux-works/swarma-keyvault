@@ -15,11 +15,13 @@ import (
 // guard, reads only public metadata and ACLs, and performs one create-only add of
 // an access object that the finite ACL policy admitted before the add. The
 // Keychain/Security.framework side is the private rootGrantsNative seam: Darwin
-// binds it to cgo, tests bind a recording fake. Neither can read an item value.
+// binds it to cgo, tests bind a recording fake. Stored values are only exposed
+// through a two-phase read plan after Go admits that plan's actual ACL and pins.
 
 var (
 	errRootGrantsNativeCode           = errors.New("root grants native: running code is not admitted")
 	errRootGrantsNativeACL            = errors.New("root grants native: access object refused")
+	errRootGrantsNativeItemMissing    = errors.New("root grants native: selected item changed or disappeared")
 	errRootGrantsACLPolicyUnavailable = errors.New("root grants ACL policy: no admitted owner/writer policy")
 	errRootGrantsVaultReleased        = errors.New("root grants vault: guard already released")
 )
@@ -78,9 +80,9 @@ type rootGrantsNativeAdd interface {
 	Close()
 }
 
-// rootGrantsNative is the complete native surface of the root attach adapter.
-// It has no method that reads an item value, updates, deletes or searches beyond
-// the two attribute inventories and one exact metadata/ACL readback.
+// rootGrantsNative is the complete native surface of the root grants adapter.
+// Its one item-value read is a one-shot second phase on a retained item reference;
+// no update, delete or namespace override exists here.
 type rootGrantsNative interface {
 	// Startup resolves the ACL SPI and verifies the actual running vault, before
 	// any Keychain query.
@@ -93,6 +95,18 @@ type rootGrantsNative interface {
 	// Readback returns the stored metadata and the actual ACL frame of exactly one
 	// item. It never returns the item value.
 	Readback(account string) (metadata, aclFrame []byte, err error)
+	// PrepareRead retains the exact item reference selected by account and returns
+	// only its metadata and actual ACL projection. ReadValue is a separate one-shot
+	// operation on that same retained reference, after Go has checked the ACL and
+	// all public pins. Close is mandatory on every path.
+	PrepareRead(account string) (rootGrantsNativeRead, error)
+}
+
+type rootGrantsNativeRead interface {
+	Metadata() []byte
+	ACLFrame() []byte
+	ReadValue() ([]byte, error)
+	Close()
 }
 
 const (
@@ -273,8 +287,9 @@ func (l *rootGrantsProductionLocked) RootGrantsCollision(address RootGrantsAddre
 }
 
 type rootGrantsRootRow struct {
-	account string
-	record  RootGrantsRecord
+	account  string
+	metadata []byte
+	record   RootGrantsRecord
 }
 
 // rootGrantsRootInventory inventories the root namespace by attributes only.
@@ -302,7 +317,7 @@ func rootGrantsRootInventory(native rootGrantsNative) ([]rootGrantsRootRow, erro
 			return nil, recoveryRefuse("invalid_record")
 		}
 		seen[row.account] = true
-		parsed = append(parsed, rootGrantsRootRow{account: row.account, record: r})
+		parsed = append(parsed, rootGrantsRootRow{account: row.account, metadata: bytes.Clone(row.metadata), record: r})
 	}
 	return parsed, nil
 }

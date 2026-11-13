@@ -18,8 +18,9 @@ func TestRootGrantsNativeNamespaceAgrees(t *testing.T) {
 
 // Claim: bound to the real cgo store, every native entry refuses in an executable
 // that is not the signed vault, with the pre-query status, BEFORE any Keychain
-// access: Startup and PrepareAdd report the code refusal, the inventories and the
-// readback fail with errSecAuthFailed, and no add object is created. This is a
+// access: Startup, PrepareAdd and ReadPrepare report the code refusal, the
+// inventories and readback fail with errSecAuthFailed, and no value or add object
+// is selected. This is a
 // native negative control for the startup ordering, run from the
 // unsigned test executable in the confined lane. It does NOT show that the signed
 // vault is admitted or what the OS stores: that needs the attended native lane.
@@ -30,6 +31,9 @@ func TestRootGrantsNativeUnsignedExecutableRefusesBeforeKeychain(t *testing.T) {
 	}
 	if err := native.Startup(); !errors.Is(err, errRootGrantsNativeCode) {
 		t.Fatalf("unsigned executable passed the code check: %v", err)
+	}
+	if read, err := native.PrepareRead("example-root/root-grants@1"); !errors.Is(err, errRootGrantsNativeCode) || read != nil {
+		t.Fatalf("unsigned executable selected a root item: %v", err)
 	}
 	add, err := native.PrepareAdd()
 	if !errors.Is(err, errRootGrantsNativeCode) || add != nil {

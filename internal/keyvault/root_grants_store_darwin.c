@@ -22,6 +22,7 @@ static const char *KVRGApplicationLabel = "keyvault-root-grants:/vault";
 // consumed makes the plan one-shot: the first commit on it, successful or not,
 // uses it up, so a plan can never add twice.
 struct MacKeyVaultRootGrantsAdd { SecAccessRef access; int consumed; };
+struct MacKeyVaultRootGrantsRead { SecKeychainItemRef item; int consumed; };
 
 const char *MacKeyVaultRootGrantsNamespace(void) { return KVRGNamespace; }
 
@@ -268,4 +269,111 @@ int MacKeyVaultRootGrantsReadback(const char *account, unsigned char **metadata,
     if (query) CFRelease(query);
     CFRelease(keychain);
     return (int)status;
+}
+
+// This plan keeps the exact SecKeychainItemRef whose public attributes and ACL
+// were returned to Go. It contains no plaintext or item value until the separate
+// admitted, one-shot ReadValue call.
+int MacKeyVaultRootGrantsReadPrepare(const char *account, MacKeyVaultRootGrantsRead **plan,
+    unsigned char **metadata, size_t *metadataLength, unsigned char **frame, size_t *frameLength) {
+    if (!account || !plan || !metadata || !metadataLength || !frame || !frameLength) return errSecParam;
+    *plan = NULL; *metadata = NULL; *metadataLength = 0; *frame = NULL; *frameLength = 0;
+    if (strlen(account) == 0 || strlen(account) > 256) return errSecParam;
+    KVQSymbols symbols = {0};
+    if (!KVRGStartup(&symbols)) return 1; // closed code-admission result for this read seam
+    SecKeychainRef keychain = NULL;
+    OSStatus status = KVQLogin(&keychain);
+    if (status != errSecSuccess) return (int)status;
+    CFMutableDictionaryRef query = KVRGQuery(keychain, account, 1);
+    CFTypeRef found = NULL;
+    SecAccessRef access = NULL;
+    CFDataRef projection = NULL, text = NULL;
+    SecKeychainItemRef reference = NULL;
+    MacKeyVaultRootGrantsRead *prepared = NULL;
+    status = query ? SecItemCopyMatching(query, &found) : errSecAllocate;
+    if (status == errSecSuccess && (!found || CFGetTypeID(found) != CFArrayGetTypeID() || CFArrayGetCount((CFArrayRef)found) != 1)) status = errSecDecode;
+    CFDictionaryRef row = NULL;
+    if (status == errSecSuccess) {
+        CFTypeRef candidate = CFArrayGetValueAtIndex((CFArrayRef)found, 0);
+        if (!candidate || CFGetTypeID(candidate) != CFDictionaryGetTypeID()) status = errSecDecode;
+        else row = (CFDictionaryRef)candidate;
+    }
+    if (status == errSecSuccess) {
+        CFTypeRef rowAccount = CFDictionaryGetValue(row, kSecAttrAccount);
+        CFTypeRef comment = CFDictionaryGetValue(row, kSecAttrComment);
+        CFTypeRef itemReference = CFDictionaryGetValue(row, kSecValueRef);
+        CFStringRef expected = CFStringCreateWithCString(NULL, account, kCFStringEncodingUTF8);
+        if (!expected || !rowAccount || CFGetTypeID(rowAccount) != CFStringGetTypeID() || !CFEqual(rowAccount, expected) ||
+            !comment || CFGetTypeID(comment) != CFStringGetTypeID() || CFStringGetLength((CFStringRef)comment) < 1 || CFStringGetLength((CFStringRef)comment) > 32768 ||
+            !itemReference || CFGetTypeID(itemReference) != SecKeychainItemGetTypeID()) status = errSecDecode;
+        if (expected) CFRelease(expected);
+        if (status == errSecSuccess) {
+            text = CFStringCreateExternalRepresentation(NULL, (CFStringRef)comment, kCFStringEncodingUTF8, 0);
+            if (!text || CFDataGetLength(text) <= 0 || CFDataGetLength(text) > 32768) status = errSecDecode;
+        }
+        if (status == errSecSuccess) {
+            reference = (SecKeychainItemRef)CFRetain(itemReference);
+            if (!reference) status = errSecAllocate;
+        }
+        if (status == errSecSuccess) status = SecKeychainItemCopyAccess(reference, &access);
+        if (status == errSecSuccess && !access) status = errSecDecode;
+        if (status == errSecSuccess) status = KVQProject(access, symbols, &projection);
+        if (status == errSecSuccess && (!projection || CFDataGetLength(projection) <= 0 || CFDataGetLength(projection) > 1048576)) status = errSecDecode;
+    }
+    if (status == errSecSuccess) {
+        prepared = calloc(1, sizeof(*prepared));
+        if (!prepared) status = errSecAllocate;
+    }
+    if (status == errSecSuccess &&
+        (!KVRGCopy(CFDataGetBytePtr(text), (size_t)CFDataGetLength(text), metadata, metadataLength) ||
+         !KVRGCopy(CFDataGetBytePtr(projection), (size_t)CFDataGetLength(projection), frame, frameLength))) status = errSecAllocate;
+    if (status == errSecSuccess) {
+        prepared->item = reference;
+        reference = NULL;
+        *plan = prepared;
+        prepared = NULL;
+    }
+    if (prepared) free(prepared);
+    if (reference) CFRelease(reference);
+    if (status != errSecSuccess) {
+        if (*metadata) free(*metadata);
+        if (*frame) free(*frame);
+        *metadata = NULL; *metadataLength = 0; *frame = NULL; *frameLength = 0;
+    }
+    if (projection) CFRelease(projection);
+    if (text) CFRelease(text);
+    if (access) CFRelease(access);
+    if (found) CFRelease(found);
+    if (query) CFRelease(query);
+    CFRelease(keychain);
+    return (int)status;
+}
+
+// ReadValue is the only API that asks Security.framework for the stored value.
+// It is one-shot and uses the reference selected before Go admitted its exact ACL,
+// metadata digest and retained pair binding; it cannot search by a second address.
+int MacKeyVaultRootGrantsReadValue(MacKeyVaultRootGrantsRead *plan, unsigned char **value, size_t *valueLength) {
+    if (!plan || !value || !valueLength || !plan->item) return errSecParam;
+    *value = NULL; *valueLength = 0;
+    if (plan->consumed) return errSecParam;
+    plan->consumed = 1;
+    KVQSymbols symbols = {0};
+    if (!KVRGStartup(&symbols)) return 1; // code refusal is distinct from an OSStatus
+    UInt32 length = 0;
+    void *data = NULL;
+    OSStatus status = SecKeychainItemCopyContent(plan->item, NULL, NULL, &length, &data);
+    if (status == errSecSuccess && (!data || length < 1 || length > 65536)) status = errSecDecode;
+    if (status == errSecSuccess && !KVRGCopy(data, (size_t)length, value, valueLength)) status = errSecAllocate;
+    if (data) SecKeychainItemFreeContent(NULL, data);
+    if (status != errSecSuccess && *value) {
+        free(*value);
+        *value = NULL; *valueLength = 0;
+    }
+    return (int)status;
+}
+
+void MacKeyVaultRootGrantsReadClose(MacKeyVaultRootGrantsRead *plan) {
+    if (!plan) return;
+    if (plan->item) CFRelease(plan->item);
+    free(plan);
 }

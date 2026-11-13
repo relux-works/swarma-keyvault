@@ -113,32 +113,44 @@ type rootGrantsStoredFake struct {
 	envelope          []byte
 }
 
-// rootGrantsNativeFake is a recording native seam. It has no operation that
-// could read an item value; its call log is the evidence for ordering claims.
+// rootGrantsNativeFake is a recording native seam. Its one-shot value read is
+// reachable only through the prepared exact-item plan; its call log is the
+// evidence for ordering claims.
 type rootGrantsNativeFake struct {
-	t               *testing.T
-	calls           []string
-	pair            []byte
-	pairAccount     string
-	pairCalls       int
-	pairChangeAt    int
-	pairRowsErr     error
-	rootRows        []byte
-	rootRowsErr     error
-	startupErr      error
-	prepareErr      error
-	prepareNil      bool
-	frame           []byte
-	commitAttempted bool
-	commitStatus    int
-	prepares        int
-	added           int
-	commits         int
-	closes          int
-	stored          *rootGrantsStoredFake
-	readbackMeta    []byte
-	readbackFrame   []byte
-	readbackErr     error
+	t                *testing.T
+	calls            []string
+	pair             []byte
+	pairAccount      string
+	pairCalls        int
+	pairChangeAt     int
+	pairRowsErr      error
+	rootRows         []byte
+	rootRowsErr      error
+	rootRowsCalls    int
+	rootRowsChangeAt int
+	rootRowsChanged  []byte
+	startupErr       error
+	prepareErr       error
+	prepareNil       bool
+	frame            []byte
+	commitAttempted  bool
+	commitStatus     int
+	prepares         int
+	added            int
+	commits          int
+	closes           int
+	stored           *rootGrantsStoredFake
+	readbackMeta     []byte
+	readbackFrame    []byte
+	readbackErr      error
+	readPrepareErr   error
+	readValueErr     error
+	readMetadata     []byte
+	readFrame        []byte
+	readEnvelope     []byte
+	readValues       int
+	readPlanCloses   int
+	readValueHook    func()
 }
 
 func rootGrantsRowBytes(rows ...[2]string) []byte {
@@ -172,8 +184,12 @@ func (f *rootGrantsNativeFake) PairRows() ([]byte, error) {
 
 func (f *rootGrantsNativeFake) RootRows() ([]byte, error) {
 	f.calls = append(f.calls, "root-rows")
+	f.rootRowsCalls++
 	if f.rootRowsErr != nil {
 		return nil, f.rootRowsErr
+	}
+	if f.rootRowsCalls == f.rootRowsChangeAt && f.rootRowsChangeAt != 0 {
+		return bytes.Clone(f.rootRowsChanged), nil
 	}
 	if f.stored != nil {
 		return rootGrantsRowBytes([2]string{f.stored.account, f.stored.metadata}), nil
@@ -229,6 +245,67 @@ func (f *rootGrantsNativeFake) Readback(account string) ([]byte, []byte, error) 
 		frame = f.frame
 	}
 	return bytes.Clone(meta), bytes.Clone(frame), nil
+}
+
+func (f *rootGrantsNativeFake) PrepareRead(account string) (rootGrantsNativeRead, error) {
+	f.calls = append(f.calls, "read-prepare")
+	if f.readPrepareErr != nil {
+		return nil, f.readPrepareErr
+	}
+	if f.stored == nil || f.stored.account != account {
+		return nil, errors.New("no exact root item")
+	}
+	metadata := []byte(f.stored.metadata)
+	if f.readMetadata != nil {
+		metadata = f.readMetadata
+	}
+	frame := f.frame
+	if f.readFrame != nil {
+		frame = f.readFrame
+	}
+	envelope := f.stored.envelope
+	if f.readEnvelope != nil {
+		envelope = f.readEnvelope
+	}
+	return &rootGrantsNativeReadFake{native: f, metadata: bytes.Clone(metadata), frame: bytes.Clone(frame), envelope: bytes.Clone(envelope)}, nil
+}
+
+type rootGrantsNativeReadFake struct {
+	native   *rootGrantsNativeFake
+	metadata []byte
+	frame    []byte
+	envelope []byte
+	consumed bool
+	closed   bool
+}
+
+func (r *rootGrantsNativeReadFake) Metadata() []byte { return bytes.Clone(r.metadata) }
+func (r *rootGrantsNativeReadFake) ACLFrame() []byte { return bytes.Clone(r.frame) }
+func (r *rootGrantsNativeReadFake) ReadValue() ([]byte, error) {
+	r.native.calls = append(r.native.calls, "read-value")
+	r.native.readValues++
+	if r.consumed {
+		return nil, errors.New("read plan already consumed")
+	}
+	r.consumed = true
+	if r.native.readValueHook != nil {
+		r.native.readValueHook()
+	}
+	if r.native.readValueErr != nil {
+		return nil, r.native.readValueErr
+	}
+	return bytes.Clone(r.envelope), nil
+}
+func (r *rootGrantsNativeReadFake) Close() {
+	if r == nil || r.closed {
+		return
+	}
+	r.closed = true
+	r.native.calls = append(r.native.calls, "read-close")
+	r.native.readPlanCloses++
+	clear(r.metadata)
+	clear(r.frame)
+	clear(r.envelope)
 }
 
 type rootGrantsVaultFixture struct {
@@ -301,17 +378,18 @@ var (
 	_ rootGrantsLockedVault = (*rootGrantsProductionLocked)(nil)
 )
 
-// Claim: the native seam and the prepared add can express only the permitted
-// operations: two attribute inventories, one exact metadata/ACL readback, one
-// two-phase create-only add. Neither names a value read, update or delete.
+// Claim: the native seam and its plans express only the permitted operations:
+// inventories, exact metadata/ACL reads, one admitted one-shot item-value read,
+// and one two-phase create-only add. No update or delete exists.
 // Limit: an interface list; the C source guard below covers the cgo side.
 func TestRootGrantsVaultSeamSurface(t *testing.T) {
 	for _, tc := range []struct {
 		typ  reflect.Type
 		want []string
 	}{
-		{reflect.TypeOf((*rootGrantsNative)(nil)).Elem(), []string{"PairRows", "PrepareAdd", "Readback", "RootRows", "Startup"}},
+		{reflect.TypeOf((*rootGrantsNative)(nil)).Elem(), []string{"PairRows", "PrepareAdd", "PrepareRead", "Readback", "RootRows", "Startup"}},
 		{reflect.TypeOf((*rootGrantsNativeAdd)(nil)).Elem(), []string{"ACLFrame", "Close", "Commit"}},
+		{reflect.TypeOf((*rootGrantsNativeRead)(nil)).Elem(), []string{"ACLFrame", "Close", "Metadata", "ReadValue"}},
 	} {
 		if tc.typ.NumMethod() != len(tc.want) {
 			t.Fatalf("%s widened", tc.typ.Name())
@@ -831,15 +909,17 @@ var (
 	rootGrantsStoreCalls = rootGrantsSet(
 		// Security and CoreFoundation
 		"SecItemAdd", "SecItemCopyMatching", "SecKeychainItemCopyAccess", "SecKeychainItemGetTypeID",
+		"SecKeychainItemCopyContent", "SecKeychainItemFreeContent",
 		"CFArrayCreate", "CFArrayGetCount", "CFArrayGetTypeID", "CFArrayGetValueAtIndex", "CFDataAppendBytes", "CFDataCreateMutable",
 		"CFDataCreateWithBytesNoCopy", "CFDataGetBytePtr", "CFDataGetLength", "CFDictionaryCreateMutable", "CFDictionaryGetTypeID",
-		"CFDictionaryGetValue", "CFDictionarySetValue", "CFEqual", "CFGetTypeID", "CFRelease", "CFStringCreateExternalRepresentation",
+		"CFDictionaryGetValue", "CFDictionarySetValue", "CFEqual", "CFGetTypeID", "CFRetain", "CFRelease", "CFStringCreateExternalRepresentation",
 		"CFStringCreateWithCString", "CFStringGetLength", "CFStringGetTypeID",
 		// the shared ACL unit, the existing attribute-only pair list and this file's own functions
 		"KVQIntendedAccess", "KVQLogin", "KVQProject", "KVQResolve", "KVQSelf", "MacKeyVaultNostrList",
 		"KVRGCopy", "KVRGQuery", "KVRGRows", "KVRGStartup",
 		"MacKeyVaultRootGrantsAddClose", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsList",
 		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsPairList", "MacKeyVaultRootGrantsReadback", "MacKeyVaultRootGrantsStartup",
+		"MacKeyVaultRootGrantsReadPrepare", "MacKeyVaultRootGrantsReadValue", "MacKeyVaultRootGrantsReadClose",
 		// libc and C keywords that look like calls
 		"calloc", "free", "malloc", "memcpy", "strlen", "for", "if", "return", "sizeof", "switch", "while")
 	rootGrantsStoreConstants = rootGrantsSet(
@@ -848,13 +928,14 @@ var (
 		"kSecMatchLimit", "kSecMatchLimitAll", "kSecMatchSearchList", "kSecReturnAttributes", "kSecReturnRef", "kSecUseKeychain", "kSecValueData", "kSecValueRef")
 	rootGrantsStoreTypes = rootGrantsSet("CFArrayRef", "CFDataRef", "CFDictionaryRef", "CFIndex", "CFMutableDataRef", "CFMutableDictionaryRef", "CFStringRef", "CFTypeRef",
 		"SecAccessRef", "SecKeychainItemRef", "SecKeychainRef")
-	rootGrantsStoreNames = rootGrantsSet("KVQSymbols", "KVRGAccessDescriptor", "KVRGApplicationLabel", "KVRGNamespace", "MacKeyVaultRootGrantsAdd")
+	rootGrantsStoreNames = rootGrantsSet("KVQSymbols", "KVRGAccessDescriptor", "KVRGApplicationLabel", "KVRGNamespace", "MacKeyVaultRootGrantsAdd", "MacKeyVaultRootGrantsRead")
 	// Entries that touch the Keychain: each must verify the running vault before any
 	// call other than argument validation.
 	rootGrantsStoreGatedEntries = []string{"MacKeyVaultRootGrantsStartup", "MacKeyVaultRootGrantsPairList", "MacKeyVaultRootGrantsList",
-		"MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsReadback"}
+		"MacKeyVaultRootGrantsAddPrepare", "MacKeyVaultRootGrantsAddCommit", "MacKeyVaultRootGrantsReadback",
+		"MacKeyVaultRootGrantsReadPrepare", "MacKeyVaultRootGrantsReadValue"}
 	rootGrantsStoreAllFunctions = append(append([]string{}, rootGrantsStoreGatedEntries...),
-		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsAddClose", "KVRGStartup", "KVRGCopy", "KVRGRows", "KVRGQuery")
+		"MacKeyVaultRootGrantsNamespace", "MacKeyVaultRootGrantsAddClose", "MacKeyVaultRootGrantsReadClose", "KVRGStartup", "KVRGCopy", "KVRGRows", "KVRGQuery")
 	// The preprocessor lines of the file, exactly: a macro can hide any call, literal
 	// or access-object use behind an innocent identifier, so no other directive exists.
 	rootGrantsStoreDirectives = []string{
@@ -916,7 +997,8 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 	for _, c := range []struct {
 		token string
 		want  int
-	}{{"SecItemAdd(", 1}, {"SecItemCopyMatching(", 2}, {"SecKeychainItemCopyAccess(", 1}, {"kSecAttrAccess", 1}, {"kSecValueData", 1},
+	}{{"SecItemAdd(", 1}, {"SecItemCopyMatching(", 3}, {"SecKeychainItemCopyAccess(", 2}, {"SecKeychainItemCopyContent(", 1},
+		{"SecKeychainItemFreeContent(", 1}, {"CFRetain(", 1}, {"kSecAttrAccess", 1}, {"kSecValueData", 1},
 		{"kSecReturnAttributes", 1}, {"kSecReturnRef", 1}, {"KVQIntendedAccess(", 1}, {"MacKeyVaultNostrList(", 1}} {
 		if got := strings.Count(code, c.token); got != c.want {
 			add("%s occurs %d times, want %d", c.token, got, c.want)
@@ -941,8 +1023,8 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 			add("%s references the access object %d times, want %d", name, got, want)
 		}
 	}
-	if strings.Count(code, "->access") != 5 || strings.Count(code, "->consumed") != 2 {
-		add("the access object or the one-shot flag is referenced outside its owners")
+	if strings.Count(code, "->access") != 5 || strings.Count(code, "->consumed") != 4 {
+		add("the access object or one-shot flags are referenced outside their owners")
 	}
 	commit := bodies["MacKeyVaultRootGrantsAddCommit"]
 	if strings.Count(commit, "!plan->access") != 1 || strings.Count(commit, "kSecAttrAccess, plan->access);") != 1 {
@@ -959,6 +1041,25 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 	if !regexp.MustCompile(`\*attempted = 1;\s*status = SecItemAdd\(query, NULL\);`).MatchString(commit) {
 		add("dispatch flag is not immediately before the single add")
 	}
+	readPrepare, readValue, readClose := bodies["MacKeyVaultRootGrantsReadPrepare"], bodies["MacKeyVaultRootGrantsReadValue"], bodies["MacKeyVaultRootGrantsReadClose"]
+	if strings.Contains(readPrepare, "SecKeychainItemCopyContent(") ||
+		strings.Count(code, "SecKeychainItemCopyContent(") != 1 || !strings.Contains(readValue, "SecKeychainItemCopyContent(plan->item,") {
+		add("the item value read is not confined to the retained post-admission reference")
+	}
+	if !strings.Contains(readPrepare, "KVRGQuery(keychain, account, 1)") ||
+		!strings.Contains(readPrepare, "CFEqual(rowAccount, expected)") ||
+		!strings.Contains(readPrepare, "reference = (SecKeychainItemRef)CFRetain(itemReference)") ||
+		!strings.Contains(readPrepare, "prepared->item = reference;") ||
+		!strings.Contains(readClose, "CFRelease(plan->item)") {
+		add("the read plan is not bound to and released with its exact selected item reference")
+	}
+	readCheck, readConsume, readGate, readContent := strings.Index(readValue, "if (plan->consumed) return errSecParam;"),
+		strings.Index(readValue, "plan->consumed = 1;"), strings.Index(readValue, "KVRGStartup("),
+		strings.Index(readValue, "SecKeychainItemCopyContent(plan->item,")
+	if readCheck < 0 || readConsume < 0 || readGate < 0 || readContent < 0 ||
+		!(readCheck < readConsume && readConsume < readGate && readGate < readContent) {
+		add("the value read is not one-shot and gated before reading the retained item")
+	}
 	// The startup gate: its body is exactly the SPI resolve and the running-vault
 	// check (no other role, no extra branch), it is used exactly once per entry as
 	// the first non-validation statement with its result tested, and nowhere else.
@@ -966,14 +1067,15 @@ func rootGrantsStoreSourceViolations(src, recordSrc string) []string {
 	if norm(bodies["KVRGStartup"]) != "{ return KVQResolve(symbols) && KVQSelf(1) == errSecSuccess; }" {
 		add("the startup gate is not exactly the SPI resolve and the running-vault check")
 	}
-	if got := strings.Count(code, "KVRGStartup("); got != 7 {
-		add("KVRGStartup( occurs %d times, want 7 (definition, startup entry, one gate per entry)", got)
+	if got := strings.Count(code, "KVRGStartup("); got != 9 {
+		add("KVRGStartup( occurs %d times, want 9 (definition, startup entry, one gate per entry)", got)
 	}
 	if norm(bodies["MacKeyVaultRootGrantsStartup"]) != "{ KVQSymbols symbols = {0}; return KVRGStartup(&symbols) ? 0 : 1; }" {
 		add("MacKeyVaultRootGrantsStartup is not exactly the gate result")
 	}
 	for entry, ret := range map[string]string{"MacKeyVaultRootGrantsPairList": "errSecAuthFailed", "MacKeyVaultRootGrantsList": "errSecAuthFailed",
-		"MacKeyVaultRootGrantsAddPrepare": "1", "MacKeyVaultRootGrantsAddCommit": "errSecAuthFailed", "MacKeyVaultRootGrantsReadback": "errSecAuthFailed"} {
+		"MacKeyVaultRootGrantsAddPrepare": "1", "MacKeyVaultRootGrantsAddCommit": "errSecAuthFailed", "MacKeyVaultRootGrantsReadback": "errSecAuthFailed",
+		"MacKeyVaultRootGrantsReadPrepare": "1", "MacKeyVaultRootGrantsReadValue": "1"} {
 		n := norm(bodies[entry])
 		if strings.Count(n, "KVRGStartup(") != 1 || !strings.Contains(n, "KVQSymbols symbols = {0}; if (!KVRGStartup(&symbols)) return "+ret+";") {
 			add("%s does not use the exact startup gate statement whose result is tested", entry)
@@ -1034,12 +1136,43 @@ func TestRootGrantsStoreSourceBoundary(t *testing.T) {
 		{"value-read-constant", "constant or query key kSecReturnData is not in the allowlist", func(s string) string {
 			return s + "\n/* planted */ void f(void) { CFDictionarySetValue(q, kSecReturnData, kCFBooleanTrue); }"
 		}},
+		{"value-read-other-item-reference", "the item value read is not confined", replace(
+			"SecKeychainItemCopyContent(plan->item,", "SecKeychainItemCopyContent(otherItem,")},
+		{"value-read-before-admission", "the item value read is not confined", replace(
+			"        if (status == errSecSuccess) status = SecKeychainItemCopyAccess(reference, &access);",
+			"        if (status == errSecSuccess) status = SecKeychainItemCopyContent(reference, NULL, NULL, NULL, NULL); /* planted */\n        if (status == errSecSuccess) status = SecKeychainItemCopyAccess(reference, &access);")},
+		{"value-read-plan-not-one-shot", "the value read is not one-shot", func(s string) string {
+			name := "int MacKeyVaultRootGrantsReadValue("
+			at := strings.Index(s, name)
+			if at < 0 {
+				return s
+			}
+			return s[:at] + strings.Replace(s[at:], "if (plan->consumed) return errSecParam;", "if (!plan->item) return errSecParam;", 1)
+		}},
+		{"value-read-account-not-exact", "the read plan is not bound to and released with its exact selected item reference", func(s string) string {
+			name := "int MacKeyVaultRootGrantsReadPrepare("
+			at := strings.Index(s, name)
+			if at < 0 {
+				return s
+			}
+			return s[:at] + strings.Replace(s[at:], "KVRGQuery(keychain, account, 1)", "KVRGQuery(keychain, NULL, 1)", 1)
+		}},
+		{"value-read-row-account-not-exact", "the read plan is not bound to and released with its exact selected item reference", func(s string) string {
+			name := "int MacKeyVaultRootGrantsReadPrepare("
+			at := strings.Index(s, name)
+			if at < 0 {
+				return s
+			}
+			return s[:at] + strings.Replace(s[at:], "CFEqual(rowAccount, expected)", "CFEqual(rowAccount, alternate)", 1)
+		}},
+		{"value-read-reference-not-released", "the read plan is not bound to and released with its exact selected item reference", replace(
+			"CFRelease(plan->item);", "CFRelease(otherItem);")},
 		{"update", "call SecItemUpdate is not in the allowlist", func(s string) string { return s + "\nvoid f(void) { SecItemUpdate(q, u); }" }},
 		{"delete", "call SecKeychainItemDelete is not in the allowlist", func(s string) string { return s + "\nvoid f(void) { SecKeychainItemDelete(item); }" }},
 		{"second-add", "SecItemAdd( occurs 2 times, want 1", func(s string) string { return s + "\nvoid f(void) { SecItemAdd(q, NULL); }" }},
 		{"flag-moved", "dispatch flag is not immediately before the single add", replace("*attempted = 1;\n        status = SecItemAdd(", "status = SecItemAdd(")},
 		{"other-access-object", "references the access object 1 times, want 2", replace("kSecAttrAccess, plan->access", "kSecAttrAccess, other")},
-		{"access-escapes-to-a-helper", "referenced outside its owners", replace("    CFArrayRef search = CFArrayCreate(", "    SecAccessRef leaked = plan->access; /* planted */\n    CFArrayRef search = CFArrayCreate(")},
+		{"access-escapes-to-a-helper", "the access object or one-shot flags are referenced outside their owners", replace("    CFArrayRef search = CFArrayCreate(", "    SecAccessRef leaked = plan->access; /* planted */\n    CFArrayRef search = CFArrayCreate(")},
 		{"consumed-check-removed", "the commit is not one-shot", replace("    if (plan->consumed) return errSecParam; // one-shot: a second commit never reaches the add\n", "")},
 		{"consume-removed", "the commit is not one-shot", replace("    plan->consumed = 1;\n", "")},
 		{"startup-removed", "MacKeyVaultRootGrantsAddPrepare does not use the exact startup gate statement", replace("    if (!KVRGStartup(&symbols)) return 1;\n", "")},

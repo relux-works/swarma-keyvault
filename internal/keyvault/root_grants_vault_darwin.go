@@ -124,3 +124,95 @@ func (rootGrantsDarwinNative) Readback(account string) ([]byte, []byte, error) {
 	}
 	return C.GoBytes(unsafe.Pointer(metadata), C.int(metadataLength)), C.GoBytes(unsafe.Pointer(frame), C.int(frameLength)), nil
 }
+
+type rootGrantsDarwinRead struct {
+	plan     *C.MacKeyVaultRootGrantsRead
+	metadata []byte
+	frame    []byte
+	consumed bool
+}
+
+func (rootGrantsDarwinNative) PrepareRead(account string) (rootGrantsNativeRead, error) {
+	cAccount := C.CString(account)
+	defer C.free(unsafe.Pointer(cAccount))
+	var plan *C.MacKeyVaultRootGrantsRead
+	var metadata, frame *C.uchar
+	var metadataLength, frameLength C.size_t
+	status := int(C.MacKeyVaultRootGrantsReadPrepare(cAccount, &plan, &metadata, &metadataLength, &frame, &frameLength))
+	for _, p := range []*C.uchar{metadata, frame} {
+		if p != nil {
+			defer C.free(unsafe.Pointer(p))
+		}
+	}
+	if status != 0 || plan == nil || metadata == nil || frame == nil || metadataLength < 1 || metadataLength > 32768 || frameLength < 1 || frameLength > 1048576 {
+		if plan != nil {
+			C.MacKeyVaultRootGrantsReadClose(plan)
+		}
+		if status == 1 {
+			return nil, errRootGrantsNativeCode
+		}
+		if status == -25300 {
+			return nil, errRootGrantsNativeItemMissing
+		}
+		if status == 0 {
+			return nil, recoveryRefuse("invalid_record")
+		}
+		return nil, &StatusError{Op: "root grants read prepare", Status: status}
+	}
+	return &rootGrantsDarwinRead{plan: plan,
+		metadata: C.GoBytes(unsafe.Pointer(metadata), C.int(metadataLength)),
+		frame:    C.GoBytes(unsafe.Pointer(frame), C.int(frameLength))}, nil
+}
+
+func (r *rootGrantsDarwinRead) Metadata() []byte {
+	if r == nil {
+		return nil
+	}
+	return append([]byte(nil), r.metadata...)
+}
+
+func (r *rootGrantsDarwinRead) ACLFrame() []byte {
+	if r == nil {
+		return nil
+	}
+	return append([]byte(nil), r.frame...)
+}
+
+func (r *rootGrantsDarwinRead) ReadValue() ([]byte, error) {
+	if r == nil || r.plan == nil || r.consumed {
+		return nil, recoveryRefuse("operation_unavailable")
+	}
+	r.consumed = true
+	var value *C.uchar
+	var length C.size_t
+	status := int(C.MacKeyVaultRootGrantsReadValue(r.plan, &value, &length))
+	if value != nil {
+		defer C.free(unsafe.Pointer(value))
+	}
+	if status != 0 {
+		if status == 1 {
+			return nil, errRootGrantsNativeCode
+		}
+		if status == -25300 {
+			return nil, errRootGrantsNativeItemMissing
+		}
+		return nil, &StatusError{Op: "root grants read value", Status: status}
+	}
+	if value == nil || length < 1 || length > recoveryMaxCiphertext {
+		return nil, recoveryRefuse("invalid_envelope")
+	}
+	return C.GoBytes(unsafe.Pointer(value), C.int(length)), nil
+}
+
+func (r *rootGrantsDarwinRead) Close() {
+	if r == nil {
+		return
+	}
+	clear(r.metadata)
+	clear(r.frame)
+	r.metadata, r.frame = nil, nil
+	if r.plan != nil {
+		C.MacKeyVaultRootGrantsReadClose(r.plan)
+		r.plan = nil
+	}
+}

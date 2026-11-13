@@ -121,14 +121,13 @@ func TestRootGrantsPolicyFallsBackToTheRefuseAllStubWhenTheAllowlistCannotBeBuil
 	}
 }
 
-// Claim (source guard): the policy has exactly two call sites in non-test code,
-// each asking its own form: AdmitIntended in prepareAdmittedAdd (the object before
-// the add, also used by the check made before the helper starts) and AdmitStored in
-// RootGrantsPublicMetadata (the stored item's ACL). The refuse-all stub is named
-// only in its own declarations and in the constructor fallback. A new or swapped
-// call site, or a path that builds the stub into production, fails here. Limit: it
-// reads the syntax of this package; it does not follow calls across packages.
-func TestRootGrantsPolicyHasExactlyTwoCallSitesEachOnItsOwnForm(t *testing.T) {
+// Claim (source guard): the policy has exactly three call sites in non-test code,
+// each asking its own form: AdmitIntended in prepareAdmittedAdd, and AdmitStored
+// in RootGrantsPublicMetadata and readRootGrantsForSigning. The refuse-all stub is
+// named only in its own declarations and in the constructor fallback. A new or
+// swapped call site, or a path that builds the stub into production, fails here.
+// Limit: it reads the syntax of this package; it does not follow calls across packages.
+func TestRootGrantsPolicyCallSitesUseTheirOwnForm(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no sources: %v", err)
@@ -176,7 +175,7 @@ func TestRootGrantsPolicyHasExactlyTwoCallSitesEachOnItsOwnForm(t *testing.T) {
 		}
 		return sites[i].Entry < sites[j].Entry
 	})
-	want := []site{{"RootGrantsPublicMetadata", "AdmitStored"}, {"prepareAdmittedAdd", "AdmitIntended"}}
+	want := []site{{"RootGrantsPublicMetadata", "AdmitStored"}, {"prepareAdmittedAdd", "AdmitIntended"}, {"readRootGrantsForSigning", "AdmitStored"}}
 	if !reflect.DeepEqual(sites, want) {
 		t.Fatalf("policy call sites %v, want %v", sites, want)
 	}
