@@ -52,6 +52,10 @@ const (
 	rootGrantsAddACLRefused
 	rootGrantsAddCodeRefused
 	rootGrantsAddWrappingRefused
+	// Appended, existing values unchanged: a malformed/misaddressed packet reaching
+	// the storage boundary, and a native/keychain failure before the add dispatch.
+	rootGrantsAddInvalidItem
+	rootGrantsAddUnavailable
 )
 
 type rootGrantsAddNotApplied struct{ reason rootGrantsAddRefusal }
@@ -72,6 +76,10 @@ func rootGrantsAddRefusalCode(err error) string {
 		return "code_not_admitted"
 	case rootGrantsAddWrappingRefused:
 		return "wrapping_policy_refused"
+	case rootGrantsAddInvalidItem:
+		return "invalid_envelope"
+	case rootGrantsAddUnavailable:
+		return "operation_unavailable"
 	default:
 		return "" // unknown guarantee/reason is not accepted
 	}
