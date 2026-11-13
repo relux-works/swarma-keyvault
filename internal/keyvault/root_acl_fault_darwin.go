@@ -10,6 +10,7 @@ int KVQFaultRunBefore(int *stage, int *status, int *completed);
 int KVQFaultProbeAuthorizations(int *out, char *failName, int failNameSize);
 int KVQFaultProbeOwnerACL(int *out);
 int KVQFaultRunProjectNonACL(int *stage, int *status, int *completed);
+int KVQFaultRunProjectOp(int op, int opStatus, int armAfter, int *stage, int *status, int *completed);
 int KVQFaultProjectTwice(int fresh, unsigned char *a, unsigned char *b, int capacity, int *la, int *lb, int *stage, int *status);
 int KVQFaultRunLogin(int armStage, int armStatus, int *stage, int *status, int *completed);
 int KVQFaultRunSelf(int armStage, int armStatus, int *stage, int *status);
@@ -157,4 +158,25 @@ func projectTwice(fresh bool) (first, second []byte, run faultRun) {
 		second = b[:lb]
 	}
 	return first, second, run
+}
+
+// The operation points of runProjectOpFault. They are written out here, not read from
+// the C enum, so a shifted C value makes the operation-keyed tests fail instead of
+// following it.
+const (
+	opProjectACLList  = 1
+	opProjectAuthText = 2
+)
+
+// runProjectOpFault projects a plain in-memory access object as BEFORE and then as
+// AFTER with one named operation broken (not one stage id armed). With after, only the
+// second projection is broken. opStatus is the status the broken ACL-list read returns.
+func runProjectOpFault(op, opStatus int, after bool) faultRun {
+	var stage, osStatus, completed C.int
+	flag := C.int(0)
+	if after {
+		flag = 1
+	}
+	result := C.KVQFaultRunProjectOp(C.int(op), C.int(opStatus), flag, &stage, &osStatus, &completed)
+	return faultRun{Result: int(result), Stage: int(stage), OSStatus: int(osStatus), Completed: completed != 0}
 }

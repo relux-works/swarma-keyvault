@@ -245,6 +245,50 @@ func TestProjectionIsDeterministic(t *testing.T) {
 	t.Logf("two builds: %d and %d bytes, byte-identical=%v, same ACLs in the same order=%v, first differing byte=%d", len(one), len(two), bytes.Equal(one, two), inOrder, firstDifference)
 }
 
+// Claim (operation-keyed control): when the projection's read of the ACL list fails, the
+// stage id it records is the OWNER/ACL id of the right projection: 30 for the BEFORE
+// projection and 50 for the AFTER one, with exactly the status that read returned and
+// the call not completed. The fault breaks the operation, not a stage id, and the
+// expected ids are literals written here, so a wrong label at that call (a stage id
+// shifted by one) fails this test; the stage-keyed arming above cannot see that because
+// the label under test is also its arming key. Positive control: the same run with the
+// operation unbroken completes.
+func TestListReadFaultNamesTheOwnerStageOfTheRightProjection(t *testing.T) {
+	if ok := runProjectOpFault(0, 0, false); !ok.Completed || ok.Stage != 0 {
+		t.Fatalf("the unbroken run must complete: %+v", ok)
+	}
+	const opStatus = -61080
+	for _, c := range []struct {
+		after bool
+		want  int
+	}{{false, 30}, {true, 50}} {
+		got := runProjectOpFault(opProjectACLList, opStatus, c.after)
+		assertReportable(t, "list read", got)
+		if got.Stage != c.want || got.OSStatus != opStatus || got.Completed || got.Result != opStatus {
+			t.Fatalf("a failed ACL-list read (after=%v) must record stage %d with status %d: %+v", c.after, c.want, opStatus, got)
+		}
+	}
+}
+
+// Claim (operation-keyed control): when writing an authorization name into the frame
+// fails, the stage id recorded is the authorizations id of the right projection: 31
+// (BEFORE) or 51 (AFTER), with errSecDecode, and the call does not complete. The fault
+// makes the projection's text writer reject the names; no group-end id is armed, and the
+// expected ids are literals written here, so a wrong label at the end of the group (a
+// later group named instead) fails this test.
+func TestAuthorizationWriteFaultNamesTheAuthorizationsStageOfTheRightProjection(t *testing.T) {
+	for _, c := range []struct {
+		after bool
+		want  int
+	}{{false, 31}, {true, 51}} {
+		got := runProjectOpFault(opProjectAuthText, 0, c.after)
+		assertReportable(t, "authorization write", got)
+		if got.Stage != c.want || got.OSStatus != errSecDecode || got.Completed || got.Result != errSecDecode {
+			t.Fatalf("a failed authorization write (after=%v) must record stage %d with errSecDecode: %+v", c.after, c.want, got)
+		}
+	}
+}
+
 // Claim: the probe describes the inputs of the authorizations group on this system.
 // It logs how many ACLs and names there are and whether the UTF-8 conversion check or
 // the projection's own text writer rejects any name (with the first rejected name and

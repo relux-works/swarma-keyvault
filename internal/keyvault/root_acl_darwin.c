@@ -67,11 +67,22 @@ static _Thread_local int kvqMaskProjection;
 // A test may make the projection see a string where it expects an ACL object, the
 // shape SecAccessCopyOwnerAndACL returns, to prove that such an element is refused.
 static _Thread_local int kvqFaultNonACL;
+// Operation-keyed faults. Unlike the stage-keyed fault above, they break one named
+// operation and say nothing about which stage id that operation records, so a test can
+// compare the recorded id with a value written in the test, independent of the C label.
+enum { KVQ_OP_NONE = 0, KVQ_OP_PROJECT_ACL_LIST = 1, KVQ_OP_PROJECT_AUTH_TEXT = 2 };
+static _Thread_local int kvqOpFault;
+static _Thread_local OSStatus kvqOpFaultStatus;
+static OSStatus KVQOpStatus(int op, OSStatus real) { return kvqOpFault == op ? kvqOpFaultStatus : real; }
+#define KVQ_OP(op, expr) KVQOpStatus((op), (expr))
+#define KVQ_OP_OK(op, expr) (kvqOpFault == (op) ? 0 : (expr))
 #define KVQ_NATURAL_MASKED() (kvqMaskProjection)
 #define KVQ_FAULT(stage, var) do { if (kvqFaultStage == (stage)) (var) = kvqFaultStatus; } while (0)
 #else
 #define KVQ_FAULT(stage, var) do { } while (0)
 #define KVQ_NATURAL_MASKED() 0
+#define KVQ_OP(op, expr) (expr)
+#define KVQ_OP_OK(op, expr) (expr)
 #endif
 
 // Runs one step while nothing has failed and records its failure at stage. An armed
@@ -320,7 +331,7 @@ OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out) {
     OSStatus status = errSecSuccess;
     KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, SecAccessCopyOwnerAndACL(access, &uid, &gid, &owner, &ownerList));
     if (ownerList) CFRelease(ownerList);
-    KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, SecAccessCopyACLList(access, &list));
+    KVQ_STEP(KVQ_STAGE_PROJECT_OWNER_ACL, status, KVQ_OP(KVQ_OP_PROJECT_ACL_LIST, SecAccessCopyACLList(access, &list)));
     CFMutableDataRef frame = CFDataCreateMutable(NULL, 0);
     KVQ_FAIL_IF(KVQ_STAGE_PROJECT_OWNER_ACL, status,
         !frame || !list || CFGetTypeID(list) != CFArrayGetTypeID() || CFArrayGetCount(list) > 64 ||
@@ -349,7 +360,7 @@ OSStatus KVQProject(SecAccessRef access, KVQSymbols symbols, CFDataRef *out) {
             if (!name || CFGetTypeID(name) != CFStringGetTypeID()) namesReadable = 0;
         }
         int ok = KVQU32(frame, namesReadable ? 0 : 1) && KVQU32(frame, namesReadable ? (uint32_t)CFArrayGetCount(names) : 0);
-        if (namesReadable) for (CFIndex j = 0; ok && j < CFArrayGetCount(names); j++) ok = KVQText(frame, CFArrayGetValueAtIndex(names, j), 1024);
+        if (namesReadable) for (CFIndex j = 0; ok && j < CFArrayGetCount(names); j++) ok = KVQ_OP_OK(KVQ_OP_PROJECT_AUTH_TEXT, KVQText(frame, CFArrayGetValueAtIndex(names, j), 1024));
         if (names) CFRelease(names);
         ok = ok && KVQU32(frame, numberCount);
         for (uint32 j = 0; ok && j < numberCount; j++) ok = KVQU32(frame, (uint32_t)numbers[j]);
@@ -846,6 +857,46 @@ int KVQFaultProjectTwice(int fresh, unsigned char *a, unsigned char *b, int capa
     if (y) CFRelease(y);
     OSStatus recorded = errSecSuccess; int recordedStage = 0;
     if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    return (int)result;
+}
+
+// Projects a plain in-memory access object twice, as BEFORE and then as AFTER, with one
+// OPERATION broken instead of one stage armed: op 1 makes the projection's read of the
+// ACL list return opStatus, op 2 makes its text writer reject every authorization name.
+// With armAfter the operation is broken for the second projection only. The recorded
+// failure is retagged exactly as the create call does. No stage id is armed, so the id
+// that comes back is whatever the code labels that operation with.
+int KVQFaultRunProjectOp(int op, int opStatus, int armAfter, int *stage, int *status, int *completed) {
+    KVQDiagReset();
+    kvqFaultStage = 0;
+    kvqFaultStatus = errSecSuccess;
+    kvqOpFault = 0;
+    kvqOpFaultStatus = (OSStatus)opStatus;
+    *stage = 0; *status = 0; *completed = 0;
+    KVQSymbols symbols = {0};
+    OSStatus result = KVQResolve(&symbols) ? errSecSuccess : errSecUnimplemented;
+    SecAccessRef access = NULL;
+    CFDataRef frame = NULL;
+    if (result == errSecSuccess) result = SecAccessCreate(CFSTR("Root ACL fault test"), NULL, &access);
+    if (result == errSecSuccess && !access) result = errSecDecode;
+    if (!armAfter) kvqOpFault = op;
+    if (result == errSecSuccess) {
+        result = KVQProject(access, symbols, &frame);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_BEFORE_OWNER_ACL);
+    }
+    if (frame) { CFRelease(frame); frame = NULL; }
+    kvqOpFault = 0;
+    if (result == errSecSuccess && armAfter) kvqOpFault = op;
+    if (result == errSecSuccess) {
+        result = KVQProject(access, symbols, &frame);
+        if (result != errSecSuccess) KVQDiagRetagProjection(KVQ_STAGE_AFTER_OWNER_ACL);
+    }
+    if (frame) CFRelease(frame);
+    if (access) CFRelease(access);
+    kvqOpFault = 0;
+    OSStatus recorded = errSecSuccess; int recordedStage = 0;
+    if (KVQDiagTake(&recordedStage, &recorded)) { *stage = recordedStage; *status = (int)recorded; }
+    *completed = result == errSecSuccess;
     return (int)result;
 }
 
