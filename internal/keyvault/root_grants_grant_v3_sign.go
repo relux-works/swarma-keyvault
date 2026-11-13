@@ -15,11 +15,12 @@ import (
 // policy/record, qualify fresh presence and unwrap before this private call.
 // There is no production constructor/CLI/ABI route until those gates dock.
 type rootGrantsGrantV3Attempt struct {
-	mu       sync.Mutex
-	ctx      context.Context
-	cancel   context.CancelFunc
-	plan     *RootGrantsGrantV3Plan
-	consumed bool
+	mu            sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	plan          *RootGrantsGrantV3Plan
+	loadAuthority func(RootGrantsAddress) ([]byte, error)
+	consumed      bool
 }
 
 // Closed effect information is separate from public-math parser errors. Once
@@ -78,6 +79,13 @@ func (a *rootGrantsGrantV3Attempt) sign(ownedPlaintext []byte) ([]byte, error) {
 
 // Private entropy seam, never a runtime switch or reusable signer callback.
 func (a *rootGrantsGrantV3Attempt) signWithRandom(ownedPlaintext []byte, random io.Reader) ([]byte, error) {
+	return a.signWithTestHooks(ownedPlaintext, random, nil, nil)
+}
+
+// signWithTestHooks keeps scheduling and math-boundary instrumentation package
+// private. Production always calls this with nil hooks.
+func (a *rootGrantsGrantV3Attempt) signWithTestHooks(ownedPlaintext []byte, random io.Reader,
+	afterFinalRevalidation, beforePrivateMath func()) ([]byte, error) {
 	defer clear(ownedPlaintext)
 	if a == nil {
 		return nil, rootGrantsGrantV3Failed("operation_unavailable", "sign", false)
@@ -122,8 +130,33 @@ func (a *rootGrantsGrantV3Attempt) signWithRandom(ownedPlaintext []byte, random 
 		return nil, rootGrantsGrantV3Failed("review_changed", "sign", false)
 	}
 	current, err := PrepareRootGrantsGrantV3(a.plan.grant, a.plan.contract, a.plan.authority, a.plan.record, authority.OwnerPrincipal, time.Now())
-	if err != nil || !bytes.Equal(current.grant, a.plan.grant) {
+	if err != nil || !bytes.Equal(current.grant, a.plan.grant) || current.message != a.plan.message {
 		return nil, rootGrantsGrantV3Failed("review_changed", "sign", false)
+	}
+	// Cancellation/expiry can race the final public validation itself. Check the
+	// original attempt context at its return before any further private-use step.
+	if afterFinalRevalidation != nil {
+		afterFinalRevalidation()
+	}
+	if err := a.check(false); err != nil {
+		return nil, err
+	}
+	if a.loadAuthority != nil {
+		policyErr := rootGrantsGrantV3RequireInstalledAuthority(a.plan, a.loadAuthority)
+		if err := a.check(false); err != nil {
+			return nil, err
+		}
+		if policyErr != nil {
+			return nil, policyErr
+		}
+	}
+	// The second context gate follows the helper-local policy reload directly
+	// before BIP-340 math. Any refusal after math may begin remains unknown.
+	if err := a.check(false); err != nil {
+		return nil, err
+	}
+	if beforePrivateMath != nil {
+		beforePrivateMath()
 	}
 	signature, err := signNostrWithAux(plain.buffer[36:], a.plan.message[:], aux)
 	plain.clear()
@@ -140,7 +173,7 @@ func (a *rootGrantsGrantV3Attempt) signWithRandom(ownedPlaintext []byte, random 
 	if err := a.check(true); err != nil {
 		return nil, err
 	}
-	if a.plan.VerifySignature(signature) != nil || current.message != a.plan.message {
+	if a.plan.VerifySignature(signature) != nil {
 		return nil, rootGrantsGrantV3Failed("signature_verification_failed", "sign", true)
 	}
 	keep = true

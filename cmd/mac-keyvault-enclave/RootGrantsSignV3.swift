@@ -386,6 +386,16 @@ private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCanc
 	try cancellation.check()
 	try transport.checkOutput()
 	_ = try signingContext.remainingNanoseconds()
+	var policyRequest = Array(request.bytes)
+	let policyRequestCount = policyRequest.count
+	let policyStatus = policyRequest.withUnsafeMutableBufferPointer { requestBuffer in
+		kv_rg_sign_grant_v3_policy_check_v1(signingContext.handle, requestBuffer.baseAddress,
+			size_t(policyRequestCount))
+	}
+	try RootGrantsArchiveBindings.signingStatus(policyStatus)
+	try cancellation.check()
+	try transport.checkOutput()
+	_ = try signingContext.remainingNanoseconds()
     try attempt.consumeForSigning()
 
     var plaintext = try signV3Decrypt(request, context: context)

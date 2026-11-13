@@ -3,10 +3,12 @@ package keyvault
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 )
 
@@ -123,6 +125,65 @@ func rootGrantsGrantV3PlanFromHelperRequest(rawRequest []byte) (*RootGrantsGrant
 	return plan, nil
 }
 
+// rootGrantsGrantV3RequireInstalledAuthority compares the complete request
+// policy with a fresh policy loaded from the fixed OS-account/address path.
+// The loader is injectable only inside this package for isolated tests; the
+// helper entry below always supplies LoadRootGrantsAuthority.
+func rootGrantsGrantV3RequireInstalledAuthority(plan *RootGrantsGrantV3Plan,
+	loadAuthority func(RootGrantsAddress) ([]byte, error)) error {
+	if plan == nil || loadAuthority == nil {
+		return rootGrantsGrantV3Failed("operation_unavailable", "authority", false)
+	}
+	record, err := ParseRootGrantsRecord(plan.record)
+	if err != nil {
+		return rootGrantsGrantV3Failed("public_pin_mismatch", "authority", false)
+	}
+	policy, err := ParseRootGrantsAuthority(plan.authority)
+	if err != nil || policy.Record.Service != record.Service || policy.Record.Version != record.Version {
+		return rootGrantsGrantV3Failed("authority_mismatch", "authority", false)
+	}
+	address := RootGrantsAddress{Service: record.Service, Version: record.Version}
+	installed, err := loadAuthority(address)
+	defer clear(installed)
+	if err != nil {
+		return rootGrantsGrantV3Failed(rootGrantsGrantV3RefusalCode(err), "authority", false)
+	}
+	if _, err := ParseRootGrantsAuthority(installed); err != nil || !bytes.Equal(installed, plan.authority) {
+		return rootGrantsGrantV3Failed("review_changed", "authority", false)
+	}
+	return nil
+}
+
+// rootGrantsGrantV3CheckInstalledAuthorityFromHelper is the pre-unwrap helper
+// gate. Production supplies the fixed OS-account-selected loader; tests inject
+// only a public synthetic policy source and never touch an installed file.
+func rootGrantsGrantV3CheckInstalledAuthorityFromHelper(ctx context.Context, rawRequest []byte,
+	loadAuthority func(RootGrantsAddress) ([]byte, error)) error {
+	if ctx == nil {
+		return rootGrantsGrantV3Failed("invalid_arguments", "authority", false)
+	}
+	if err := ctx.Err(); err != nil {
+		return rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "authority", false)
+	}
+	plan, err := rootGrantsGrantV3PlanFromHelperRequest(rawRequest)
+	if err != nil {
+		return err
+	}
+	if err := rootGrantsGrantV3RequireInstalledAuthority(plan, loadAuthority); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "authority", false)
+	}
+	return nil
+}
+
+// RootGrantsGrantV3CheckInstalledAuthorityFromHelper is called by the native
+// helper immediately before unwrap. It has no request-selected policy path.
+func RootGrantsGrantV3CheckInstalledAuthorityFromHelper(ctx context.Context, rawRequest []byte) error {
+	return rootGrantsGrantV3CheckInstalledAuthorityFromHelper(ctx, rawRequest, LoadRootGrantsAuthority)
+}
+
 // rootGrantsGrantV3CheckForHelperWithContext runs in the admitted parent vault
 // process. The private helper requests a fixed checkpoint; it never opens the
 // Keychain or selects a vault guard itself.
@@ -192,6 +253,16 @@ func rootGrantsGrantV3CheckForHelperWithContext(ctx context.Context, rawRequest 
 // entry. Vault reads are completed by the admitted parent over its private
 // control channel before this call; this process receives no vault capability.
 func RootGrantsGrantV3SignFromHelper(ctx context.Context, rawRequest, ownedPlaintext []byte) ([]byte, error) {
+	return rootGrantsGrantV3SignFromHelperWithAuthorityLoader(ctx, rawRequest, ownedPlaintext,
+		LoadRootGrantsAuthority, rand.Reader, nil, nil)
+}
+
+// Package-private dependencies support deterministic public-policy and
+// final-validation scheduling controls. The production C entry passes the
+// fixed loader, cryptographic randomness, and nil hooks.
+func rootGrantsGrantV3SignFromHelperWithAuthorityLoader(ctx context.Context, rawRequest, ownedPlaintext []byte,
+	loadAuthority func(RootGrantsAddress) ([]byte, error), random io.Reader,
+	afterFinalRevalidation, beforePrivateMath func()) ([]byte, error) {
 	defer clear(ownedPlaintext)
 	if ctx == nil {
 		return nil, rootGrantsGrantV3Failed("invalid_arguments", "sign", false)
@@ -207,7 +278,8 @@ func RootGrantsGrantV3SignFromHelper(ctx context.Context, rawRequest, ownedPlain
 	if err != nil {
 		return nil, err
 	}
-	return attempt.sign(ownedPlaintext)
+	attempt.loadAuthority = loadAuthority
+	return attempt.signWithTestHooks(ownedPlaintext, random, afterFinalRevalidation, beforePrivateMath)
 }
 
 func rootGrantsContractBytes(encoded string) ([]byte, error) {

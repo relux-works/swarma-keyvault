@@ -544,6 +544,26 @@ func kv_rg_sign_grant_v3_context_close_v1(handle C.uint64_t) (verdict C.int32_t)
 	return C.int32_t(rootSignContexts.cancel(uint64(handle), true))
 }
 
+//export kv_rg_sign_grant_v3_policy_check_v1
+func kv_rg_sign_grant_v3_policy_check_v1(contextHandle C.uint64_t, request *C.uchar, requestSize C.size_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	ctx := rootSignContexts.context(uint64(contextHandle))
+	if ctx == nil || request == nil || requestSize == 0 || uint64(requestSize) > rootRequestLimit {
+		return 1
+	}
+	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
+	defer clear(publicInput)
+	if err := keyvault.RootGrantsGrantV3CheckInstalledAuthorityFromHelper(ctx, publicInput); err != nil {
+		return C.int32_t(keyvault.RootGrantsGrantV3HelperStatus(err))
+	}
+	return 0
+}
+
 //export kv_rg_sign_grant_v3_v1
 func kv_rg_sign_grant_v3_v1(contextHandle C.uint64_t, request *C.uchar, requestSize C.size_t, plaintext *C.uchar, plaintextSize C.size_t,
 	out *C.uchar, capacity C.size_t, written *C.size_t) (verdict C.int32_t) {

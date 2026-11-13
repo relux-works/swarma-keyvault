@@ -371,7 +371,13 @@ func TestRootGrantsGrantV3ParentRechecksVaultAndPolicy(t *testing.T) {
 	copy(plain[:4], "KVG1")
 	copy(plain[4:36], binding[:])
 	plain[67] = 3
-	sig, err := RootGrantsGrantV3SignFromHelper(context.Background(), request, plain)
+	sig, err := rootGrantsGrantV3SignFromHelperWithAuthorityLoader(context.Background(), request, plain,
+		func(address RootGrantsAddress) ([]byte, error) {
+			if address != (RootGrantsAddress{Service: record.Service, Version: record.Version}) {
+				return nil, recoveryRefuse("operation_unavailable")
+			}
+			return bytes.Clone(authority), nil
+		}, bytes.NewReader(make([]byte, 32)), nil, nil)
 	if err != nil || len(sig) != 64 || plan.VerifySignature(sig) != nil || !bytes.Equal(plain, make([]byte, 68)) {
 		t.Fatal("context-bound helper engine did not produce one verified, cleared signature", err)
 	}
