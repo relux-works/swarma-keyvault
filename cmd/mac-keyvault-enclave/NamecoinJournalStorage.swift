@@ -277,7 +277,7 @@ final class NativeNamecoinJournalStorage {
             throw NativeJournalRefusal.mismatch
         }
         var information: CFDictionary?
-        guard SecCodeCopySigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &information) == errSecSuccess,
+        guard copyRunningCodeSigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &information) == errSecSuccess,
               let facts = information as? [String: Any],
               let flags = facts[kSecCodeInfoFlags as String] as? NSNumber,
               let dynamic = facts[kSecCodeInfoStatus as String] as? NSNumber,
@@ -338,7 +338,7 @@ final class NativeNamecoinJournalStorage {
         for acl in acls {
             var apps: CFArray?
             var description: CFString?
-            var prompt: SecKeychainPromptSelector = 0
+            var prompt = SecKeychainPromptSelector(rawValue: 0)
             guard SecACLCopyContents(acl, &apps, &description, &prompt) == errSecSuccess,
                   let applications = apps as? [SecTrustedApplication], applications.count == 1 else { throw NativeJournalRefusal.mismatch }
             var data: CFData?

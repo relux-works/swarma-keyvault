@@ -119,6 +119,8 @@ struct RootGrantsQualificationCodeFacts {
     var leafSHA256: String
 }
 enum RootGrantsQualificationIdentity {
+    static let runningValidationFlags = SecCSFlags(rawValue: kSecCSStrictValidate).union(.noNetworkAccess)
+    static let staticValidationFlags = runningValidationFlags.union(SecCSFlags(rawValue: kSecCSCheckAllArchitectures))
     static let identifier = "works.relux.keyvault.enclave"
     static let team = "262RZ595FP"
     static let leafSHA1 = "d71190abe54185f908169ee9ca538d4066942c0f"
@@ -202,20 +204,19 @@ private enum RootGrantsQualificationNative {
     private static func verifyRunningHelper() throws {
         guard getuid() == geteuid() else { throw RootGrantsQualificationError.refused }
         let zero = SecCSFlags(rawValue: 0)
-        let strict = SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSNoNetworkAccess)
         var expected: SecRequirement?, actual: SecRequirement?
         var running: SecCode?, code: SecStaticCode?
         var expectedData: CFData?, actualData: CFData?, information: CFDictionary?
         guard SecRequirementCreateWithString(RootGrantsQualificationIdentity.requirement as CFString, zero, &expected) == errSecSuccess,
               let expected,
               SecCodeCopySelf(zero, &running) == errSecSuccess, let running,
-              SecCodeCheckValidity(running, strict, expected) == errSecSuccess,
+              SecCodeCheckValidity(running, RootGrantsQualificationIdentity.runningValidationFlags, expected) == errSecSuccess,
               SecCodeCopyStaticCode(running, zero, &code) == errSecSuccess, let code,
-              SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckAllArchitectures | kSecCSNoNetworkAccess), expected) == errSecSuccess,
+              SecStaticCodeCheckValidity(code, RootGrantsQualificationIdentity.staticValidationFlags, expected) == errSecSuccess,
               SecCodeCopyDesignatedRequirement(code, zero, &actual) == errSecSuccess, let actual,
               SecRequirementCopyData(expected, zero, &expectedData) == errSecSuccess, let expectedData,
               SecRequirementCopyData(actual, zero, &actualData) == errSecSuccess, let actualData,
-              SecCodeCopySigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &information) == errSecSuccess,
+              copyRunningCodeSigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &information) == errSecSuccess,
               let dictionary = information as? [String: Any],
               let identifier = dictionary[kSecCodeInfoIdentifier as String] as? String,
               let team = dictionary[kSecCodeInfoTeamIdentifier as String] as? String,

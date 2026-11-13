@@ -34,6 +34,17 @@ import Foundation
 import LocalAuthentication
 import Security
 
+// SecCode.h permits this API's SecStaticCodeRef argument to carry a running
+// SecCodeRef. Keep that SAME object: converting it to disk-only static code
+// loses kSecCSDynamicInformation. This view bridges the Swift CF types only;
+// the original strong reference remains alive throughout the native call.
+func copyRunningCodeSigningInformation(_ running: SecCode, _ flags: SecCSFlags,
+                                      _ information: UnsafeMutablePointer<CFDictionary?>) -> OSStatus {
+    return withExtendedLifetime(running) {
+        SecCodeCopySigningInformation(unsafeBitCast(running, to: SecStaticCode.self), flags, information)
+    }
+}
+
 let errSecUserCanceled: Int32 = -128
 let errSecAuthFailed: Int32 = -25293
 let errSecNotAvailable: Int32 = -25291

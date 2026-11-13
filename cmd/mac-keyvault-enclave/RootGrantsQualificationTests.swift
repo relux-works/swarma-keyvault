@@ -26,6 +26,19 @@ private func qualificationFacts() -> RootGrantsQualificationCodeFacts {
 }
 
 struct RootGrantsQualificationTests {
+    // Exact masks retain strict/offline validation and static all-architecture
+    // checking without admitting revocation-network flags. These pure inputs
+    // establish no actual code validity, network isolation or native custody.
+    @Test func validationMasksRemainStrictAndOffline() {
+        let noNetwork: UInt32 = 1 << 29 // SDK CSCommon.h's documented option bit.
+        let running = RootGrantsQualificationIdentity.runningValidationFlags.rawValue
+        let disk = RootGrantsQualificationIdentity.staticValidationFlags.rawValue
+        #expect(running == (kSecCSStrictValidate | noNetwork))
+        #expect(disk == (kSecCSStrictValidate | kSecCSCheckAllArchitectures | noNetwork))
+        #expect((running & SecCSFlags.enforceRevocationChecks.rawValue) == 0)
+        #expect((disk & SecCSFlags.enforceRevocationChecks.rawValue) == 0)
+    }
+
     // Exact byte encoding agrees with the published six-field form; maximum
     // reference and owned copies are exercised. No reference grants authority.
     @Test func canonicalPublicRequestAndOwnership() throws {

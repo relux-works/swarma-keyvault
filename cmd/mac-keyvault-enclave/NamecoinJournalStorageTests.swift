@@ -227,7 +227,7 @@ func nativeJournalAdapterConstructionRequiresActualCodePin() throws {
     #expect(copied == errSecSuccess)
     let running = try #require(code)
     var information: CFDictionary?
-    let inspected = SecCodeCopySigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
+    let inspected = copyRunningCodeSigningInformation(running, SecCSFlags(rawValue: kSecCSSigningInformation), &information)
     #expect(inspected == errSecSuccess)
     let facts = try #require(information as? [String: Any])
     let actualHash = try #require(facts[kSecCodeInfoUnique as String] as? Data)

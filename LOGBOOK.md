@@ -5,6 +5,11 @@
 
 ## 2026-11-13
 
+### 0534 — Swift Security API imports
+- ROOT CAUSE: Swift imports no-network and prompt-selector options as typed values; the signing-information C API's running-code argument needs an explicit Swift reference view.
+- FIX: `NativeHelperCore.swift` keeps the running object alive across that API; qualification retains strict/offline flags and journal ACL inspection retains a zero prompt selector.
+- STATUS: Source prepared; production/test compilation and native qualification remain pending.
+
 ### 0322 — Qualification driver tool discovery
 - ROOT CAUSE: Go `-trimpath` clears embedded `runtime.GOROOT`; relying on it rejects a retained qualification driver before artifact creation.
 - FIX: `tools/recoverybuild/root_qualification.go` resolves an absolute `go` through PATH; ambient GOROOT and exact toolchain-version refusals remain.
