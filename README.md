@@ -235,6 +235,14 @@ reference. It is not part of the stdout result or of any receipt, whose schemas 
 unchanged. A native build with the `kvqfault` tag adds test-only fault injection for
 `go test -tags kvqfault ./internal/keyvault`; a normal build contains none of it.
 
+The ACL forms that the qualification observed on a real system (the access object
+built in memory and the item as the Keychain stores it) are the allowlist that the
+root-grants vault applies before it adds an item and when it reads one back; see
+[root storage ACL policy](docs/root-storage-acl-policy.md). Its tests run with
+`go test ./internal/rootqualification ./internal/keyvault`; the in-process native
+comparison runs with `go test -tags kvqfault -run TestNativeIntendedFrame ./internal/keyvault`
+and touches no Keychain item.
+
 ## Nostr keys
 
 `mac-keyvault nostr` provides secp256k1 list/describe, public x-only hex or
