@@ -49,7 +49,12 @@ struct RootGrantsSignV3Tests {
     // consumed before private signing; a second use cannot replay it.
     @Test func oneFreshPresenceConsumesOneAttempt() throws {
         var attempt = RootGrantsSignV3Attempt()
-        try attempt.confirmReview("SIGN GRANT V3")
+        let display = "REVIEW SIGN GRANT V3\nComplete request"
+        var confirmedDisplays: [String] = []
+        try RootGrantsSignV3ReviewFlow.confirm(display: display, attempt: &attempt) { text in
+            confirmedDisplays.append(text)
+        }
+        #expect(confirmedDisplays == [display, display])
         #expect(attempt.phase == .reviewed)
         try attempt.beginPresence()
         #expect(attempt.phase == .presencePending)
@@ -61,19 +66,77 @@ struct RootGrantsSignV3Tests {
         #expect(attempt.phase == .closed)
     }
 
-    // Claim: an incorrect native review confirmation refuses before presence,
-    // and a denied biometric result closes the attempt without signing.
+    // Claim: refusal at either fresh review closes before presence, and a denied biometric result closes without signing.
     @Test func reviewAndPresenceRefusalsConsumeAttempt() throws {
-        var review = RootGrantsSignV3Attempt()
-        #expect(throws: RootGrantsReviewError.self) { try review.confirmReview("APPROVE") }
-        #expect(review.phase == .closed)
+        let display = "REVIEW SIGN GRANT V3\nComplete request"
+        let refusalStatuses: [RootGrantsStatus] = [.canceled, .timeout, .inputCanceled, .terminalRequired]
+        for refusedConfirmation in 1...2 {
+            for status in refusalStatuses {
+                var review = RootGrantsSignV3Attempt()
+                var confirmations: [String] = []
+                var downstream: [String] = []
+                var observed: RootGrantsStatus?
+                do {
+                    try RootGrantsSignV3ReviewFlow.confirm(display: display, attempt: &review) { text in
+                        confirmations.append(text)
+                        if confirmations.count == refusedConfirmation {
+                            throw RootGrantsReviewError(status: status)
+                        }
+                    }
+                    try review.beginPresence()
+                    downstream.append("presence")
+                } catch let error as RootGrantsReviewError {
+                    observed = error.status
+                }
+                #expect(observed == status)
+                #expect(confirmations == Array(repeating: display, count: refusedConfirmation))
+                #expect(review.phase == .closed)
+                #expect(downstream.isEmpty)
+            }
+        }
 
         var presence = RootGrantsSignV3Attempt()
-        try presence.confirmReview("SIGN GRANT V3")
+        try RootGrantsSignV3ReviewFlow.confirm(display: display, attempt: &presence) { _ in }
         try presence.beginPresence()
         #expect(throws: RootGrantsReviewError.self) { try presence.acceptFreshTouchID(false) }
         #expect(presence.phase == .closed)
         #expect(throws: RootGrantsReviewError.self) { try presence.consumeForSigning() }
+    }
+
+    // Claim: the production sign body wires request.display to the terminal flow and contains no direct AppKit window review.
+    @Test func productionSignPathUsesTerminalReview() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("RootGrantsSignV3.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try #require(source.range(of: "private func signV3Perform("))
+        let end = try #require(source.range(of: "\nfunc rootGrantsSignGrantV3()",
+                                             range: start.lowerBound..<source.endIndex))
+        let productionPath = String(source[start.lowerBound..<end.lowerBound])
+        #expect(productionPath.contains("RootGrantsSignV3ReviewFlow.confirm"))
+        #expect(productionPath.contains("display: request.display"))
+        #expect(productionPath.contains("RootGrantsTerminalReview.confirm"))
+        #expect(!productionPath.contains("RootGrantsNativeReview"))
+        #expect(!productionPath.contains("SIGN GRANT V3"))
+        #expect(!source.contains("RootGrantsNativeReview"))
+        #expect(!source.contains("Type SIGN GRANT V3"))
+    }
+
+    // Claim: both Returns consume one review transition; replay cannot invoke another confirmation.
+    @Test func reviewTransitionCannotReplay() throws {
+        var attempt = RootGrantsSignV3Attempt()
+        var confirmations = 0
+        try RootGrantsSignV3ReviewFlow.confirm(display: "complete request", attempt: &attempt) { _ in
+            confirmations += 1
+        }
+        #expect(confirmations == 2)
+        #expect(attempt.phase == .reviewed)
+        #expect(throws: RootGrantsReviewError.self) {
+            try RootGrantsSignV3ReviewFlow.confirm(display: "complete request", attempt: &attempt) { _ in
+                confirmations += 1
+            }
+        }
+        #expect(confirmations == 2)
+        #expect(attempt.phase == .closed)
     }
 
     // Claim: no caller can skip native review or the fresh Touch ID stage and

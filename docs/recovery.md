@@ -124,6 +124,21 @@ with either purpose identity flag. Missing identities, mixed forms, repeated
 security parameters and malformed generations refuse before custody is
 constructed. There is no identity default or environment override.
 
+### Sign a grant-v3 root item
+
+The signing helper displays the complete canonical grant request in the
+foreground controlling Terminal twice. Each complete display must finish before
+its confirmation is armed; only a fresh Return confirms that display. Type-ahead
+keys queued before or during rendering are discarded. Ctrl-C or any of the
+seven declared catchable signals cancels the attempt, including during
+rendering, and restores the terminal. Timeout, EOF or an output error refuses.
+No presence or signature operation follows a refusal.
+
+After both confirmations, the helper begins its single biometric presence
+phase. Touch ID remains required with the existing reason and zero reuse
+duration. A successful signature uses the reviewed grant bytes; unknown,
+`mutation_unknown` and `receipt_unavailable` stop rules are unchanged.
+
 New paired records use `keyvault-recovery/2` with an explicit `service` in each
 purpose; the top-level service must equal the Nostr service. New paired
 ciphertext uses `keyvault-recovery-ciphertext/2` and the v2 metadata-binding

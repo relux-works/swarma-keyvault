@@ -381,6 +381,7 @@ struct RootGrantsTerminalPTYTests {
                 Set([SIGINT, SIGHUP, SIGQUIT, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU]))
     }
 
+    // Claim: a fresh Return after complete terminal output confirms and restores the original PTY settings.
     @Test func productionReaderUsesSelectAndAcceptsFreshReturn() throws {
         let (master, slave, original) = try makePTY()
         let cancellation = RootGrantsPrivateCancellation()
@@ -429,6 +430,7 @@ struct RootGrantsTerminalPTYTests {
         #expect(received == sent)
     }
 
+    // Claim: Returns queued before or during rendering are discarded until a fresh post-display Return arrives.
     @Test func typeaheadBeforeAndDuringRenderingNeedsFreshReturn() throws {
         for duringRendering in [false, true] {
             let (master, slave, original) = try makePTY()
@@ -448,6 +450,8 @@ struct RootGrantsTerminalPTYTests {
                 let first = try readSome(master, maximum: 2048)
                 #expect(!first.isEmpty)
                 #expect(first.count < RootGrantsTerminalReview.promptText(text).utf8.count)
+                #expect(armed.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
+                        "Confirmation must stay unarmed until the complete display is written")
                 output.append(first)
                 try writePTY(master, Data([13])) // Arrives while a long review is still rendering.
             }
@@ -472,6 +476,7 @@ struct RootGrantsTerminalPTYTests {
         try assertQueuedTailIsGone(cause: .ioError)
     }
 
+    // Claim: every declared catchable signal cancels sign review before presence and restores the PTY and input queue.
     @Test func processSignalCancelsReaderAndRestoresPTY() throws {
         for signalNumber in RootGrantsPrivateSignals.handledSignals {
             // Keep even job-control and core-dump signals ignored at the test
@@ -483,8 +488,10 @@ struct RootGrantsTerminalPTYTests {
             let cancellation = RootGrantsPrivateCancellation()
             let queue = DispatchQueue(label: "root-grants-pty-signal-control")
             let signals = RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
-            let outcome = startReader(slave: slave, text: "signal cleanup",
-                                      cancellation: cancellation, afterArming: {
+            let effects = RootGrantsPTYFlowEffects()
+            let outcome = startSignReview(slave: slave, display: "signal cleanup",
+                                          cancellation: cancellation, effects: effects,
+                                          afterArming: {
                 // No Return here: the signal, not a queued key, must cancel.
                 try writePTY(master, Data("PRIVATE-TAIL".utf8))
                 guard Darwin.kill(getpid(), signalNumber) == 0 else {
@@ -503,9 +510,152 @@ struct RootGrantsTerminalPTYTests {
                 Issue.record("Catchable signal \(signalNumber) must safely cancel the raw-mode reader; observed \(String(describing: outcome.snapshot()))")
                 return
             }
+            #expect(effects.snapshot() == ["review"])
             #expect(sameTermios(original, try currentTermios(slave)))
             assertNoQueuedBytes(slave)
         }
+    }
+
+    // Claim: two complete sign displays each need a fresh Return before the one presence phase can begin.
+    @Test func productionSignReviewNeedsTwoFreshReturnsBeforePresence() throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let effects = RootGrantsPTYFlowEffects()
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("testdata/root-grants-sign-request-v2.json")
+        let display = try RootGrantsSignV3Request(ownedBytes: Data(contentsOf: fixture)).display
+        try writePTY(master, Data([13])) // A Return queued before rendering is not consent.
+        let outcome = startSignReview(slave: slave, display: display, cancellation: cancellation,
+                                      effects: effects, afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+
+        let firstDisplay = try readUntil(master, suffix: promptSuffix)
+        #expect(normalizedPTYText(firstDisplay).contains(display))
+        #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+        #expect(outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut)
+        #expect(effects.snapshot() == ["review"])
+        try writePTY(master, Data([13]))
+
+        let secondDisplay = try readUntil(master, suffix: promptSuffix)
+        #expect(normalizedPTYText(secondDisplay).contains(display))
+        #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+        #expect(outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut)
+        #expect(effects.snapshot() == ["review", "review"])
+        try writePTY(master, Data([13]))
+
+        #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        guard case .accepted? = outcome.snapshot() else {
+            Issue.record("The production sign review did not require both fresh Returns: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot() == ["review", "review", "presence"])
+        #expect(sameTermios(original, try currentTermios(slave)))
+    }
+
+    // Claim: Ctrl-C before rendering refuses the sign review before its single presence phase.
+    @Test func productionSignFlowCancelsBeforeReviewRenderingBeforePresence() throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let effects = RootGrantsPTYFlowEffects()
+        var injected = false
+        let outcome = startSignReview(slave: slave, display: "sign request",
+                                      cancellation: cancellation, effects: effects,
+                                      checkOutput: {
+            if !injected {
+                injected = true
+                try writePTY(master, Data([3]))
+            }
+        })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        guard case .refused(.canceled)? = outcome.snapshot() else {
+            Issue.record("Pre-render Ctrl-C must cancel sign review: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot() == ["review"])
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
+    }
+
+    // Claim: Ctrl-C during a partial sign display cancels before presence and restores the disposable PTY.
+    @Test func productionSignFlowCancelsDuringReviewRenderingBeforePresence() throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let effects = RootGrantsPTYFlowEffects()
+        let display = "REVIEW SIGN GRANT V3\n" + String(repeating: "R", count: 64 * 1024)
+        let outcome = startSignReview(slave: slave, display: display, cancellation: cancellation,
+                                      effects: effects, afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        let first = try readSome(master, maximum: 2048)
+        #expect(!first.isEmpty && first.count < RootGrantsTerminalReview.promptText(display).utf8.count)
+        try writePTY(master, Data([3]))
+        let finishedAfterCancel = outcome.finished.wait(timeout: .now() + .milliseconds(500))
+        #expect(finishedAfterCancel == .success, "Ctrl-C while rendering must cancel before presence")
+        if finishedAfterCancel == .timedOut {
+            _ = try readUntil(master, suffix: promptSuffix, startingWith: first)
+            #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+            try writePTY(master, Data([13]))
+            if outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut {
+                _ = try readUntil(master, suffix: promptSuffix)
+                #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+                try writePTY(master, Data([13]))
+            }
+            #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        }
+        guard case .refused(.canceled)? = outcome.snapshot() else {
+            Issue.record("Rendering-time Ctrl-C must cancel sign review before presence: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot() == ["review"])
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
+    }
+
+    // Claim: Ctrl-C after the second complete display still refuses before presence and leaves no queued input.
+    @Test func productionSignFlowCancelsAfterReviewRenderingBeforePresence() throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let effects = RootGrantsPTYFlowEffects()
+        let display = "REVIEW SIGN GRANT V3\nComplete request"
+        let outcome = startSignReview(slave: slave, display: display, cancellation: cancellation,
+                                      effects: effects, afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        _ = try readUntil(master, suffix: promptSuffix)
+        #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+        try writePTY(master, Data([13]))
+        let secondDisplay = try readUntil(master, suffix: promptSuffix)
+        #expect(normalizedPTYText(secondDisplay).contains(display))
+        #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+        #expect(effects.snapshot() == ["review", "review"])
+        try writePTY(master, Data([3]))
+
+        #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        guard case .refused(.canceled)? = outcome.snapshot() else {
+            Issue.record("Post-render Ctrl-C must cancel sign review before presence: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot() == ["review", "review"])
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
     }
 
     @Test func productionFlowCancelsAtFirstRawOutputCheckBeforeAnyEffect() throws {
@@ -668,6 +818,32 @@ struct RootGrantsTerminalPTYTests {
         return outcome
     }
 
+    private func startSignReview(slave: Int32, display: String,
+                                 cancellation: RootGrantsPrivateCancellation,
+                                 effects: RootGrantsPTYFlowEffects,
+                                 checkOutput: @escaping () throws -> Void = {},
+                                 afterArming: @escaping () throws -> Void = {}) -> RootGrantsPTYOutcome {
+        let outcome = RootGrantsPTYOutcome()
+        DispatchQueue.global().async {
+            do {
+                var attempt = RootGrantsSignV3Attempt()
+                try RootGrantsSignV3ReviewFlow.confirm(display: display, attempt: &attempt) { text in
+                    effects.append("review")
+                    try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation,
+                        descriptor: slave, checkOutput: checkOutput, afterArming: afterArming)
+                }
+                try attempt.beginPresence()
+                effects.append("presence")
+                outcome.finish(.accepted)
+            } catch let error as RootGrantsReviewError {
+                outcome.finish(.refused(error.status))
+            } catch {
+                outcome.finish(.refused(.privateProtocolError))
+            }
+        }
+        return outcome
+    }
+
     private func makePTY() throws -> (Int32, Int32, termios) {
         var master: Int32 = -1, slave: Int32 = -1
         guard openpty(&master, &slave, nil, nil, nil) == 0 else {
@@ -703,6 +879,10 @@ struct RootGrantsTerminalPTYTests {
         let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress!, $0.count) }
         guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
         return Data(bytes.prefix(count))
+    }
+
+    private func normalizedPTYText(_ bytes: Data) -> String {
+        String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "\r\n", with: "\n")
     }
 
     private func readUntil(_ fd: Int32, suffix: Data, startingWith initial: Data = Data()) throws -> Data {
