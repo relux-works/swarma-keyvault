@@ -102,6 +102,23 @@ the function the root-grants attach uses, so the printed value is the
 accepts for that pair. A missing, ambiguous or invalid record prints neither.
 Earlier output lines and JSON members are unchanged.
 
+### Attach root grants
+
+The parameterized attach launcher takes the three identities, generations and
+public pins from a data-only values file. Supply values from the retained
+public records; the launcher verifies the vault digest, and the vault compares
+all retained-pair pins before it starts the helper or asks for confirmation.
+The helper prints the complete public request in the foreground Terminal,
+including every identity, generation, root grants address and pin. Review it and
+press Return once to continue, or press Ctrl-C to cancel without storing.
+
+After the first confirmation, enter the existing 24 numbered words and `END`
+in the Terminal. The helper then prints the `MATCH` results and the new public
+key for the reviewed request and waits for a second Return. Ctrl-C cancels at
+this checkpoint before Touch ID or storage. Touch ID remains required to
+continue. Do not retry an unknown outcome, `mutation_unknown`, or
+`receipt_unavailable`; reconcile the public receipt as directed by the error.
+
 The explicit legacy `--service S` alias selects A=B=S. It cannot be mixed
 with either purpose identity flag. Missing identities, mixed forms, repeated
 security parameters and malformed generations refuse before custody is

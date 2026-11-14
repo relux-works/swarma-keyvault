@@ -28,7 +28,7 @@ const (
 	rootGrantsSignV3Op = "review-sign-grant-v3"
 	// One fixed public line, printed after every flag was admitted and before the
 	// vault is touched. It carries no value and no input echo.
-	rootGrantsAttachNotice = "root grants attach: follow the review window and the terminal prompts\n"
+	rootGrantsAttachNotice = "root grants attach: public review and word entry use the foreground Terminal\n"
 )
 
 // rootGrantsFlags parses a closed set of flags. Every flag is a plain value flag:

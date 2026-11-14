@@ -165,20 +165,130 @@ struct RootGrantsPrivateDeadline {
     }
 }
 
-enum RootGrantsPrivateConfirmation {
-    static func attach(_ review: RootGrantsInitialReview, lines: [String]?) throws -> RootGrantsPublicConfirmation {
-        guard let lines else { throw RootGrantsReviewError(status: .inputCanceled) }
-        guard lines.count == 4, lines.allSatisfy({ $0.utf8.count <= 128 }) else {
-            throw RootGrantsReviewError(status: .canceled)
-        }
-        return try review.confirmRetypes(Array(lines.prefix(3)), attach: lines[3],
-                                         currentRequest: review.request.originalBytes)
+enum RootGrantsTerminalConfirmationKey {
+    // A key other than Return is consumed without confirming. Ctrl-C is an
+    // explicit cancellation byte while ISIG is disabled for this one-key read.
+    static func consume(_ byte: UInt8) throws -> Bool? {
+        if byte == 3 { throw RootGrantsReviewError(status: .canceled) }
+        if byte == 10 || byte == 13 { return true }
+        return nil
     }
-    static func store(_ review: RootGrantsDerivedReview, line: String?) throws -> RootGrantsPublicConfirmation {
-        guard let line else { throw RootGrantsReviewError(status: .inputCanceled) }
-        guard line.utf8.count <= 128 else { throw RootGrantsReviewError(status: .canceled) }
-        return try review.confirmStore(line, currentRequest: review.initial.request.originalBytes,
-                                       currentPreparation: review.preparation.originalBytes)
+
+    static func awaitReturn(next: () throws -> UInt8?) throws {
+        while true {
+            guard let byte = try next() else { throw RootGrantsReviewError(status: .inputCanceled) }
+            if try consume(byte) == true { return }
+        }
+    }
+}
+
+enum RootGrantsTerminalReview {
+    // Production and tests use the same ordering seam: a refusal at either
+    // checkpoint cannot call preparation, wrapping, or sealing afterward.
+    static func checkpoint<T>(confirm: () throws -> Void, proceed: () throws -> T) throws -> T {
+        try confirm()
+        return try proceed()
+    }
+
+    static func promptText(_ text: String) -> String {
+        text + "\nPress Return to continue; Ctrl-C cancels.\n"
+    }
+
+    static func confirm(text: String, cancellation: RootGrantsPrivateCancellation,
+                        transport: RootGrantsPrivateTransport) throws {
+        guard text.utf8.count <= 1 << 20 else { throw RootGrantsReviewError(status: .limitExceeded) }
+        let fd = "/dev/tty".withCString { Darwin.open($0, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK) }
+        guard fd >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+        defer { _ = Darwin.close(fd) }
+        var info = stat()
+        guard fd < FD_SETSIZE, isatty(fd) == 1, fstat(fd, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR),
+              tcgetpgrp(fd) > 0, tcgetpgrp(fd) == getpgrp() else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        var original = termios()
+        guard tcgetattr(fd, &original) == 0 else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        guard tcflush(fd, TCIFLUSH) == 0 else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        var hidden = original
+        hidden.c_lflag &= ~tcflag_t(ICANON | ECHO | ECHONL | IEXTEN | ISIG)
+        hidden.c_iflag &= ~tcflag_t(ICRNL | INLCR | IGNCR | IXON | IXOFF | ISTRIP | PARMRK)
+        withUnsafeMutableBytes(of: &hidden.c_cc) { controlCharacters in
+            controlCharacters[Int(VMIN)] = cc_t(1)
+            controlCharacters[Int(VTIME)] = cc_t(0)
+        }
+        guard tcsetattr(fd, TCSANOW, &hidden) == 0 else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        var changed = true
+        func restore() -> Bool {
+            guard changed else { return true }
+            var saved = original
+            guard tcsetattr(fd, TCSANOW, &saved) == 0 else { return false }
+            var observed = termios()
+            guard tcgetattr(fd, &observed) == 0,
+                  observed.c_iflag == original.c_iflag, observed.c_oflag == original.c_oflag,
+                  observed.c_cflag == original.c_cflag, observed.c_lflag == original.c_lflag,
+                  observed.c_ispeed == original.c_ispeed, observed.c_ospeed == original.c_ospeed,
+                  withUnsafeBytes(of: observed.c_cc, { Array($0) }) == withUnsafeBytes(of: original.c_cc, { Array($0) }) else { return false }
+            changed = false
+            return true
+        }
+        defer { _ = restore() }
+
+        func write(_ raw: Data) throws {
+            var offset = 0
+            while offset < raw.count {
+                try cancellation.check()
+                try transport.checkOutput()
+                var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                let ready = Darwin.poll(&descriptor, 1, 100)
+                if ready < 0, errno == EINTR { continue }
+                guard ready >= 0, descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else {
+                    throw RootGrantsReviewError(status: .terminalRequired)
+                }
+                guard ready > 0 else { continue }
+                let count = raw.withUnsafeBytes {
+                    Darwin.write(fd, $0.baseAddress!.advanced(by: offset), raw.count - offset)
+                }
+                if count < 0, errno == EINTR || errno == EAGAIN { continue }
+                guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+                offset += count
+            }
+        }
+        func nextByte() throws -> UInt8? {
+            while true {
+                try cancellation.reviewDeadline()
+                try transport.checkOutput()
+                var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let ready = Darwin.poll(&descriptor, 1, 100)
+                if ready < 0, errno == EINTR { continue }
+                guard ready >= 0, descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else {
+                    throw RootGrantsReviewError(status: .terminalRequired)
+                }
+                guard ready > 0 else { continue }
+                var byte: UInt8 = 0
+                let count = Darwin.read(fd, &byte, 1)
+                if count < 0, errno == EINTR || errno == EAGAIN { continue }
+                guard count >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+                return count == 0 ? nil : byte
+            }
+        }
+
+        var failure: Error?
+        do {
+            let prompt = promptText(text)
+            try write(Data(prompt.utf8))
+            try RootGrantsTerminalConfirmationKey.awaitReturn(next: nextByte)
+            guard tcflush(fd, TCIFLUSH) == 0 else {
+                throw RootGrantsReviewError(status: .terminalRequired)
+            }
+        } catch { failure = error }
+        guard restore() else { throw RootGrantsReviewError(status: .operationUnavailable) }
+        if let failure { throw failure }
     }
 }
 
@@ -425,22 +535,28 @@ func rootGrantsPrivate() -> Int32 {
             let session = try NativeRootGrantsArchiveSession(publicRequest: bytes)
             try cancellation.publish(session) // A racing signal closes before Prepare.
             let initial = session.initialReview
-            let entries = try RootGrantsNativeReview(text: initial.text,
-                labels: ["Retype the full existing Nostr identity", "Retype the full existing Namecoin identity",
-                         "Retype the full new root grants identity", "Type ATTACH ROOT GRANTS"], cancellation: cancellation, transport: transport).run()
-            let attach = try RootGrantsPrivateConfirmation.attach(initial, lines: entries)
-            try cancellation.check()
-            let review = try session.prepare(after: attach, currentRequest: initial.request.originalBytes)
-            let final = try RootGrantsNativeReview(text: review.text, labels: ["Type STORE ROOT GRANTS"],
-                                                   cancellation: cancellation, transport: transport).run()
-            let store = try RootGrantsPrivateConfirmation.store(review, line: final.first)
-            try cancellation.check()
-            let wrap = try RootGrantsQualifiedWrap.create(review: review, store: store, session: session, cancellation: cancellation, transport: transport)
-            try cancellation.check()
-            try transport.checkOutput()
-            let result = try session.sealAfterReviewedStore(store, currentRequest: initial.request.originalBytes,
-                currentPreparation: review.preparation.originalBytes, publicPoint: wrap.point, sealedDeviceBlob: wrap.blob)
-            try cancellation.check()
+            let review = try RootGrantsTerminalReview.checkpoint(confirm: {
+                try RootGrantsTerminalReview.confirm(text: initial.text, cancellation: cancellation, transport: transport)
+            }) {
+                let attach = try initial.confirm(currentRequest: initial.request.originalBytes)
+                try cancellation.check()
+                return try session.prepare(after: attach, currentRequest: initial.request.originalBytes)
+            }
+            let result = try RootGrantsTerminalReview.checkpoint(confirm: {
+                try RootGrantsTerminalReview.confirm(text: review.text, cancellation: cancellation, transport: transport)
+            }) {
+                let store = try review.confirm(currentRequest: initial.request.originalBytes,
+                                               currentPreparation: review.preparation.originalBytes)
+                try cancellation.check()
+                let wrap = try RootGrantsQualifiedWrap.create(review: review, store: store, session: session,
+                    cancellation: cancellation, transport: transport)
+                try cancellation.check()
+                try transport.checkOutput()
+                let sealed = try session.sealAfterReviewedStore(store, currentRequest: initial.request.originalBytes,
+                    currentPreparation: review.preparation.originalBytes, publicPoint: wrap.point, sealedDeviceBlob: wrap.blob)
+                try cancellation.check()
+                return sealed
+            }
             return .sealed(result.originalBytes)
         }
     } catch {

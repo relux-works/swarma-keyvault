@@ -1,7 +1,7 @@
 // Swift Testing SOURCE: public codecs, comparisons, disposable pipe fixtures
 // and actual PUBLIC C Open/Close only. No C Prepare/Seal, owner UI, real tty,
 // hardware key, LAContext or Keychain operation is invoked by these tests.
-// These controls are not hardware/presence/terminal-restoration proof. NOT_RUN.
+// Terminal key tests use injected bytes and do not prove real terminal restoration.
 import Darwin
 import Foundation
 import LocalAuthentication
@@ -21,7 +21,7 @@ private func privateRefusal(_ expected: RootGrantsStatus, _ operation: () throws
 }
 private func privateReviews(_ raw: Data) throws -> (RootGrantsInitialReview, RootGrantsDerivedReview) {
     let request = try RootGrantsPublicRequest(ownedBytes: raw), initial = try RootGrantsInitialReview(request: request)
-    let attach = try RootGrantsPrivateConfirmation.attach(initial, lines: initial.identities + ["ATTACH ROOT GRANTS"])
+    let attach = try initial.confirm(currentRequest: raw)
     let k = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
     let pair = try NativeArchiveJSON.decode(request.pair.canonicalBytes, maximum: 32768, canonical: true)
     // PUBLIC shape fixture only; never injected into a live C session.
@@ -123,31 +123,59 @@ struct RootGrantsPrivateTests {
         privateRefusal(.limitExceeded) { _ = try RootGrantsPrivateFrame.response(.sealed(Data(repeating: 65, count: 131073))) }
     }
 
-    // Full literals only. MATCH is displayed, never typed or represented by a
-    // prerequisite stage. EOF is distinct20; UI cancel remains14. No real UI.
-    @Test func exactThreeRetypesAndFullLiterals() throws {
+    // Only Return confirms; other keys are ignored, Ctrl-C cancels, and EOF is closed.
+    @Test func terminalConfirmationKeysAndCancellation() throws {
         for raw in [privateRequestV1, privateRequestV2] {
             let (initial, derived) = try privateReviews(raw)
-            let attach = try RootGrantsPrivateConfirmation.attach(initial, lines: initial.identities + ["ATTACH ROOT GRANTS"])
+            let attach = try initial.confirm(currentRequest: raw)
             #expect(attach.stage == .attachReviewed)
-            let store = try RootGrantsPrivateConfirmation.store(derived, line: "STORE ROOT GRANTS")
+            let store = try derived.confirm(currentRequest: raw, currentPreparation: derived.preparation.originalBytes)
             #expect(store.stage == .storeReviewed)
             #expect(derived.text.contains("Nostr pin: MATCH"))
             #expect(derived.text.contains("Namecoin account+origin: MATCH"))
-            for literal in ["ATTACH", "attach root grants", " ATTACH ROOT GRANTS", "ATTACH ROOT GRANTS ", "MATCH", ""] {
-                privateRefusal(.canceled) { _ = try RootGrantsPrivateConfirmation.attach(initial, lines: initial.identities + [literal]) }
-            }
-            for literal in ["STORE", "MATCH", "store root grants", " STORE ROOT GRANTS", "STORE ROOT GRANTS ", ""] {
-                privateRefusal(.canceled) { _ = try RootGrantsPrivateConfirmation.store(derived, line: literal) }
-            }
-            for entries in [Array(initial.identities.prefix(2)) + ["ATTACH ROOT GRANTS"],
-                            ["wrong", initial.identities[1], initial.identities[2], "ATTACH ROOT GRANTS"]] {
-                privateRefusal(.canceled) { _ = try RootGrantsPrivateConfirmation.attach(initial, lines: entries) }
-            }
-            privateRefusal(.inputCanceled) { _ = try RootGrantsPrivateConfirmation.attach(initial, lines: nil) }
-            privateRefusal(.inputCanceled) { _ = try RootGrantsPrivateConfirmation.store(derived, line: nil) }
-            privateRefusal(.canceled) { _ = try RootGrantsPrivateConfirmation.store(derived, line: String(repeating: "A", count: 129)) }
+            #expect(derived.text.contains(derived.preparation.publicKey))
+            let displayed = RootGrantsTerminalReview.promptText(initial.text)
+            #expect(displayed.contains(String(decoding: initial.request.originalBytes, as: UTF8.self)))
+            for identity in initial.identities { #expect(displayed.contains(identity)) }
+            #expect(displayed.contains("Press Return to continue; Ctrl-C cancels."))
         }
+        var keys: [UInt8] = [120, 121, 13]
+        var proceeded = 0
+        try RootGrantsTerminalReview.checkpoint(confirm: {
+            try RootGrantsTerminalConfirmationKey.awaitReturn {
+                keys.isEmpty ? nil : keys.removeFirst()
+            }
+        }) { proceeded += 1 }
+        #expect(proceeded == 1)
+        for checkpoint in [[UInt8(120), 3], [UInt8(120)]] {
+            var keys = checkpoint
+            let expected: RootGrantsStatus = checkpoint.last == 3 ? .canceled : .inputCanceled
+            privateRefusal(expected) {
+                try RootGrantsTerminalConfirmationKey.awaitReturn {
+                    keys.isEmpty ? nil : keys.removeFirst()
+                }
+            }
+        }
+        var prepares = 0
+        var prepareKeys: [UInt8] = [3]
+        privateRefusal(.canceled) {
+            try RootGrantsTerminalReview.checkpoint(confirm: {
+                try RootGrantsTerminalConfirmationKey.awaitReturn {
+                    prepareKeys.isEmpty ? nil : prepareKeys.removeFirst()
+                }
+            }) { prepares += 1 }
+        }
+        #expect(prepares == 0)
+        var stores = 0
+        var storeKeys: [UInt8] = [3]
+        privateRefusal(.canceled) {
+            try RootGrantsTerminalReview.checkpoint(confirm: {
+                try RootGrantsTerminalConfirmationKey.awaitReturn {
+                    storeKeys.isEmpty ? nil : storeKeys.removeFirst()
+                }
+            }) { stores += 1 }
+        }
+        #expect(stores == 0)
     }
 
     // Request/preparation/public display stay complete and immutable. Public
@@ -160,16 +188,17 @@ struct RootGrantsPrivateTests {
                      "Preserve both existing paired ciphertexts"] { #expect(review.text.contains(text)) }
         #expect(review.text.hasSuffix("END OF COMPLETE MATCH AND STORE REVIEW"))
         privateRefusal(.bindingMismatch) {
-            _ = try review.confirmStore("STORE ROOT GRANTS", currentRequest: privateRequestV2 + Data([32]),
-                                        currentPreparation: review.preparation.originalBytes)
+            _ = try review.confirm(currentRequest: privateRequestV2 + Data([32]),
+                                   currentPreparation: review.preparation.originalBytes)
         }
         privateRefusal(.bindingMismatch) {
-            _ = try review.confirmStore("STORE ROOT GRANTS", currentRequest: privateRequestV2,
-                                        currentPreparation: review.preparation.originalBytes + Data([32]))
+            _ = try review.confirm(currentRequest: privateRequestV2,
+                                   currentPreparation: review.preparation.originalBytes + Data([32]))
         }
         let session = try NativeRootGrantsArchiveSession(publicRequest: privateRequestV2)
         defer { _ = session.close() }
-        let store = try RootGrantsPrivateConfirmation.store(review, line: "STORE ROOT GRANTS")
+        let store = try review.confirm(currentRequest: privateRequestV2,
+                                       currentPreparation: review.preparation.originalBytes)
         privateRefusal(.operationUnavailable) {
             try session.recheckBeforeWrap(store, currentRequest: privateRequestV2, currentPreparation: review.preparation.originalBytes)
         }

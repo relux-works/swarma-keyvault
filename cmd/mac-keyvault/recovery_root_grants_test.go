@@ -177,7 +177,7 @@ func TestRootGrantsAttachCLIUsageNeverReachesTheVault(t *testing.T) {
 				if json.Unmarshal([]byte(stdout), &reply) != nil || reply.OK || reply.Error == nil || reply.Error.Code != "usage" || reply.Error.Hint != usageLines["recovery"] || stderr != "" {
 					t.Fatalf("%s: not the usage envelope: %s%s", tc.name, stdout, stderr)
 				}
-			} else if stdout != "" || strings.Contains(stderr, "follow the review window") {
+			} else if stdout != "" || strings.Contains(stderr, "review window") {
 				t.Fatalf("%s: usage error printed the attach notice or stdout: %q %q", tc.name, stdout, stderr)
 			}
 		}
@@ -200,7 +200,7 @@ func TestRootGrantsAttachCLIStoredReceipt(t *testing.T) {
 			args = append([]string{"--json"}, args...)
 		}
 		code, stdout, stderr := rgInvoke(args...)
-		if code != exitOK || stderr != "root grants attach: follow the review window and the terminal prompts\n" {
+		if code != exitOK || stderr != "root grants attach: public review and word entry use the foreground Terminal\n" {
 			t.Fatalf("exit %d stderr %q", code, stderr)
 		}
 		if len(f.attachCalls) != 1 {

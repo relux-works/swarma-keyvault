@@ -247,14 +247,12 @@ struct RootGrantsInitialReview {
             "Root profile: \(RootGrantsPublicRequest.profile)", "Root derivation: \(RootGrantsPublicRequest.derivation)", "Root path: \(RootGrantsPublicRequest.path)",
             "Creation UTC: \(request.created)", "Original request SHA256: \(request.requestHash)",
             "Preserve both existing paired ciphertexts, metadata, identities and ACLs unchanged. Create only the distinct root item after all later checks.",
-            "Retype all three full identities exactly, then ATTACH ROOT GRANTS.",
             "Complete canonical public request: \(String(decoding: request.originalBytes, as: UTF8.self))"
         ], end: "END OF COMPLETE ATTACH ONLY REVIEW")
         snapshotHash = rootHash(Data(text.utf8))
     }
-    func confirmRetypes(_ entered: [String], attach: String, currentRequest: Data) throws -> RootGrantsPublicConfirmation {
+    func confirm(currentRequest: Data) throws -> RootGrantsPublicConfirmation {
         try rootRequire(currentRequest == request.originalBytes, .bindingMismatch)
-        try rootRequire(entered == identities && attach == "ATTACH ROOT GRANTS", .canceled)
         return RootGrantsPublicConfirmation(stage: .attachReviewed, requestHash: request.requestHash, snapshotHash: snapshotHash)
     }
 }
@@ -270,16 +268,15 @@ struct RootGrantsDerivedReview {
         text = try rootRender([initial.text, "Nostr pin: MATCH", "Namecoin account+origin: MATCH", "New root K: \(preparation.publicKey)",
             "Even-Y seal 02K: \(preparation.sealPublicKey)", "Exact P2PKH seal script: \(preparation.sealScript)",
             "Preparation SHA256: \(rootHash(preparation.originalBytes))", "Complete canonical public preparation: \(String(decoding: preparation.originalBytes, as: UTF8.self))",
-            "MATCH is display only. Type STORE ROOT GRANTS for this exact root destination and unchanged preparation."
+            "MATCH is display only. Review the exact values above."
         ], end: "END OF COMPLETE MATCH AND STORE REVIEW")
         snapshotHash = rootHash(Data(text.utf8))
     }
     private func unchanged(_ request: Data, _ response: Data) throws {
         try rootRequire(request == initial.request.originalBytes && response == preparation.originalBytes, .bindingMismatch)
     }
-    func confirmStore(_ entered: String, currentRequest: Data, currentPreparation: Data) throws -> RootGrantsPublicConfirmation {
+    func confirm(currentRequest: Data, currentPreparation: Data) throws -> RootGrantsPublicConfirmation {
         try unchanged(currentRequest, currentPreparation)
-        try rootRequire(entered == "STORE ROOT GRANTS", .canceled)
         return RootGrantsPublicConfirmation(stage: .storeReviewed, requestHash: initial.request.requestHash, snapshotHash: snapshotHash)
     }
 }

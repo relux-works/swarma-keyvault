@@ -1,8 +1,8 @@
 // Swift Testing SOURCE only. PUBLIC source-provided canonical v1/v2 examples
 // and public curve-point fixtures; no phrase/private key/input reader/owner UI,
 // C/native call, sealing, key creation or store is executed or simulated as proof.
-// These tests prove only their stated format/binding/comparison controls when
-// actually run. Compilation, discovery, all tests and native proof are NOT_RUN.
+// These tests prove only their stated format, rendering and binding controls;
+// they do not exercise a real terminal, native preparation or storage.
 import CryptoKit
 import Foundation
 import Testing
@@ -48,7 +48,7 @@ private func publicPreparation(_ requestBytes: Data) throws -> Data {
 private func rootReviews(_ bytes: Data = rootFixtureV2) throws -> (RootGrantsInitialReview, RootGrantsDerivedReview) {
     let request = try RootGrantsPublicRequest(ownedBytes: bytes)
     let initial = try RootGrantsInitialReview(request: request)
-    let attach = try initial.confirmRetypes(initial.identities, attach: "ATTACH ROOT GRANTS", currentRequest: bytes)
+    let attach = try initial.confirm(currentRequest: bytes)
     let preparation = try RootGrantsPreparationPublicView(ownedBytes: publicPreparation(bytes), request: request)
     return (initial, try RootGrantsDerivedReview(initial: initial, attach: attach, preparation: preparation))
 }
@@ -191,20 +191,16 @@ struct RootGrantsReviewTests {
         rootRefusal(.retainedRecordMismatch) { _ = try RootGrantsPublicRequest(ownedBytes: changedRoot(rootFixtureV2, "pair_metadata", .string("AA=="))) }
     }
 
-    // Exact three retypes + literal ATTACH bind public bytes only; misspellings,
-    // case/whitespace, missing fields, cancellation and changed bytes refuse.
-    @Test func initialRetypesAndAttach() throws {
+    // Return confirms the exact immutable first display; changed request bytes refuse.
+    @Test func initialTerminalReviewAndRequestBinding() throws {
         let (initial, _) = try rootReviews()
-        let confirmation = try initial.confirmRetypes(initial.identities, attach: "ATTACH ROOT GRANTS", currentRequest: rootFixtureV2)
+        let confirmation = try initial.confirm(currentRequest: rootFixtureV2)
         #expect(confirmation.stage == .attachReviewed)
         #expect(confirmation.requestHash == initial.request.requestHash)
-        for entered in [Array(initial.identities.prefix(2)), initial.identities + ["extra"], initial.identities.reversed().map { $0 }, ["misspelled", initial.identities[1], initial.identities[2]]] {
-            rootRefusal(.canceled) { _ = try initial.confirmRetypes(entered, attach: "ATTACH ROOT GRANTS", currentRequest: rootFixtureV2) }
-        }
-        for literal in ["ATTACH", "attach root grants", " ATTACH ROOT GRANTS", "ATTACH ROOT GRANTS ", "", "CANCEL"] {
-            rootRefusal(.canceled) { _ = try initial.confirmRetypes(initial.identities, attach: literal, currentRequest: rootFixtureV2) }
-        }
-        rootRefusal(.bindingMismatch) { _ = try initial.confirmRetypes(initial.identities, attach: "ATTACH ROOT GRANTS", currentRequest: rootFixtureV1) }
+        for identity in initial.identities { #expect(initial.text.contains(identity)) }
+        #expect(initial.text.contains(String(decoding: initial.request.originalBytes, as: UTF8.self)))
+        #expect(RootGrantsTerminalReview.promptText(initial.text).contains("Press Return to continue; Ctrl-C cancels."))
+        rootRefusal(.bindingMismatch) { _ = try initial.confirm(currentRequest: rootFixtureV1) }
     }
 
     // Published public K/02K/script shape plus exact pair correlation. This does
@@ -235,21 +231,18 @@ struct RootGrantsReviewTests {
         rootRefusal(.limitExceeded) { _ = try RootGrantsPreparationPublicView(ownedBytes: Data(repeating: 32, count: 131073), request: request) }
     }
 
-    // MATCH is display only; only the full final literal binds these immutable
-    // public bytes. No typed-MATCH token or native/private proof exists.
-    @Test func fullStoreLiteralAndChangedAfterReview() throws {
+    // Return confirms the exact second display and unchanged public snapshots.
+    @Test func secondTerminalReviewAndChangedAfterReview() throws {
         let (initial, review) = try rootReviews(), response = review.preparation.originalBytes
-        let store = try review.confirmStore("STORE ROOT GRANTS", currentRequest: rootFixtureV2, currentPreparation: response)
+        let store = try review.confirm(currentRequest: rootFixtureV2, currentPreparation: response)
         #expect(store.stage == .storeReviewed)
         #expect(store.snapshotHash == review.snapshotHash)
         #expect(review.text.contains("Nostr pin: MATCH"))
         #expect(review.text.contains("Namecoin account+origin: MATCH"))
+        #expect(review.text.contains(review.preparation.publicKey))
         rootRefusal(.operationUnavailable) { _ = try RootGrantsDerivedReview(initial: initial, attach: store, preparation: review.preparation) }
-        for literal in ["STORE", "MATCH", "store root grants", " STORE ROOT GRANTS", "STORE ROOT GRANTS ", "", "CANCEL"] {
-            rootRefusal(.canceled) { _ = try review.confirmStore(literal, currentRequest: rootFixtureV2, currentPreparation: response) }
-        }
-        rootRefusal(.bindingMismatch) { _ = try review.confirmStore("STORE ROOT GRANTS", currentRequest: rootFixtureV1, currentPreparation: response) }
-        rootRefusal(.bindingMismatch) { _ = try review.confirmStore("STORE ROOT GRANTS", currentRequest: rootFixtureV2, currentPreparation: response + Data([32])) }
+        rootRefusal(.bindingMismatch) { _ = try review.confirm(currentRequest: rootFixtureV1, currentPreparation: response) }
+        rootRefusal(.bindingMismatch) { _ = try review.confirm(currentRequest: rootFixtureV2, currentPreparation: response + Data([32])) }
     }
 
     // Archive statuses remain ROOT1..20; helper read refusals use the separate
@@ -313,12 +306,12 @@ struct RootGrantsReviewTests {
         #expect(preparation.requestHash == request.requestHash)
         let otherBytes = try changedRoot(rootFixtureV2, "service", .string("other-root"))
         let other = try RootGrantsPublicRequest(ownedBytes: otherBytes), initial = try RootGrantsInitialReview(request: other)
-        let attached = try initial.confirmRetypes(initial.identities, attach: "ATTACH ROOT GRANTS", currentRequest: otherBytes)
+        let attached = try initial.confirm(currentRequest: otherBytes)
         rootRefusal(.publicPinMismatch) { _ = try RootGrantsDerivedReview(initial: initial, attach: attached, preparation: preparation) }
         rootRefusal(.bindingMismatch) { _ = try RootGrantsSealedPublicView(ownedBytes: publicSealedShape(request, preparation), request: other, preparation: preparation) }
         let (_, review) = try rootReviews(), otherPreparation = try RootGrantsPreparationPublicView(ownedBytes: raw, request: other)
         let otherReview = try RootGrantsDerivedReview(initial: initial, attach: attached, preparation: otherPreparation)
-        let otherStore = try otherReview.confirmStore("STORE ROOT GRANTS", currentRequest: otherBytes, currentPreparation: raw)
+        let otherStore = try otherReview.confirm(currentRequest: otherBytes, currentPreparation: raw)
         #expect(otherStore.requestHash != review.initial.request.requestHash)
     }
 

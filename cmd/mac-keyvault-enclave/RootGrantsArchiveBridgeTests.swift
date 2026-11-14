@@ -2,7 +2,7 @@
 // factory, copy BEFORE preparation and close. They never invoke C Prepare,
 // C Seal, tty, owner UI, wrap/TouchID/Keychain or private material. Pure review
 // fixtures do not pretend to be preparation returned by a live C session.
-// Compilation, discovery and all test/native execution are NOT_RUN.
+// This suite does not exercise a real terminal or private storage path.
 import CryptoKit
 import Darwin
 import Foundation
@@ -31,7 +31,7 @@ private func archiveRawOpen(_ request: Data) -> (Int32, UInt64, Data) {
 private func archivePublicReviews(_ bytes: Data) throws -> (RootGrantsInitialReview, RootGrantsPublicConfirmation, RootGrantsDerivedReview, RootGrantsPublicConfirmation) {
     let request = try RootGrantsPublicRequest(ownedBytes: bytes)
     let initial = try RootGrantsInitialReview(request: request)
-    let attach = try initial.confirmRetypes(initial.identities, attach: "ATTACH ROOT GRANTS", currentRequest: bytes)
+    let attach = try initial.confirm(currentRequest: bytes)
     // PUBLIC shape fixture only. Never installed into the production wrapper.
     let k = "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
     let pair = try NativeArchiveJSON.decode(request.pair.canonicalBytes, maximum: 32768, canonical: true)
@@ -45,7 +45,7 @@ private func archivePublicReviews(_ bytes: Data) throws -> (RootGrantsInitialRev
     ]).canonical()
     let preparation = try RootGrantsPreparationPublicView(ownedBytes: response, request: request)
     let derived = try RootGrantsDerivedReview(initial: initial, attach: attach, preparation: preparation)
-    let store = try derived.confirmStore("STORE ROOT GRANTS", currentRequest: bytes, currentPreparation: response)
+    let store = try derived.confirm(currentRequest: bytes, currentPreparation: response)
     return (initial, attach, derived, store)
 }
 
