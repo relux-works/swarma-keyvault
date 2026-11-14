@@ -1,4 +1,3 @@
-import AppKit
 import CryptoKit
 import Darwin
 import Dispatch
@@ -274,8 +273,8 @@ struct RootGrantsSignV3Attempt {
     enum Phase: Equatable { case created, reviewed, presencePending, presenceFresh, consumed, closed }
     private(set) var phase: Phase = .created
 
-    mutating func confirmReview(_ entered: String) throws {
-        guard phase == .created, entered == "SIGN GRANT V3" else {
+    mutating func confirmReview() throws {
+        guard phase == .created else {
             phase = .closed
             throw RootGrantsReviewError(status: .canceled)
         }
@@ -297,6 +296,24 @@ struct RootGrantsSignV3Attempt {
         phase = .consumed
     }
     mutating func close() { phase = .closed }
+}
+
+enum RootGrantsSignV3ReviewFlow {
+    static func confirm(display: String, attempt: inout RootGrantsSignV3Attempt,
+                        using confirm: (String) throws -> Void) throws {
+        guard attempt.phase == .created else {
+            attempt.close()
+            throw RootGrantsReviewError(status: .canceled)
+        }
+        do {
+            try confirm(display)
+            try confirm(display)
+            try attempt.confirmReview()
+        } catch {
+            attempt.close()
+            throw error
+        }
+    }
 }
 
 private func signV3Decrypt(_ request: RootGrantsSignV3Request, context: LAContext) throws -> Data {
@@ -362,9 +379,9 @@ private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCanc
     let request = try RootGrantsSignV3Request(ownedBytes: original)
     var attempt = RootGrantsSignV3Attempt()
     defer { attempt.close() }
-    let entries = try RootGrantsNativeReview(text: request.display, labels: ["Type SIGN GRANT V3"],
-        cancellation: cancellation, transport: transport, title: "Root grants: grant-v3 signature review").run()
-    try attempt.confirmReview(entries.first ?? "")
+    try RootGrantsSignV3ReviewFlow.confirm(display: request.display, attempt: &attempt) { text in
+        try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation, transport: transport)
+    }
     try cancellation.check()
     try transport.checkOutput()
     try attempt.beginPresence() // Consume the only presence phase before calling LocalAuthentication.
