@@ -83,7 +83,8 @@ let package = Package(
             dependencies: ["KeyvaultNativeCore", "NamecoinArchiveABI"],
             path: "cmd/mac-keyvault-enclave",
             exclude: ["main.swift"] + coreSources,
-            sources: testSources
+            sources: testSources,
+            linkerSettings: [.linkedLibrary("util")]
         ),
     ],
     swiftLanguageModes: [.v5]

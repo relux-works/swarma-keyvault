@@ -183,8 +183,8 @@ enum RootGrantsTerminalConfirmationKey {
 }
 
 enum RootGrantsTerminalReview {
-    // Production and tests use the same ordering seam: a refusal at either
-    // checkpoint cannot call preparation, wrapping, or sealing afterward.
+    // A small unit-test utility only. Production confirmation ordering is
+    // owned by RootGrantsPrivateFlow below, and its tests exercise that flow.
     static func checkpoint<T>(confirm: () throws -> Void, proceed: () throws -> T) throws -> T {
         try confirm()
         return try proceed()
@@ -200,17 +200,37 @@ enum RootGrantsTerminalReview {
         let fd = "/dev/tty".withCString { Darwin.open($0, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK) }
         guard fd >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
         defer { _ = Darwin.close(fd) }
+        try requireForegroundTTY(fd)
+        try confirm(text: text, cancellation: cancellation, descriptor: fd,
+                    checkOutput: { try transport.checkOutput() })
+    }
+
+    // The production wrapper above opens only /dev/tty and checks its
+    // foreground process group. PTY tests pass a disposable descriptor into
+    // this same reader/termios implementation; it is never a runtime input
+    // source or a way to bypass production descriptor admission.
+    static func confirm(text: String, cancellation: RootGrantsPrivateCancellation,
+                        descriptor fd: Int32, checkOutput: () throws -> Void,
+                        afterArming: () throws -> Void = {}) throws {
+        guard text.utf8.count <= 1 << 20 else { throw RootGrantsReviewError(status: .limitExceeded) }
         var info = stat()
-        guard fd < FD_SETSIZE, isatty(fd) == 1, fstat(fd, &info) == 0,
-              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR),
-              tcgetpgrp(fd) > 0, tcgetpgrp(fd) == getpgrp() else {
+        guard fd >= 0, fd < FD_SETSIZE, isatty(fd) == 1, fstat(fd, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR) else {
             throw RootGrantsReviewError(status: .terminalRequired)
         }
         var original = termios()
         guard tcgetattr(fd, &original) == 0 else {
             throw RootGrantsReviewError(status: .terminalRequired)
         }
-        guard tcflush(fd, TCIFLUSH) == 0 else {
+        func flushPendingInput() -> Bool {
+            for _ in 0..<4 {
+                if tcflush(fd, TCIFLUSH) == 0 { return true }
+                if errno != EINTR { return false }
+            }
+            return false
+        }
+        // Discard input sent before the first review began, before raw mode.
+        guard flushPendingInput() else {
             throw RootGrantsReviewError(status: .terminalRequired)
         }
         var hidden = original
@@ -220,37 +240,65 @@ enum RootGrantsTerminalReview {
             controlCharacters[Int(VMIN)] = cc_t(1)
             controlCharacters[Int(VTIME)] = cc_t(0)
         }
-        guard tcsetattr(fd, TCSANOW, &hidden) == 0 else {
-            throw RootGrantsReviewError(status: .terminalRequired)
-        }
-        var changed = true
+        // Conservatively assume a failed raw-mode transition may have changed
+        // some flags. Install cleanup before calling tcsetattr so even EINTR
+        // or another partial failure attempts to restore the saved state.
+        var changed = false
         func restore() -> Bool {
             guard changed else { return true }
-            var saved = original
-            guard tcsetattr(fd, TCSANOW, &saved) == 0 else { return false }
-            var observed = termios()
-            guard tcgetattr(fd, &observed) == 0,
-                  observed.c_iflag == original.c_iflag, observed.c_oflag == original.c_oflag,
-                  observed.c_cflag == original.c_cflag, observed.c_lflag == original.c_lflag,
-                  observed.c_ispeed == original.c_ispeed, observed.c_ospeed == original.c_ospeed,
-                  withUnsafeBytes(of: observed.c_cc, { Array($0) }) == withUnsafeBytes(of: original.c_cc, { Array($0) }) else { return false }
-            changed = false
-            return true
+            for attempt in 0..<4 {
+                var saved = original
+                var installed = false
+                for _ in 0..<4 {
+                    if tcsetattr(fd, TCSANOW, &saved) == 0 { installed = true; break }
+                    if errno != EINTR { return false }
+                }
+                guard installed else { return false }
+                var observed = termios()
+                var readBack = false
+                for _ in 0..<4 {
+                    if tcgetattr(fd, &observed) == 0 { readBack = true; break }
+                    if errno != EINTR { return false }
+                }
+                guard readBack else { return false }
+                let ccEqual = withUnsafeBytes(of: observed.c_cc, { Array($0) }) ==
+                    withUnsafeBytes(of: original.c_cc, { Array($0) })
+                if observed.c_iflag == original.c_iflag && observed.c_oflag == original.c_oflag &&
+                   observed.c_cflag == original.c_cflag && observed.c_lflag == original.c_lflag &&
+                   observed.c_ispeed == original.c_ispeed && observed.c_ospeed == original.c_ospeed && ccEqual {
+                    changed = false
+                    return true
+                }
+                if attempt == 3 {
+                    return false
+                }
+                // Applying canonical mode can mark input for reprocessing on
+                // Darwin. The queue must be empty before retrying restoration.
+                guard flushPendingInput() else { return false }
+            }
+            return false
         }
-        defer { _ = restore() }
+        // Every exit after raw mode first removes queued input while echo is
+        // still disabled. If flushing fails, keep echo disabled and refuse;
+        // restoring it would expose an unread private tail to the next reader.
+        defer {
+            if changed, flushPendingInput() { _ = restore() }
+        }
+        changed = true
+        guard tcsetattr(fd, TCSANOW, &hidden) == 0 else {
+            let flushed = flushPendingInput()
+            guard flushed, restore() else {
+                throw RootGrantsReviewError(status: .operationUnavailable)
+            }
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
 
         func write(_ raw: Data) throws {
             var offset = 0
             while offset < raw.count {
                 try cancellation.check()
-                try transport.checkOutput()
-                var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                let ready = Darwin.poll(&descriptor, 1, 100)
-                if ready < 0, errno == EINTR { continue }
-                guard ready >= 0, descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else {
-                    throw RootGrantsReviewError(status: .terminalRequired)
-                }
-                guard ready > 0 else { continue }
+                try checkOutput()
+                try wait(fd, writing: true)
                 let count = raw.withUnsafeBytes {
                     Darwin.write(fd, $0.baseAddress!.advanced(by: offset), raw.count - offset)
                 }
@@ -262,14 +310,8 @@ enum RootGrantsTerminalReview {
         func nextByte() throws -> UInt8? {
             while true {
                 try cancellation.reviewDeadline()
-                try transport.checkOutput()
-                var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-                let ready = Darwin.poll(&descriptor, 1, 100)
-                if ready < 0, errno == EINTR { continue }
-                guard ready >= 0, descriptor.revents & Int16(POLLERR | POLLHUP | POLLNVAL) == 0 else {
-                    throw RootGrantsReviewError(status: .terminalRequired)
-                }
-                guard ready > 0 else { continue }
+                try checkOutput()
+                try wait(fd, writing: false)
                 var byte: UInt8 = 0
                 let count = Darwin.read(fd, &byte, 1)
                 if count < 0, errno == EINTR || errno == EAGAIN { continue }
@@ -277,18 +319,76 @@ enum RootGrantsTerminalReview {
                 return count == 0 ? nil : byte
             }
         }
+        func wait(_ descriptor: Int32, writing: Bool) throws {
+            while true {
+                try cancellation.reviewDeadline()
+                try checkOutput()
+                var readable = fd_set()
+                var writable = fd_set()
+                withUnsafeMutableBytes(of: &readable) { $0.initializeMemory(as: UInt8.self, repeating: 0) }
+                withUnsafeMutableBytes(of: &writable) { $0.initializeMemory(as: UInt8.self, repeating: 0) }
+                if writing { __darwin_fd_set(descriptor, &writable) }
+                else { __darwin_fd_set(descriptor, &readable) }
+                var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+                let ready = writing
+                    ? Darwin.select(descriptor + 1, nil, &writable, nil, &timeout)
+                    : Darwin.select(descriptor + 1, &readable, nil, nil, &timeout)
+                if ready < 0, errno == EINTR { continue }
+                guard ready >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+                if ready == 0 { continue }
+                if writing ? __darwin_fd_isset(descriptor, &writable) != 0 :
+                             __darwin_fd_isset(descriptor, &readable) != 0 { return }
+            }
+        }
 
         var failure: Error?
         do {
             let prompt = promptText(text)
             try write(Data(prompt.utf8))
+            // Input arriving while the complete review is rendered is
+            // type-ahead, not consent. Arm only after display output finishes.
+            guard flushPendingInput() else { throw RootGrantsReviewError(status: .terminalRequired) }
+            try afterArming()
             try RootGrantsTerminalConfirmationKey.awaitReturn(next: nextByte)
-            guard tcflush(fd, TCIFLUSH) == 0 else {
-                throw RootGrantsReviewError(status: .terminalRequired)
-            }
         } catch { failure = error }
+        let flushed = flushPendingInput()
+        guard flushed else { throw RootGrantsReviewError(status: .operationUnavailable) }
         guard restore() else { throw RootGrantsReviewError(status: .operationUnavailable) }
         if let failure { throw failure }
+    }
+
+    private static func requireForegroundTTY(_ fd: Int32) throws {
+        var info = stat()
+        let foreground = tcgetpgrp(fd)
+        guard fd < FD_SETSIZE, isatty(fd) == 1, fstat(fd, &info) == 0,
+              info.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR),
+              foreground > 0, foreground == getpgrp() else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+    }
+}
+
+// One production operation skeleton owns both confirmation call sites. The
+// private helper wires real review/prepare/wrap/seal closures below; tests use
+// inert closures to prove either refusal stops before later effects.
+enum RootGrantsPrivateFlow {
+    static func perform<Attach, Review, Store, Wrap, Result>(
+        initialText: String,
+        reviewText: (Review) -> String,
+        confirm: (String) throws -> Void,
+        attach: () throws -> Attach,
+        prepare: (Attach) throws -> Review,
+        store: (Review) throws -> Store,
+        wrap: (Review, Store) throws -> Wrap,
+        seal: (Review, Store, Wrap) throws -> Result
+    ) throws -> Result {
+        try confirm(initialText)
+        let attachConfirmation = try attach()
+        let review = try prepare(attachConfirmation)
+        try confirm(reviewText(review))
+        let storeConfirmation = try store(review)
+        let qualifiedWrap = try wrap(review, storeConfirmation)
+        return try seal(review, storeConfirmation, qualifiedWrap)
     }
 }
 
@@ -372,6 +472,50 @@ final class RootGrantsPrivateCancellation {
         signing?()
         return active?.close() ?? .success
     }
+}
+
+// Catchable process signals are ignored at the process disposition layer and
+// observed by DispatchSource before the terminal enters raw mode. Dispatch
+// handlers cancel on a queue; no asynchronous signal handler calls Swift code.
+final class RootGrantsPrivateSignals {
+    static let handledSignals = [SIGINT, SIGHUP, SIGQUIT, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU]
+    private let sources: [DispatchSourceSignal]
+    private let restoreHandlers: [() -> Void]
+    private let lock = NSLock()
+    private var stopped = false
+
+    init(cancellation: RootGrantsPrivateCancellation, queue: DispatchQueue) {
+        var sources: [DispatchSourceSignal] = []
+        var restoreHandlers: [() -> Void] = []
+        for number in Self.handledSignals {
+            let previous = Darwin.signal(number, SIG_IGN)
+            restoreHandlers.append { _ = Darwin.signal(number, previous) }
+            let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
+            source.setEventHandler { cancellation.cancel(.canceled) }
+            source.resume()
+            sources.append(source)
+        }
+        self.sources = sources
+        self.restoreHandlers = restoreHandlers
+    }
+
+    func stop() {
+        lock.lock()
+        guard !stopped else { lock.unlock(); return }
+        stopped = true
+        lock.unlock()
+
+        let cancelled = DispatchGroup()
+        for source in sources {
+            cancelled.enter()
+            source.setCancelHandler { cancelled.leave() }
+            source.cancel()
+        }
+        cancelled.wait()
+        for restore in restoreHandlers.reversed() { restore() }
+    }
+
+    deinit { stop() }
 }
 
 // Only known noninteractive denials qualify the silent-use negative control.
@@ -505,22 +649,20 @@ func rootGrantsPrivate() -> Int32 {
     let deadline = RootGrantsPrivateDeadline(startedAt: DispatchTime.now().uptimeNanoseconds)
     let cancellation = RootGrantsPrivateCancellation(deadline: deadline)
     let queue = DispatchQueue(label: "keyvault.root-attachment-cancellation")
-    signal(SIGTERM, SIG_IGN)
     signal(SIGPIPE, SIG_IGN)
-    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: queue)
-    termination.setEventHandler { cancellation.cancel() }
-    termination.resume() // Registered before Open/private work/publication.
+    let signals = RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
+    defer { signals.stop() } // All relevant signals precede any tty mutation.
     let timeout = DispatchSource.makeTimerSource(queue: queue)
     timeout.schedule(deadline: DispatchTime(uptimeNanoseconds: deadline.expiresAt))
     timeout.setEventHandler { cancellation.cancel(.timeout) }
     timeout.resume() // The original deadline also closes a blocked real Prepare.
     defer { timeout.cancel() }
     let parent = getppid()
-    guard parent > 1 else { termination.cancel(); return 1 }
+    guard parent > 1 else { return 1 }
     let parentExit = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: queue)
     parentExit.setEventHandler { cancellation.cancel(.privateProtocolError) }
     parentExit.resume()
-    defer { termination.cancel(); parentExit.cancel(); _ = cancellation.finish() }
+    defer { parentExit.cancel(); _ = cancellation.finish() }
     guard getppid() == parent else { return 1 }
     let transport: RootGrantsPrivateTransport
     do { transport = try RootGrantsPrivateTransport(cancellation) }
@@ -535,28 +677,39 @@ func rootGrantsPrivate() -> Int32 {
             let session = try NativeRootGrantsArchiveSession(publicRequest: bytes)
             try cancellation.publish(session) // A racing signal closes before Prepare.
             let initial = session.initialReview
-            let review = try RootGrantsTerminalReview.checkpoint(confirm: {
-                try RootGrantsTerminalReview.confirm(text: initial.text, cancellation: cancellation, transport: transport)
-            }) {
-                let attach = try initial.confirm(currentRequest: initial.request.originalBytes)
-                try cancellation.check()
-                return try session.prepare(after: attach, currentRequest: initial.request.originalBytes)
-            }
-            let result = try RootGrantsTerminalReview.checkpoint(confirm: {
-                try RootGrantsTerminalReview.confirm(text: review.text, cancellation: cancellation, transport: transport)
-            }) {
-                let store = try review.confirm(currentRequest: initial.request.originalBytes,
-                                               currentPreparation: review.preparation.originalBytes)
-                try cancellation.check()
-                let wrap = try RootGrantsQualifiedWrap.create(review: review, store: store, session: session,
-                    cancellation: cancellation, transport: transport)
-                try cancellation.check()
-                try transport.checkOutput()
-                let sealed = try session.sealAfterReviewedStore(store, currentRequest: initial.request.originalBytes,
-                    currentPreparation: review.preparation.originalBytes, publicPoint: wrap.point, sealedDeviceBlob: wrap.blob)
-                try cancellation.check()
-                return sealed
-            }
+            let result = try RootGrantsPrivateFlow.perform(
+                initialText: initial.text,
+                reviewText: { $0.text },
+                confirm: { text in
+                    try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation, transport: transport)
+                },
+                attach: {
+                    try initial.confirm(currentRequest: initial.request.originalBytes)
+                },
+                prepare: { attach in
+                    try cancellation.check()
+                    return try session.prepare(after: attach, currentRequest: initial.request.originalBytes)
+                },
+                store: { review in
+                    let store = try review.confirm(currentRequest: initial.request.originalBytes,
+                                                   currentPreparation: review.preparation.originalBytes)
+                    try cancellation.check()
+                    return store
+                },
+                wrap: { review, store in
+                    try cancellation.check()
+                    return try RootGrantsQualifiedWrap.create(review: review, store: store, session: session,
+                        cancellation: cancellation, transport: transport)
+                },
+                seal: { review, store, wrap in
+                    try cancellation.check()
+                    try transport.checkOutput()
+                    let sealed = try session.sealAfterReviewedStore(store, currentRequest: initial.request.originalBytes,
+                        currentPreparation: review.preparation.originalBytes, publicPoint: wrap.point, sealedDeviceBlob: wrap.blob)
+                    try cancellation.check()
+                    return sealed
+                }
+            )
             return .sealed(result.originalBytes)
         }
     } catch {

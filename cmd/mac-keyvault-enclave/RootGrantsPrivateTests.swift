@@ -1,7 +1,7 @@
-// Swift Testing SOURCE: public codecs, comparisons, disposable pipe fixtures
-// and actual PUBLIC C Open/Close only. No C Prepare/Seal, owner UI, real tty,
-// hardware key, LAContext or Keychain operation is invoked by these tests.
-// Terminal key tests use injected bytes and do not prove real terminal restoration.
+// Swift Testing SOURCE: public codecs, disposable pipe/PTY fixtures and actual
+// PUBLIC C Open/Close only. PTY controls run the production terminal reader and
+// verify cleanup; no helper, C Prepare/Seal, owner controlling tty, hardware
+// key, LAContext or Keychain operation is invoked by these tests.
 import Darwin
 import Foundation
 import LocalAuthentication
@@ -278,6 +278,357 @@ struct RootGrantsPrivateTests {
                       NSError(domain: "public-fixture", code: Int(Security.errSecInteractionNotAllowed))] {
             #expect(!RootGrantsSilentProbe.refused(error))
         }
+    }
+}
+
+@Suite
+struct RootGrantsPrivateFlowTests {
+    // This is the exact staged flow called by rootGrantsPrivate. Refusals at
+    // either production confirmation must prevent every later store/wrap/seal
+    // effect; two generic checkpoint fixtures alone do not prove this wiring.
+    @Test func productionFlowRequiresBothDistinctConfirmations() throws {
+        struct PreparedReview { let text: String }
+        let initialText = "FIRST: stored pair and identities"
+        let preparedText = "SECOND: MATCH lines and preparation key"
+
+        for refusedConfirmation in 1...2 {
+            var confirmations: [String] = []
+            var attachCount = 0, prepareCount = 0, storeCount = 0, wrapCount = 0, sealCount = 0
+            privateRefusal(.canceled) {
+                _ = try RootGrantsPrivateFlow.perform(
+                    initialText: initialText,
+                    reviewText: { $0.text },
+                    confirm: { text in
+                        confirmations.append(text)
+                        if confirmations.count == refusedConfirmation {
+                            throw RootGrantsReviewError(status: .canceled)
+                        }
+                    },
+                    attach: { attachCount += 1; return "attach-confirmation" },
+                    prepare: { _ in prepareCount += 1; return PreparedReview(text: preparedText) },
+                    store: { _ in storeCount += 1; return "store-confirmation" },
+                    wrap: { _, _ in wrapCount += 1; return "qualified-wrap" },
+                    seal: { _, _, _ in sealCount += 1; return "sealed" }
+                )
+            }
+            #expect(confirmations == Array([initialText, preparedText].prefix(refusedConfirmation)))
+            #expect(attachCount == (refusedConfirmation == 1 ? 0 : 1))
+            #expect(prepareCount == (refusedConfirmation == 1 ? 0 : 1))
+            #expect(storeCount == 0 && wrapCount == 0 && sealCount == 0)
+        }
+
+        var events: [String] = []
+        let sealed = try RootGrantsPrivateFlow.perform(
+            initialText: initialText,
+            reviewText: { $0.text },
+            confirm: { events.append("confirm:" + $0) },
+            attach: { events.append("attach"); return "attach-confirmation" },
+            prepare: { _ in events.append("prepare"); return PreparedReview(text: preparedText) },
+            store: { _ in events.append("store"); return "store-confirmation" },
+            wrap: { _, _ in events.append("wrap"); return "qualified-wrap" },
+            seal: { _, _, _ in events.append("seal"); return "sealed" }
+        )
+        #expect(sealed == "sealed")
+        #expect(events == ["confirm:" + initialText, "attach", "prepare", "confirm:" + preparedText,
+                           "store", "wrap", "seal"])
+    }
+}
+
+private enum RootGrantsPTYOutcomeValue {
+    case accepted
+    case refused(RootGrantsStatus)
+}
+
+private final class RootGrantsPTYOutcome {
+    private let lock = NSLock()
+    private var value: RootGrantsPTYOutcomeValue?
+    let finished = DispatchSemaphore(value: 0)
+
+    func finish(_ value: RootGrantsPTYOutcomeValue) {
+        lock.lock(); self.value = value; lock.unlock()
+        finished.signal()
+    }
+    func snapshot() -> RootGrantsPTYOutcomeValue? {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+}
+
+// Disposable PTY controls enter the same production reader core used after
+// /dev/tty admission. They do not exercise the helper, vault, Keychain or UI.
+@Suite(.serialized)
+struct RootGrantsTerminalPTYTests {
+    private let promptSuffix = Data("Press Return to continue; Ctrl-C cancels.".utf8)
+
+    @Test func catchableSignalSetIncludesTerminalAndJobControlSignals() {
+        #expect(Set(RootGrantsPrivateSignals.handledSignals) ==
+                Set([SIGINT, SIGHUP, SIGQUIT, SIGTERM, SIGTSTP, SIGTTIN, SIGTTOU]))
+    }
+
+    @Test func productionReaderUsesSelectAndAcceptsFreshReturn() throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let outcome = startReader(slave: slave, text: "PTY production reader",
+                                  cancellation: cancellation, afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        guard outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut else {
+            Issue.record("Reader exited before rendering its prompt: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        let output = try readUntil(master, suffix: promptSuffix)
+        #expect(output.range(of: promptSuffix) != nil)
+        #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+        try writePTY(master, Data([13]))
+        #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        guard case .accepted? = outcome.snapshot() else {
+            Issue.record("The production terminal reader did not accept the fresh Return: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(sameTermios(original, try currentTermios(slave)))
+    }
+
+    @Test func darwinSelectControlSeesDisposablePTYReadiness() throws {
+        let (master, slave, _) = try makePTY()
+        defer { _ = Darwin.close(master); _ = Darwin.close(slave) }
+        var writable = emptyFDSet()
+        __darwin_fd_set(slave, &writable)
+        var timeout = timeval(tv_sec: 1, tv_usec: 0)
+        let canWrite = Darwin.select(slave + 1, nil, &writable, nil, &timeout)
+        #expect(canWrite > 0 && __darwin_fd_isset(slave, &writable) != 0)
+        let sent: UInt8 = 0x5a
+        let wrote = withUnsafeBytes(of: sent) { Darwin.write(slave, $0.baseAddress!, 1) }
+        #expect(wrote == 1)
+        var readable = emptyFDSet()
+        __darwin_fd_set(master, &readable)
+        timeout = timeval(tv_sec: 1, tv_usec: 0)
+        let canRead = Darwin.select(master + 1, &readable, nil, nil, &timeout)
+        #expect(canRead > 0 && __darwin_fd_isset(master, &readable) != 0)
+        var received: UInt8 = 0
+        #expect(Darwin.read(master, &received, 1) == 1)
+        #expect(received == sent)
+    }
+
+    @Test func typeaheadBeforeAndDuringRenderingNeedsFreshReturn() throws {
+        for duringRendering in [false, true] {
+            let (master, slave, original) = try makePTY()
+            let cancellation = RootGrantsPrivateCancellation()
+            let armed = DispatchSemaphore(value: 0)
+            let text = duringRendering ? String(repeating: "R", count: 64 * 1024) : "short review"
+            if !duringRendering { try writePTY(master, Data([13])) }
+            let outcome = startReader(slave: slave, text: text,
+                                      cancellation: cancellation, afterArming: { armed.signal() })
+            defer {
+                cancellation.cancel()
+                _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+                _ = Darwin.close(master); _ = Darwin.close(slave)
+            }
+            var output = Data()
+            if duringRendering {
+                let first = try readSome(master, maximum: 2048)
+                #expect(!first.isEmpty)
+                #expect(first.count < RootGrantsTerminalReview.promptText(text).utf8.count)
+                output.append(first)
+                try writePTY(master, Data([13])) // Arrives while a long review is still rendering.
+            }
+            output = try readUntil(master, suffix: promptSuffix, startingWith: output)
+            #expect(output.range(of: promptSuffix) != nil)
+            #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+            #expect(outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut,
+                    "Queued Return must be discarded before the reader is armed")
+            try writePTY(master, Data([13]))
+            #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+            guard case .accepted? = outcome.snapshot() else {
+                Issue.record("A fresh Return should confirm after queued input is discarded: \(String(describing: outcome.snapshot()))")
+                return
+            }
+            #expect(sameTermios(original, try currentTermios(slave)))
+        }
+    }
+
+    @Test func cancellationDeadlineAndIOErrorFlushQueuedTailBeforeRestore() throws {
+        try assertQueuedTailIsGone(cause: .ctrlC)
+        try assertQueuedTailIsGone(cause: .deadline)
+        try assertQueuedTailIsGone(cause: .ioError)
+    }
+
+    @Test func processSignalCancelsReaderAndRestoresPTY() throws {
+        for signalNumber in RootGrantsPrivateSignals.handledSignals {
+            // Keep even job-control and core-dump signals ignored at the test
+            // process boundary. The production DispatchSource must still
+            // observe each one and cancel the active reader.
+            let previousDisposition = Darwin.signal(signalNumber, SIG_IGN)
+            defer { _ = Darwin.signal(signalNumber, previousDisposition) }
+            let (master, slave, original) = try makePTY()
+            let cancellation = RootGrantsPrivateCancellation()
+            let queue = DispatchQueue(label: "root-grants-pty-signal-control")
+            let signals = RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
+            let outcome = startReader(slave: slave, text: "signal cleanup",
+                                      cancellation: cancellation, afterArming: {
+                try writePTY(master, Data("PRIVATE-TAIL\n".utf8))
+                guard Darwin.kill(getpid(), signalNumber) == 0 else {
+                    throw RootGrantsReviewError(status: .privateProtocolError)
+                }
+            })
+            defer {
+                cancellation.cancel()
+                _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+                signals.stop()
+                _ = Darwin.close(master); _ = Darwin.close(slave)
+            }
+            _ = try readUntil(master, suffix: promptSuffix)
+            #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+            guard case .refused(.canceled)? = outcome.snapshot() else {
+                Issue.record("Catchable signal \(signalNumber) must safely cancel the raw-mode reader")
+                return
+            }
+            #expect(sameTermios(original, try currentTermios(slave)))
+            assertNoQueuedBytes(slave)
+        }
+    }
+
+    private enum ExitCause: Equatable { case ctrlC, deadline, ioError }
+
+    private func assertQueuedTailIsGone(cause: ExitCause) throws {
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        var failOutput = false
+        let tail = cause == .ctrlC ? Data([3, 84, 65, 73, 76, 10]) : Data("PRIVATE-TAIL\n".utf8)
+        let outcome = startReader(slave: slave, text: "cleanup",
+            cancellation: cancellation,
+            checkOutput: {
+                if failOutput { throw RootGrantsReviewError(status: .terminalRequired) }
+            },
+            afterArming: {
+                try writePTY(master, tail)
+                if cause == .deadline { cancellation.cancel(.timeout) }
+                if cause == .ioError { failOutput = true }
+            })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        _ = try readUntil(master, suffix: promptSuffix)
+        #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        let expected: RootGrantsStatus = cause == .ctrlC ? .canceled :
+            (cause == .deadline ? .timeout : .terminalRequired)
+        guard case .refused(let actual)? = outcome.snapshot(), actual == expected else {
+            Issue.record("Expected terminal refusal \(expected) for cleanup cause \(cause), observed \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
+    }
+
+    private func startReader(slave: Int32, text: String,
+                             cancellation: RootGrantsPrivateCancellation,
+                             checkOutput: @escaping () throws -> Void = {},
+                             afterArming: @escaping () throws -> Void = {}) -> RootGrantsPTYOutcome {
+        let outcome = RootGrantsPTYOutcome()
+        DispatchQueue.global().async {
+            do {
+                try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation,
+                    descriptor: slave, checkOutput: checkOutput, afterArming: afterArming)
+                outcome.finish(.accepted)
+            } catch let error as RootGrantsReviewError {
+                outcome.finish(.refused(error.status))
+            } catch {
+                outcome.finish(.refused(.privateProtocolError))
+            }
+        }
+        return outcome
+    }
+
+    private func makePTY() throws -> (Int32, Int32, termios) {
+        var master: Int32 = -1, slave: Int32 = -1
+        guard openpty(&master, &slave, nil, nil, nil) == 0 else {
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        let flags = fcntl(slave, F_GETFL)
+        guard flags >= 0, fcntl(slave, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+            throw RootGrantsReviewError(status: .terminalRequired)
+        }
+        do { return (master, slave, try currentTermios(slave)) }
+        catch { _ = Darwin.close(master); _ = Darwin.close(slave); throw error }
+    }
+
+    private func currentTermios(_ fd: Int32) throws -> termios {
+        var value = termios()
+        guard tcgetattr(fd, &value) == 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+        return value
+    }
+
+    private func sameTermios(_ a: termios, _ b: termios) -> Bool {
+        a.c_iflag == b.c_iflag && a.c_oflag == b.c_oflag && a.c_cflag == b.c_cflag &&
+        a.c_lflag == b.c_lflag && a.c_ispeed == b.c_ispeed && a.c_ospeed == b.c_ospeed &&
+        withUnsafeBytes(of: a.c_cc, { Array($0) }) == withUnsafeBytes(of: b.c_cc, { Array($0) })
+    }
+
+    private func readSome(_ fd: Int32, maximum: Int) throws -> Data {
+        var set = emptyFDSet(); __darwin_fd_set(fd, &set)
+        var timeout = timeval(tv_sec: 3, tv_usec: 0)
+        let ready = Darwin.select(fd + 1, &set, nil, nil, &timeout)
+        guard ready > 0 else { throw RootGrantsReviewError(status: .timeout) }
+        var bytes = [UInt8](repeating: 0, count: maximum)
+        let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress!, $0.count) }
+        guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+        return Data(bytes.prefix(count))
+    }
+
+    private func readUntil(_ fd: Int32, suffix: Data, startingWith initial: Data = Data()) throws -> Data {
+        var output = initial
+        let deadline = DispatchTime.now().uptimeNanoseconds + 5_000_000_000
+        // PTY output applies ONLCR, so a prompt ending in a newline may be
+        // observed with CRLF or followed by additional terminal bytes.
+        while output.range(of: suffix) == nil {
+            guard DispatchTime.now().uptimeNanoseconds < deadline else {
+                Issue.record("Disposable PTY read timed out after \(output.count) output bytes")
+                throw RootGrantsReviewError(status: .timeout)
+            }
+            var set = emptyFDSet(); __darwin_fd_set(fd, &set)
+            var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
+            let ready = Darwin.select(fd + 1, &set, nil, nil, &timeout)
+            if ready < 0, errno == EINTR { continue }
+            guard ready >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+            if ready == 0 { continue }
+            var bytes = [UInt8](repeating: 0, count: 8192)
+            let count = bytes.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress!, $0.count) }
+            if count < 0, errno == EINTR || errno == EAGAIN { continue }
+            guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+            output.append(contentsOf: bytes.prefix(count))
+        }
+        return output
+    }
+
+    private func writePTY(_ fd: Int32, _ data: Data) throws {
+        var offset = 0
+        while offset < data.count {
+            let count = data.withUnsafeBytes {
+                Darwin.write(fd, $0.baseAddress!.advanced(by: offset), data.count - offset)
+            }
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+            offset += count
+        }
+    }
+
+    private func assertNoQueuedBytes(_ fd: Int32) {
+        var byte: UInt8 = 0
+        let count = Darwin.read(fd, &byte, 1)
+        #expect(count == -1)
+        #expect(errno == EAGAIN || errno == EWOULDBLOCK)
+    }
+
+    private func emptyFDSet() -> fd_set {
+        var set = fd_set()
+        _ = withUnsafeMutableBytes(of: &set) { $0.initializeMemory(as: UInt8.self, repeating: 0) }
+        return set
     }
 }
 
