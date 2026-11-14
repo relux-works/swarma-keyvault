@@ -11,7 +11,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -165,13 +167,77 @@ func psbtFixture(t *testing.T, mode, name string) []byte {
 	t.Helper()
 	return read(t, filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", mode, name))
 }
+
+// freshDir stages fixtures under a new private0700 directory whose whole
+// ancestry the strict public reader admits. t.TempDir is deliberately not
+// used: its root follows TMPDIR/GOTMPDIR, and shared sticky/writable temp
+// roots (the hosted-runner /tmp default) are correctly refused by
+// internal/namecoinfiles. Bases mirror that package's fixture precedent
+// (OS account home first) and fall back in order; reader policy itself is
+// unchanged and still enforced by the consuming tests.
 func freshDir(t *testing.T) string {
 	t.Helper()
-	p, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	var bases []string
+	if account, err := user.LookupId(strconv.Itoa(os.Getuid())); err == nil && account.HomeDir != "" {
+		bases = append(bases, account.HomeDir)
 	}
-	return p
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		bases = append(bases, home)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		bases = append(bases, wd)
+	}
+	seen := map[string]bool{}
+	var rejected []string
+	for _, base := range bases {
+		if seen[base] {
+			continue
+		}
+		seen[base] = true
+		p, err := os.MkdirTemp(base, ".namecoin-registration-test-")
+		if err != nil {
+			rejected = append(rejected, base+": "+err.Error())
+			continue
+		}
+		resolved, err := filepath.EvalSymlinks(p)
+		if err == nil {
+			resolved, err = filepath.Abs(resolved)
+		}
+		if err != nil || !admittedAncestry(resolved) {
+			_ = os.RemoveAll(p)
+			rejected = append(rejected, base+": ancestry not admitted")
+			continue
+		}
+		t.Cleanup(func() {
+			if err := os.RemoveAll(resolved); err != nil {
+				t.Errorf("remove private fixture directory: %v", err)
+			}
+		})
+		return resolved
+	}
+	t.Fatalf("no fixture root with admitted ancestry: %s", strings.Join(rejected, "; "))
+	return ""
+}
+
+// admittedAncestry mirrors the directory shape internal/namecoinfiles
+// requires: every ancestor a non-symlink directory without group/other
+// write or setuid/setgid/sticky bits. Ownership remains enforced by the
+// reader itself, not by this placement check.
+func admittedAncestry(dir string) bool {
+	for {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		if info.Mode().Perm()&0o022 != 0 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return true
+		}
+		dir = parent
+	}
 }
 func (e *fixtureEnv) base() map[string][]byte {
 	return map[string][]byte{"profile.json": bytes.Clone(e.profile), "account-pin.json": bytes.Clone(e.pin)}
