@@ -342,15 +342,31 @@ private enum RootGrantsPTYOutcomeValue {
 private final class RootGrantsPTYOutcome {
     private let lock = NSLock()
     private var value: RootGrantsPTYOutcomeValue?
-    let finished = DispatchSemaphore(value: 0)
+    let finished = DispatchGroup()
+
+    init() { finished.enter() }
 
     func finish(_ value: RootGrantsPTYOutcomeValue) {
         lock.lock(); self.value = value; lock.unlock()
-        finished.signal()
+        finished.leave()
     }
     func snapshot() -> RootGrantsPTYOutcomeValue? {
         lock.lock(); defer { lock.unlock() }
         return value
+    }
+}
+
+private final class RootGrantsPTYFlowEffects {
+    private let lock = NSLock()
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        lock.lock(); values.append(value); lock.unlock()
+    }
+
+    func snapshot() -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return values
     }
 }
 
@@ -469,7 +485,8 @@ struct RootGrantsTerminalPTYTests {
             let signals = RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
             let outcome = startReader(slave: slave, text: "signal cleanup",
                                       cancellation: cancellation, afterArming: {
-                try writePTY(master, Data("PRIVATE-TAIL\n".utf8))
+                // No Return here: the signal, not a queued key, must cancel.
+                try writePTY(master, Data("PRIVATE-TAIL".utf8))
                 guard Darwin.kill(getpid(), signalNumber) == 0 else {
                     throw RootGrantsReviewError(status: .privateProtocolError)
                 }
@@ -483,12 +500,84 @@ struct RootGrantsTerminalPTYTests {
             _ = try readUntil(master, suffix: promptSuffix)
             #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
             guard case .refused(.canceled)? = outcome.snapshot() else {
-                Issue.record("Catchable signal \(signalNumber) must safely cancel the raw-mode reader")
+                Issue.record("Catchable signal \(signalNumber) must safely cancel the raw-mode reader; observed \(String(describing: outcome.snapshot()))")
                 return
             }
             #expect(sameTermios(original, try currentTermios(slave)))
             assertNoQueuedBytes(slave)
         }
+    }
+
+    @Test func productionFlowCancelsAtFirstRawOutputCheckBeforeAnyEffect() throws {
+        let (initial, _) = try privateReviews(privateRequestV2)
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let effects = RootGrantsPTYFlowEffects()
+        var injectCancel = true
+        let outcome = startFlow(slave: slave, initialText: initial.text,
+                                cancellation: cancellation, effects: effects,
+                                checkOutput: {
+            if injectCancel {
+                injectCancel = false
+                try writePTY(master, Data([3]))
+            }
+        }, afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        let finishedAfterCancel = outcome.finished.wait(timeout: .now() + .milliseconds(500))
+        #expect(finishedAfterCancel == .success, "Ctrl-C at the first raw-mode output check must cancel")
+        if finishedAfterCancel == .timedOut {
+            _ = try readUntil(master, suffix: promptSuffix)
+            #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+            try writePTY(master, Data([13]))
+            #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        }
+        guard case .refused(.canceled)? = outcome.snapshot() else {
+            Issue.record("First-output Ctrl-C was discarded; later Return accepted: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot().isEmpty)
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
+    }
+
+    @Test func productionFlowCancelsDuringReviewRenderingBeforeAnyEffect() throws {
+        let (initial, _) = try privateReviews(privateRequestV2)
+        let (master, slave, original) = try makePTY()
+        let cancellation = RootGrantsPrivateCancellation()
+        let armed = DispatchSemaphore(value: 0)
+        let effects = RootGrantsPTYFlowEffects()
+        let longReview = initial.text + "\n" + String(repeating: "R", count: 64 * 1024)
+        let outcome = startFlow(slave: slave, initialText: longReview,
+                                cancellation: cancellation, effects: effects,
+                                afterArming: { armed.signal() })
+        defer {
+            cancellation.cancel()
+            _ = outcome.finished.wait(timeout: .now() + .seconds(3))
+            _ = Darwin.close(master); _ = Darwin.close(slave)
+        }
+        let first = try readSome(master, maximum: 2048)
+        #expect(!first.isEmpty && first.count < RootGrantsTerminalReview.promptText(longReview).utf8.count)
+        try writePTY(master, Data([3]))
+        let finishedAfterCancel = outcome.finished.wait(timeout: .now() + .milliseconds(500))
+        #expect(finishedAfterCancel == .success, "Ctrl-C while rendering must cancel without a later key")
+        if finishedAfterCancel == .timedOut {
+            _ = try readUntil(master, suffix: promptSuffix, startingWith: first)
+            #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
+            try writePTY(master, Data([13]))
+            #expect(outcome.finished.wait(timeout: .now() + .seconds(3)) == .success)
+        }
+        guard case .refused(.canceled)? = outcome.snapshot() else {
+            Issue.record("Rendering-time Ctrl-C was discarded; later Return accepted: \(String(describing: outcome.snapshot()))")
+            return
+        }
+        #expect(effects.snapshot().isEmpty)
+        #expect(sameTermios(original, try currentTermios(slave)))
+        assertNoQueuedBytes(slave)
     }
 
     private enum ExitCause: Equatable { case ctrlC, deadline, ioError }
@@ -534,6 +623,41 @@ struct RootGrantsTerminalPTYTests {
             do {
                 try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation,
                     descriptor: slave, checkOutput: checkOutput, afterArming: afterArming)
+                outcome.finish(.accepted)
+            } catch let error as RootGrantsReviewError {
+                outcome.finish(.refused(error.status))
+            } catch {
+                outcome.finish(.refused(.privateProtocolError))
+            }
+        }
+        return outcome
+    }
+
+    private func startFlow(slave: Int32, initialText: String,
+                           cancellation: RootGrantsPrivateCancellation,
+                           effects: RootGrantsPTYFlowEffects,
+                           checkOutput: @escaping () throws -> Void = {},
+                           afterArming: @escaping () throws -> Void = {}) -> RootGrantsPTYOutcome {
+        struct PreparedReview { let text: String }
+        let outcome = RootGrantsPTYOutcome()
+        DispatchQueue.global().async {
+            do {
+                _ = try RootGrantsPrivateFlow.perform(
+                    initialText: initialText,
+                    reviewText: { $0.text },
+                    confirm: { text in
+                        try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation,
+                            descriptor: slave, checkOutput: checkOutput, afterArming: afterArming)
+                    },
+                    attach: { () throws -> String in
+                        effects.append("attach")
+                        throw RootGrantsReviewError(status: .privateProtocolError)
+                    },
+                    prepare: { _ in effects.append("prepare"); return PreparedReview(text: "second review") },
+                    store: { _ in effects.append("store"); return "store-confirmation" },
+                    wrap: { _, _ in effects.append("wrap"); return "qualified-wrap" },
+                    seal: { _, _, _ in effects.append("seal"); return "sealed" }
+                )
                 outcome.finish(.accepted)
             } catch let error as RootGrantsReviewError {
                 outcome.finish(.refused(error.status))

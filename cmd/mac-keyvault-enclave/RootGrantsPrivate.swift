@@ -307,6 +307,24 @@ enum RootGrantsTerminalReview {
                 offset += count
             }
         }
+        func discardPendingInputOrCancel() throws {
+            var bytes = [UInt8](repeating: 0, count: 256)
+            while true {
+                try cancellation.reviewDeadline()
+                try checkOutput()
+                let count = bytes.withUnsafeMutableBytes { raw in
+                    Darwin.read(fd, raw.baseAddress!, raw.count)
+                }
+                if count < 0, errno == EINTR { continue }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK { return }
+                guard count > 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
+                if bytes[..<count].contains(3) {
+                    throw RootGrantsReviewError(status: .canceled)
+                }
+                // Every other byte received before arming is type-ahead, not
+                // consent. Continue until the nonblocking input queue is empty.
+            }
+        }
         func nextByte() throws -> UInt8? {
             while true {
                 try cancellation.reviewDeadline()
@@ -327,17 +345,22 @@ enum RootGrantsTerminalReview {
                 var writable = fd_set()
                 withUnsafeMutableBytes(of: &readable) { $0.initializeMemory(as: UInt8.self, repeating: 0) }
                 withUnsafeMutableBytes(of: &writable) { $0.initializeMemory(as: UInt8.self, repeating: 0) }
+                __darwin_fd_set(descriptor, &readable)
                 if writing { __darwin_fd_set(descriptor, &writable) }
-                else { __darwin_fd_set(descriptor, &readable) }
                 var timeout = timeval(tv_sec: 0, tv_usec: 100_000)
-                let ready = writing
-                    ? Darwin.select(descriptor + 1, nil, &writable, nil, &timeout)
-                    : Darwin.select(descriptor + 1, &readable, nil, nil, &timeout)
+                let ready: Int32
+                if writing {
+                    ready = Darwin.select(descriptor + 1, &readable, &writable, nil, &timeout)
+                } else {
+                    ready = Darwin.select(descriptor + 1, &readable, nil, nil, &timeout)
+                }
                 if ready < 0, errno == EINTR { continue }
                 guard ready >= 0 else { throw RootGrantsReviewError(status: .terminalRequired) }
                 if ready == 0 { continue }
-                if writing ? __darwin_fd_isset(descriptor, &writable) != 0 :
-                             __darwin_fd_isset(descriptor, &readable) != 0 { return }
+                let hasInput = __darwin_fd_isset(descriptor, &readable) != 0
+                let hasOutput = writing && __darwin_fd_isset(descriptor, &writable) != 0
+                if writing, hasInput { try discardPendingInputOrCancel() }
+                if hasOutput || (!writing && hasInput) { return }
             }
         }
 
@@ -346,8 +369,9 @@ enum RootGrantsTerminalReview {
             let prompt = promptText(text)
             try write(Data(prompt.utf8))
             // Input arriving while the complete review is rendered is
-            // type-ahead, not consent. Arm only after display output finishes.
-            guard flushPendingInput() else { throw RootGrantsReviewError(status: .terminalRequired) }
+            // type-ahead, not consent. Preserve Ctrl-C while draining it and
+            // arm only after display output finishes and the queue is empty.
+            try discardPendingInputOrCancel()
             try afterArming()
             try RootGrantsTerminalConfirmationKey.awaitReturn(next: nextByte)
         } catch { failure = error }
@@ -487,14 +511,20 @@ final class RootGrantsPrivateSignals {
     init(cancellation: RootGrantsPrivateCancellation, queue: DispatchQueue) {
         var sources: [DispatchSourceSignal] = []
         var restoreHandlers: [() -> Void] = []
+        let registrations = DispatchGroup()
         for number in Self.handledSignals {
             let previous = Darwin.signal(number, SIG_IGN)
             restoreHandlers.append { _ = Darwin.signal(number, previous) }
             let source = DispatchSource.makeSignalSource(signal: number, queue: queue)
             source.setEventHandler { cancellation.cancel(.canceled) }
+            registrations.enter()
+            source.setRegistrationHandler { registrations.leave() }
             source.resume()
             sources.append(source)
         }
+        // resume() starts registration asynchronously. Do not let terminal
+        // input/render proceed until the kernel has installed every watcher.
+        registrations.wait()
         self.sources = sources
         self.restoreHandlers = restoreHandlers
     }
