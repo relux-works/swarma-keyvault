@@ -299,6 +299,11 @@ struct RootGrantsSignV3Attempt {
 }
 
 enum RootGrantsSignV3ReviewFlow {
+    static func confirm(request: RootGrantsSignV3Request, attempt: inout RootGrantsSignV3Attempt,
+                        using confirm: (String) throws -> Void) throws {
+        try RootGrantsSignV3ReviewFlow.confirm(display: request.display, attempt: &attempt, using: confirm)
+    }
+
     static func confirm(display: String, attempt: inout RootGrantsSignV3Attempt,
                         using confirm: (String) throws -> Void) throws {
         guard attempt.phase == .created else {
@@ -313,6 +318,13 @@ enum RootGrantsSignV3ReviewFlow {
             attempt.close()
             throw error
         }
+    }
+}
+
+enum RootGrantsSignV3SignalSetup {
+    static func install(cancellation: RootGrantsPrivateCancellation,
+                        queue: DispatchQueue) -> RootGrantsPrivateSignals {
+        RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
     }
 }
 
@@ -379,7 +391,7 @@ private func signV3Perform(_ original: Data, cancellation: RootGrantsPrivateCanc
     let request = try RootGrantsSignV3Request(ownedBytes: original)
     var attempt = RootGrantsSignV3Attempt()
     defer { attempt.close() }
-    try RootGrantsSignV3ReviewFlow.confirm(display: request.display, attempt: &attempt) { text in
+    try RootGrantsSignV3ReviewFlow.confirm(request: request, attempt: &attempt) { text in
         try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation, transport: transport)
     }
     try cancellation.check()
@@ -452,22 +464,20 @@ func rootGrantsSignGrantV3() -> Int32 {
     let deadline = RootGrantsPrivateDeadline(startedAt: DispatchTime.now().uptimeNanoseconds, budget: 120_000_000_000)
     let cancellation = RootGrantsPrivateCancellation(deadline: deadline)
     let queue = DispatchQueue(label: "keyvault.root-grant-v3-cancellation")
-    signal(SIGTERM, SIG_IGN)
     signal(SIGPIPE, SIG_IGN)
-    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: queue)
-    termination.setEventHandler { cancellation.cancel() }
-    termination.resume()
+    let signals = RootGrantsSignV3SignalSetup.install(cancellation: cancellation, queue: queue)
+    defer { signals.stop() } // The shared monitor waits for all seven registrations before terminal work.
     let timeout = DispatchSource.makeTimerSource(queue: queue)
     timeout.schedule(deadline: DispatchTime(uptimeNanoseconds: deadline.expiresAt))
     timeout.setEventHandler { cancellation.cancel(.timeout) }
     timeout.resume()
     defer { timeout.cancel() }
     let parent = getppid()
-    guard parent > 1 else { termination.cancel(); return 1 }
+    guard parent > 1 else { return 1 }
     let parentExit = DispatchSource.makeProcessSource(identifier: parent, eventMask: .exit, queue: queue)
     parentExit.setEventHandler { cancellation.cancel(.privateProtocolError) }
     parentExit.resume()
-    defer { termination.cancel(); parentExit.cancel(); _ = cancellation.finish() }
+    defer { parentExit.cancel(); _ = cancellation.finish() }
     guard getppid() == parent else { return 1 }
     let transport: RootGrantsPrivateTransport
     do { transport = try RootGrantsPrivateTransport(cancellation) }

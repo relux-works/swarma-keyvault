@@ -103,7 +103,7 @@ struct RootGrantsSignV3Tests {
         #expect(throws: RootGrantsReviewError.self) { try presence.consumeForSigning() }
     }
 
-    // Claim: the production sign body wires request.display to the terminal flow and contains no direct AppKit window review.
+    // Claim: production passes its parsed request through the shared terminal-review seam and contains no direct window review.
     @Test func productionSignPathUsesTerminalReview() throws {
         let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("RootGrantsSignV3.swift")
@@ -112,13 +112,37 @@ struct RootGrantsSignV3Tests {
         let end = try #require(source.range(of: "\nfunc rootGrantsSignGrantV3()",
                                              range: start.lowerBound..<source.endIndex))
         let productionPath = String(source[start.lowerBound..<end.lowerBound])
-        #expect(productionPath.contains("RootGrantsSignV3ReviewFlow.confirm"))
-        #expect(productionPath.contains("display: request.display"))
+        #expect(productionPath.contains("RootGrantsSignV3ReviewFlow.confirm(request: request"))
         #expect(productionPath.contains("RootGrantsTerminalReview.confirm"))
         #expect(!productionPath.contains("RootGrantsNativeReview"))
         #expect(!productionPath.contains("SIGN GRANT V3"))
         #expect(!source.contains("RootGrantsNativeReview"))
         #expect(!source.contains("Type SIGN GRANT V3"))
+    }
+
+    // Claim: the actual signing entry point installs the same registration-barrier monitor used by PTY tests before transport or terminal work.
+    @Test func productionSignEntryInstallsSignalMonitorBeforeTransport() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("RootGrantsSignV3.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let entryStart = try #require(source.range(of: "func rootGrantsSignGrantV3() -> Int32 {"))
+        let entry = String(source[entryStart.lowerBound...])
+        let installed = try #require(entry.range(of: "let signals = RootGrantsSignV3SignalSetup.install"))
+        let cleanup = try #require(entry.range(of: "defer { signals.stop() }"))
+        let transport = try #require(entry.range(of: "RootGrantsPrivateTransport(cancellation)"))
+        #expect(installed.lowerBound < cleanup.lowerBound && cleanup.lowerBound < transport.lowerBound)
+        #expect(!entry.contains("signal(SIGTERM"))
+        #expect(!entry.contains("DispatchSource.makeSignalSource(signal: SIGTERM"))
+
+        let setupStart = try #require(source.range(of: "enum RootGrantsSignV3SignalSetup {"))
+        let setupEnd = try #require(source.range(of: "\nprivate func signV3Decrypt(",
+                                                 range: setupStart.lowerBound..<source.endIndex))
+        let setup = String(source[setupStart.lowerBound..<setupEnd.lowerBound])
+        #expect(setup.contains("RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)"))
+        let privateURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("RootGrantsPrivate.swift")
+        let privateSource = try String(contentsOf: privateURL, encoding: .utf8)
+        #expect(privateSource.contains("registrations.wait()"))
     }
 
     // Claim: both Returns consume one review transition; replay cannot invoke another confirmation.

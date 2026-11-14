@@ -131,8 +131,10 @@ foreground controlling Terminal twice. Each complete display must finish before
 its confirmation is armed; only a fresh Return confirms that display. Type-ahead
 keys queued before or during rendering are discarded. Ctrl-C or any of the
 seven declared catchable signals cancels the attempt, including during
-rendering, and restores the terminal. Timeout, EOF or an output error refuses.
-No presence or signature operation follows a refusal.
+rendering, and restores the terminal. The signing entry point registers all
+seven signal watchers and waits for registration before terminal work; the
+watchers remain active for the signing attempt. Timeout, EOF or an output error
+refuses. No presence or signature operation follows a refusal.
 
 After both confirmations, the helper begins its single biometric presence
 phase. Touch ID remains required with the existing reason and zero reuse

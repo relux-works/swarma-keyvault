@@ -4,6 +4,7 @@
 // key, LAContext or Keychain operation is invoked by these tests.
 import Darwin
 import Foundation
+import CryptoKit
 import LocalAuthentication
 import Security
 import Testing
@@ -487,7 +488,7 @@ struct RootGrantsTerminalPTYTests {
             let (master, slave, original) = try makePTY()
             let cancellation = RootGrantsPrivateCancellation()
             let queue = DispatchQueue(label: "root-grants-pty-signal-control")
-            let signals = RootGrantsPrivateSignals(cancellation: cancellation, queue: queue)
+            let signals = RootGrantsSignV3SignalSetup.install(cancellation: cancellation, queue: queue)
             let effects = RootGrantsPTYFlowEffects()
             let outcome = startSignReview(slave: slave, display: "signal cleanup",
                                           cancellation: cancellation, effects: effects,
@@ -524,9 +525,15 @@ struct RootGrantsTerminalPTYTests {
         let effects = RootGrantsPTYFlowEffects()
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("testdata/root-grants-sign-request-v2.json")
-        let display = try RootGrantsSignV3Request(ownedBytes: Data(contentsOf: fixture)).display
+        let requestBytes = try Data(contentsOf: fixture)
+        let request = try RootGrantsSignV3Request(ownedBytes: requestBytes)
+        let completeDisplay = try expectedSignV3Display(request)
+        let expectedPrompt = completeDisplay + "\nPress Return to continue; Ctrl-C cancels.\n"
+        let firstLineEnd = completeDisplay.firstIndex(of: "\n") ?? completeDisplay.endIndex
+        let changedDisplay = String(completeDisplay[..<firstLineEnd])
+        #expect(changedDisplay != completeDisplay)
         try writePTY(master, Data([13])) // A Return queued before rendering is not consent.
-        let outcome = startSignReview(slave: slave, display: display, cancellation: cancellation,
+        let outcome = startSignReview(slave: slave, requestBytes: requestBytes, cancellation: cancellation,
                                       effects: effects, afterArming: { armed.signal() })
         defer {
             cancellation.cancel()
@@ -535,14 +542,20 @@ struct RootGrantsTerminalPTYTests {
         }
 
         let firstDisplay = try readUntil(master, suffix: promptSuffix)
-        #expect(normalizedPTYText(firstDisplay).contains(display))
+        let firstText = normalizedPTYText(firstDisplay)
+        // The prequeued Return may echo as one LF before raw mode; the review bytes must still match exactly.
+        #expect(firstText == expectedPrompt || firstText == "\n" + expectedPrompt,
+                "The production request-to-terminal path must render the complete canonical display")
+        let changedPrompt = changedDisplay + "\nPress Return to continue; Ctrl-C cancels.\n"
+        #expect(firstText != changedPrompt && firstText != "\n" + changedPrompt)
         #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
         #expect(outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut)
         #expect(effects.snapshot() == ["review"])
         try writePTY(master, Data([13]))
 
         let secondDisplay = try readUntil(master, suffix: promptSuffix)
-        #expect(normalizedPTYText(secondDisplay).contains(display))
+        #expect(normalizedPTYText(secondDisplay) == expectedPrompt,
+                "The second confirmation must show the same complete canonical display")
         #expect(armed.wait(timeout: .now() + .seconds(3)) == .success)
         #expect(outcome.finished.wait(timeout: .now() + .milliseconds(250)) == .timedOut)
         #expect(effects.snapshot() == ["review", "review"])
@@ -842,6 +855,40 @@ struct RootGrantsTerminalPTYTests {
             }
         }
         return outcome
+    }
+
+    private func startSignReview(slave: Int32, requestBytes: Data,
+                                 cancellation: RootGrantsPrivateCancellation,
+                                 effects: RootGrantsPTYFlowEffects,
+                                 checkOutput: @escaping () throws -> Void = {},
+                                 afterArming: @escaping () throws -> Void = {}) -> RootGrantsPTYOutcome {
+        let outcome = RootGrantsPTYOutcome()
+        DispatchQueue.global().async {
+            do {
+                let request = try RootGrantsSignV3Request(ownedBytes: requestBytes)
+                var attempt = RootGrantsSignV3Attempt()
+                try RootGrantsSignV3ReviewFlow.confirm(request: request, attempt: &attempt) { text in
+                    effects.append("review")
+                    try RootGrantsTerminalReview.confirm(text: text, cancellation: cancellation,
+                        descriptor: slave, checkOutput: checkOutput, afterArming: afterArming)
+                }
+                try attempt.beginPresence()
+                effects.append("presence")
+                outcome.finish(.accepted)
+            } catch let error as RootGrantsReviewError {
+                outcome.finish(.refused(error.status))
+            } catch {
+                outcome.finish(.refused(.privateProtocolError))
+            }
+        }
+        return outcome
+    }
+
+    private func expectedSignV3Display(_ request: RootGrantsSignV3Request) throws -> String {
+        let review = try #require(String(data: request.reviewBytes, encoding: .utf8))
+        let contract = try #require(String(data: request.contract, encoding: .utf8))
+        let contractHash = SHA256.hash(data: request.contract).map { String(format: "%02x", $0) }.joined()
+        return "REVIEW SIGN GRANT V3\n\n\(review)\n\nExact canonical contract bytes (\(request.contract.count), SHA-256 \(contractHash)):\n\(contract)\n\nNo chain observation is asserted. This operation signs only the displayed grant bytes."
     }
 
     private func makePTY() throws -> (Int32, Int32, termios) {
