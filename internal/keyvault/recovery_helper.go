@@ -17,6 +17,36 @@ import (
 // environment variables nor a runtime helper-path option can replace this pin.
 var recoveryHelperCDHash string
 
+// NamecoinProcessHelper returns only the paired helper installed beside this
+// vault and its build-pinned public code hash. The parent must be admitted
+// before starting a child, then verify that exact live child before releasing
+// its stdin EOF. This exposes no Keychain, secret or signing operation.
+func NamecoinProcessHelper() (string, []byte, error) {
+	pin, err := hex.DecodeString(recoveryHelperCDHash)
+	if err != nil || (len(pin) != 20 && len(pin) != 32) || hex.EncodeToString(pin) != recoveryHelperCDHash {
+		return "", nil, recoveryRefuse("helper_not_admitted")
+	}
+	if verifyRecoveryCode(0, nil) != nil {
+		return "", nil, recoveryRefuse("helper_not_admitted")
+	}
+	exe, err := os.Executable()
+	if err != nil || !filepath.IsAbs(exe) || filepath.Clean(exe) != exe {
+		return "", nil, recoveryRefuse("helper_not_admitted")
+	}
+	return filepath.Join(filepath.Dir(exe), "mac-keyvault-enclave"), pin, nil
+}
+
+// VerifyNamecoinProcessHelper authenticates the actual child against the
+// build-pinned helper hash. PID is supplied only while the retained exec child
+// is live; callers must never resolve it again after Wait/reap.
+func VerifyNamecoinProcessHelper(pid int, pin []byte) error {
+	expected, err := hex.DecodeString(recoveryHelperCDHash)
+	if pid <= 0 || err != nil || (len(expected) != 20 && len(expected) != 32) || hex.EncodeToString(expected) != recoveryHelperCDHash || !bytes.Equal(pin, expected) {
+		return recoveryRefuse("helper_not_admitted")
+	}
+	return verifyRecoveryCode(pid, expected)
+}
+
 type execRecoveryHelper struct {
 	path    string
 	pin     string

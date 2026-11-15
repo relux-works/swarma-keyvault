@@ -155,8 +155,10 @@ func TestRegistrationProcessHistoricalDocking(t *testing.T) {
 				events := []namecoinprocess.RunnerEvent{
 					{Kind: namecoinprocess.RunnerBegin}, {Kind: namecoinprocess.RunnerStarted, Child: 7},
 					{Kind: namecoinprocess.RunnerAdmitted, Child: 7}, {Kind: namecoinprocess.RunnerStdout, Child: 7, Data: ack},
-					{Kind: namecoinprocess.RunnerEOF, Child: 7}, {Kind: namecoinprocess.RunnerExited, Child: 7, Normal: true, Exit: 0},
-					{Kind: namecoinprocess.RunnerReaped, Child: 7},
+					{Kind: namecoinprocess.RunnerEOF, Child: 7}, {Kind: namecoinprocess.RunnerStderrEOF, Child: 7},
+					{Kind: namecoinprocess.RunnerExited, Child: 7, Normal: true, Exit: 0},
+					{Kind: namecoinprocess.RunnerReaped, Child: 7}, {Kind: namecoinprocess.RunnerFault},
+					{Kind: namecoinprocess.RunnerStatusEOF, Child: 7},
 				}
 				for _, e := range events {
 					actions, o := r.Step(e)
