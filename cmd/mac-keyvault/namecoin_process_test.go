@@ -344,6 +344,56 @@ func TestNamecoinProcessAdapterRequiresNativeCompletionForValidResult(t *testing
 	}
 }
 
+func TestNamecoinProcessStatusEOFRetainsChildCorrelation(t *testing.T) {
+	args, now := namecoinSigningFixture(t)
+	prepared, err := namecoinprocess.PrepareSigningFiles(args, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectation, err := prepared.StatusExpectation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, _ := namecoinProcessPublicSignedResultFixture(t)
+	digest := sha256.Sum256(result)
+	child := namecoinprocess.RunnerChild(41)
+	state := &namecoinProcess1{
+		ctx: context.Background(), status: namecoinprocess.FramedStatusSource{}, expect: expectation,
+		child: child, events: make(chan namecoinObservation, 3), statusReaderDone: make(chan struct{}), inputReleased: true,
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	frames := append(namecoinProcessTestStatusFrame(1, expectation.AttemptBinding, [32]byte{}),
+		namecoinProcessTestStatusFrame(2, expectation.AttemptBinding, digest)...)
+	if n, err := writer.Write(frames); err != nil || n != len(frames) {
+		_ = writer.Close()
+		t.Fatalf("write framed status stream: wrote %d of %d bytes, err=%v", n, len(frames), err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	state.readStatus(reader)
+
+	want := []namecoinprocess.RunnerEventKind{
+		namecoinprocess.RunnerEffectStarted,
+		namecoinprocess.RunnerNativeCompleted,
+		namecoinprocess.RunnerStatusEOF,
+	}
+	for i, kind := range want {
+		observation := <-state.events
+		if observation.beforeInput || observation.event.Kind != kind || observation.event.Child != child {
+			t.Fatalf("status event %d = {kind:%d child:%d beforeInput:%t}, want {kind:%d child:%d beforeInput:false}",
+				i, observation.event.Kind, observation.event.Child, observation.beforeInput, kind, child)
+		}
+	}
+	if len(state.events) != 0 || !state.statusEOFObserved.Load() {
+		t.Fatalf("status stream not fully observed: queued=%d eof=%t", len(state.events), state.statusEOFObserved.Load())
+	}
+}
+
 func TestNamecoinProcessAdapterDoesNotReleaseInputsAfterEarlyPipeData(t *testing.T) {
 	args, now := namecoinSigningFixture(t)
 	prepared, err := namecoinprocess.PrepareSigningFiles(args, now)

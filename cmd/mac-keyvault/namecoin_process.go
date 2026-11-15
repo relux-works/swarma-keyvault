@@ -410,7 +410,7 @@ func (s *namecoinProcess1) readStatus(reader *os.File) {
 	}
 	if eof {
 		s.statusEOFObserved.Store(true)
-		s.postChild(namecoinprocess.RunnerEvent{Kind: namecoinprocess.RunnerStatusEOF})
+		s.postChild(namecoinprocess.RunnerEvent{Kind: namecoinprocess.RunnerStatusEOF, Child: s.child})
 	}
 }
 
