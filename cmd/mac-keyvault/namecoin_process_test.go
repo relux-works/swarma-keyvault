@@ -61,6 +61,9 @@ func TestNamecoinProcessTestHelper(t *testing.T) {
 		if len(os.Args) != 7 {
 			os.Exit(98)
 		}
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			os.Exit(109)
+		}
 		result, err := os.ReadFile(os.Args[4])
 		if err != nil {
 			os.Exit(99)
