@@ -843,17 +843,20 @@ final class NativeNamecoinArchiveBridge {
 
     // Called only by the narrow appended entry within sealedAccount.withAccount.
     // No pointer, account bytes or CryptoKit key escapes this lexical C-run call.
-    func runBorrowing(_ account: UnsafeRawBufferPointer) throws {
+    func runBorrowing(_ account: UnsafeRawBufferPointer, beforeNativeRun: () throws -> Void) throws {
         guard account.count == 64, let base = account.baseAddress else { throw NativeNamecoinArchiveFailure("account_mismatch") }
         try lifecycle.beginRun()
         try callbacks.begin()
         defer { callbacks.end() }
-        let code = withExtendedLifetime(callbacks) {
+        let code = try withExtendedLifetime(callbacks) {
             var table = kv_nmc_callbacks_v1()
             table.context = Unmanaged.passUnretained(callbacks).toOpaque()
             table.load_protected = nativeArchiveLoadCallback
             table.replace_protected = nativeArchiveReplaceCallback
             table.write_public_result = nativeArchiveOutputCallback
+            // This is the conservative status cutover immediately before the
+            // protected native operation begins.
+            try beforeNativeRun()
             return kv_nmc_run_v1(handle.value, UnsafeMutablePointer(mutating: base.assumingMemoryBound(to: UInt8.self)), size_t(account.count), &table)
         }
         if let failure = nativeArchiveRunFailure(code, callbackFailure: callbacks.failure) {

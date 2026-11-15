@@ -27,7 +27,7 @@ private func bridgeFieldReplacing(_ object: NativeArchiveJSON, _ key: String, _ 
 
 // Only a UUID-named disposable PUBLIC file. Setup cannot repair closed standard
 // handles, manipulate another process, or touch a retained fixture/owner value.
-private final class BridgePublicFixture {
+final class BridgePublicFixture {
     let directory: URL
     let descriptor: Int32
     let output: NativeNamecoinPrivateOutput

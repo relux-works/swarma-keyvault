@@ -1035,7 +1035,8 @@ func recoveryPrivate() -> Int32 {
     }
 }
 
-public func runKeyvaultHelper() -> Never {
+@MainActor
+public func runKeyvaultHelper() async -> Never {
 if CommandLine.arguments.dropFirst().first == "--root-grants-qualification-read" {
     exit(rootGrantsQualificationRead())
 }
@@ -1047,6 +1048,14 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-sign-grant
 }
 if CommandLine.arguments == [CommandLine.arguments[0], "--recovery-private"] {
     exit(recoveryPrivate())
+}
+
+if CommandLine.arguments.dropFirst().first == "namecoin" {
+    let result = await runNamecoinProcess1(arguments: Array(CommandLine.arguments.dropFirst()),
+                                           stdinDescriptor: 0, resultDescriptor: 3, statusDescriptor: 4,
+                                           dependencies: .live())
+    FileHandle.standardOutput.write(result.stdout)
+    exit(result.exitCode)
 }
 
 do {

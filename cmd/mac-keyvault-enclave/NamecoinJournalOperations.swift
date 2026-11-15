@@ -165,13 +165,14 @@ func reconcileNamecoinJournal(_ plan: NativeJournalOperationPlan,
 // The actual generated archive owns its kernel gate before native storage reads.
 @MainActor
 func performNamecoinArchiveOperation(_ operation: NativeNamecoinArchiveOperation,
-                                    sealedAccount: NativeJournalSealedAccount) async throws -> Data {
+                                    sealedAccount: NativeJournalSealedAccount,
+                                    beforeNativeRun: () throws -> Void) async throws -> Data {
     let bridge = try NativeNamecoinArchiveBridge.open(operation)
     do {
         try await withNamecoinReviewedBiometrics(bridge.snapshot) { context in
             try bridge.verifyFrozenAfterReview()
             try sealedAccount.withAccount(using: context) { account in
-                try bridge.runBorrowing(account)
+                try bridge.runBorrowing(account, beforeNativeRun: beforeNativeRun)
             }
         }
         // withAccount has cleared its owned account/intermediate source before
