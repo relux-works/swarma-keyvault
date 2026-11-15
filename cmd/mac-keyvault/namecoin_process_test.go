@@ -95,10 +95,7 @@ func namecoinSigningFixture(t *testing.T) (namecoinprocess.Args, time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := namecoinPrivateFixtureDir(t)
 	profilePath := filepath.Join(dir, "profile.json")
 	pinPath := filepath.Join(dir, "account-pin.json")
 	requestPath := filepath.Join(dir, "request.json")

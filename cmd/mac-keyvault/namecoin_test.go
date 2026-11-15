@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +34,28 @@ func namecoinPublicArgs(mode namecoinprocess.Mode) []string {
 	}
 }
 
+func namecoinPrivateFixtureDir(t *testing.T) string {
+	t.Helper()
+	account, err := user.LookupId(strconv.Itoa(os.Getuid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned, err := os.MkdirTemp(account.HomeDir, ".mac-keyvault-namecoin-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(owned); err != nil {
+			t.Error(err)
+		}
+	})
+	base, err := filepath.EvalSymlinks(owned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base
+}
+
 func namecoinReconcileFixtureArgs(t *testing.T, resultPath string) []string {
 	t.Helper()
 	profile, err := os.ReadFile(filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", "native-selection", "two-stage-reservation.json"))
@@ -50,10 +74,7 @@ func namecoinReconcileFixtureArgs(t *testing.T, resultPath string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	dir := namecoinPrivateFixtureDir(t)
 	profilePath := filepath.Join(dir, "profile.json")
 	pinPath := filepath.Join(dir, "account-pin.json")
 	queryPath := filepath.Join(dir, "query.json")
