@@ -164,6 +164,19 @@ jobs:
           # Permission-refusal fixtures create deliberately world-readable files.
           umask 022
           export MAC_KEYVAULT_SKIP_KEYCHAIN=1
+          if [ -z "${RUNNER_TEMP:-}" ]; then
+            printf '%s\n' 'SETUP: RUNNER_TEMP unavailable' >&2
+            exit 1
+          fi
+          private_tmp="$(mktemp -d -- "$RUNNER_TEMP/namecoinprocess-hosted.XXXXXXXX" 2>/dev/null)" || {
+            printf '%s\n' 'SETUP: private TMPDIR creation failed' >&2
+            exit 1
+          }
+          export TMPDIR="$private_tmp"
+          if ! KEYVAULT_HOSTED_TMPDIR_POLICY_GUARD=1 "$RUNNER_TEMP/suite-runner" --timeout=2m -- go test -count=1 -timeout=2m -v -run '^TestHostedTMPDIRPolicyGuard$' ./internal/namecoinprocess; then
+            printf '%s\n' 'SETUP: effective TMPDIR ancestry rejected by the existing policy' >&2
+            exit 1
+          fi
           exec "$RUNNER_TEMP/suite-runner" --timeout=30m -- go test -race -count=1 -timeout=30m -v ./...
 
   suite-budget-control:
