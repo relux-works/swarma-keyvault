@@ -185,8 +185,8 @@ private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws
 // fd3/status/ACK ordering and refusal boundaries, never native signing success.
 @MainActor @Test func process2DispatcherBridgesOnlyValidatedCustody() async throws {
     let fixture = try P2Fixture("v2-distinct-service")
-    for mode in ["complete", "malformed", "metadata", "before-effect", "after-effect"] {
-        let syntax = try BridgePublicFixture()
+    for mode in ["complete", "malformed", "metadata", "oversized-psbt", "before-effect", "after-effect"] {
+        let syntax = try BridgePublicFixture(psbtCount: mode == "oversized-psbt" ? (1 << 20) + 1 : 6)
         let request = try p2Request(fixture, syntax: syntax)
         var argv = ["namecoin", "sign-psbt", "--process-contract", "2", "--group", fixture.inputs.journal.group,
                     "--account", fixture.inputs.journal.account, "--profile", "/public/profile.json",
@@ -255,7 +255,7 @@ private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws
                 #expect(Data(frames[8..<40]) == binding && Data(frames[88..<120]) == binding)
                 #expect(Data(frames[120..<152]) == digest)
             }
-        case "malformed", "metadata":
+        case "malformed", "metadata", "oversized-psbt":
             #expect(protectedCalls == 0 && frames.isEmpty && result.exitCode != 0)
         case "before-effect":
             #expect(protectedCalls == 1 && frames.isEmpty && result.exitCode != 0)
