@@ -29,6 +29,9 @@ enum NativeNamecoinOutputTestFault: Equatable {
 final class NativeNamecoinPrivateOutput {
     static let maximumResultBytes = 8 * 1024 * 1024
     private static let chunkBytes = 64 * 1024
+    // Darwin's F_GETFL for a regular file adds this bit after a write attempt.
+    // Accept it only after writeWasPossible; all other flag changes still refuse.
+    private static let darwinPostWriteStatusFlag: Int32 = 0x0001_0000
 
     private struct Identity {
         let device: dev_t
@@ -138,8 +141,9 @@ final class NativeNamecoinPrivateOutput {
 
     private func checkBoth(size: Int, offset: Int) throws -> Int32 {
         guard let descriptor = ownedDescriptor else { throw NativeNamecoinOutputRefusal.unavailable }
-        try Self.check(callerDescriptor, identity: identity, flags: statusFlags, size: size, offset: offset)
-        try Self.check(descriptor, identity: identity, flags: statusFlags, size: size, offset: offset)
+        let expectedFlags = statusFlags | (writeWasPossible ? Self.darwinPostWriteStatusFlag : 0)
+        try Self.check(callerDescriptor, identity: identity, flags: expectedFlags, size: size, offset: offset)
+        try Self.check(descriptor, identity: identity, flags: expectedFlags, size: size, offset: offset)
         return descriptor
     }
 
@@ -232,7 +236,8 @@ final class NativeNamecoinPrivateOutput {
             }
             _ = try checkBoth(size: bytes.count, offset: bytes.count)
             try closeOwned()
-            try Self.check(callerDescriptor, identity: identity, flags: statusFlags,
+            let expectedFlags = statusFlags | Self.darwinPostWriteStatusFlag
+            try Self.check(callerDescriptor, identity: identity, flags: expectedFlags,
                            size: bytes.count, offset: bytes.count)
         } catch {
             let refusal = refusalForPhase()

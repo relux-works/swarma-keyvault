@@ -55,6 +55,8 @@ type process2RunTestHooks struct {
 	afterReader           func(process2ReaderResult)
 	afterWait             func()
 	afterEvidence         func()
+	afterFinalValidation  func()
+	finalDeadlineNow      func() time.Time
 }
 
 // RunProcess2 consumes command for one process/2 sign-psbt attempt. The trusted
@@ -656,6 +658,19 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	}
 	if hooks := options.testHooks; hooks != nil && hooks.afterEvidence != nil {
 		hooks.afterEvidence()
+	}
+	evidence.finalDeadlineOK = func() bool {
+		if deadlineExpired {
+			return false
+		}
+		now := time.Now()
+		if hooks := options.testHooks; hooks != nil && hooks.finalDeadlineNow != nil {
+			now = hooks.finalDeadlineNow()
+		}
+		return now.Before(options.Deadline)
+	}
+	if hooks := options.testHooks; hooks != nil {
+		evidence.afterFinalValidation = hooks.afterFinalValidation
 	}
 	return process2Outcome(evidence), evidence
 }

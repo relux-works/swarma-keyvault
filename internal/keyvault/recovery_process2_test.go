@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -258,28 +260,37 @@ func TestBuildRecoveryProcess2FrameAcceptsFrozenV1AndV2Pairs(t *testing.T) {
 	}
 }
 
-// A mutated full pair, record, pin, sidecar or selection refuses before any
-// frame is returned; the valid controls above prevent reject-everything passes.
+// Claim: each malformed public custody input returns its required typed refusal,
+// no frame, and no in-place input mutation. Limit: this pure builder test does
+// not exercise process launch, helper identity, or native custody.
 func TestBuildRecoveryProcess2FrameRefusesPairAndSelectionMismatches(t *testing.T) {
 	good := readRecoveryProcess2Fixture(t, "v2-distinct-service")
-	mutants := map[string]func(*RecoveryProcess2Input){
-		"nostr-only-ciphertext": func(in *RecoveryProcess2Input) {
+	validFrame, err := BuildRecoveryProcess2Frame(cloneRecoveryProcess2Input(good))
+	if err != nil || len(validFrame) == 0 {
+		t.Fatal("nearby valid distinct-service control was refused", err)
+	}
+	cases := []struct {
+		name     string
+		wantCode string
+		mutate   func(*RecoveryProcess2Input)
+	}{
+		{name: "nostr-only-ciphertext", wantCode: "recovery_invalid_envelope", mutate: func(in *RecoveryProcess2Input) {
 			var pair recoveryCiphertext
 			if err := json.Unmarshal(in.Pair, &pair); err != nil {
 				t.Fatal(err)
 			}
 			pair.Nostr.Ciphertext[len(pair.Nostr.Ciphertext)-1] ^= 1
 			in.Pair, _ = json.Marshal(pair)
-		},
-		"namecoin-only-cross-pair": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "namecoin-only-cross-pair", wantCode: "recovery_invalid_envelope", mutate: func(in *RecoveryProcess2Input) {
 			other := readRecoveryProcess2Fixture(t, "v2-equal-service")
 			in.Pair = bytes.Clone(other.Pair)
-		},
-		"record-timestamp-with-old-sidecar": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "record-timestamp-with-old-sidecar", wantCode: "recovery_invalid_envelope", mutate: func(in *RecoveryProcess2Input) {
 			in.Record = bytes.Replace(bytes.Clone(in.Record), []byte("2026-01-02T03:04:05Z"), []byte("2026-01-02T03:04:06Z"), 1)
-		},
-		"account-pin-bytes": func(in *RecoveryProcess2Input) { in.AccountPin[len(in.AccountPin)-2] ^= 1 },
-		"account-pin-pair-identity": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "account-pin-bytes", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.AccountPin[len(in.AccountPin)-2] ^= 1 }},
+		{name: "account-pin-pair-identity", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) {
 			var pin namecoinwire.AccountPin
 			if err := json.Unmarshal(in.AccountPin, &pin); err != nil {
 				t.Fatal(err)
@@ -287,40 +298,51 @@ func TestBuildRecoveryProcess2FrameRefusesPairAndSelectionMismatches(t *testing.
 			pin.AccountXPub = "substituted-xpub"
 			in.AccountPin, _ = json.Marshal(pin)
 			setProcess2PinHash(t, in)
-		},
-		"selection-group":   func(in *RecoveryProcess2Input) { in.Selection.Selection.Group = "other/recovery@7" },
-		"selection-account": func(in *RecoveryProcess2Input) { in.Selection.Selection.Account = "other/namecoin@9" },
-		"selection-policy":  func(in *RecoveryProcess2Input) { in.Selection.Selection.Policy.Revision = "other-policy/1" },
-		"sidecar-public-pin": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "selection-group", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.Selection.Selection.Group = "other/recovery@7" }},
+		{name: "selection-account", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.Selection.Selection.Account = "other/namecoin@9" }},
+		{name: "selection-policy", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.Selection.Selection.Policy.Revision = "other-policy/1" }},
+		{name: "sidecar-public-pin", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) {
 			in.Selection.Sidecar.NostrPublicPin[0] ^= 1
 			in.Sidecar, _ = namecoinjournal.EncodeSidecar(in.Selection.Sidecar)
-		},
-		"sidecar-group-id": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "sidecar-group-id", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) {
 			in.Selection.Sidecar.GroupID[0] ^= 1
 			in.Sidecar, _ = namecoinjournal.EncodeSidecar(in.Selection.Sidecar)
-		},
-		"sidecar-trailing-byte": func(in *RecoveryProcess2Input) { in.Sidecar = append(bytes.Clone(in.Sidecar), 0) },
-		"record-duplicate-member": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "sidecar-trailing-byte", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.Sidecar = append(bytes.Clone(in.Sidecar), 0) }},
+		{name: "record-duplicate-member", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) {
 			in.Record = bytes.Replace(bytes.Clone(in.Record), []byte(`{"schema":`), []byte(`{"schema":"other","schema":`), 1)
-		},
-		"record-unknown-member": func(in *RecoveryProcess2Input) {
+		}},
+		{name: "record-unknown-member", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) {
 			in.Record = bytes.Replace(bytes.Clone(in.Record), []byte(`{"schema":`), []byte(`{"unknown":0,"schema":`), 1)
-		},
-		"missing-pair": func(in *RecoveryProcess2Input) { in.Pair = nil },
+		}},
+		{name: "missing-pair", wantCode: "recovery_invalid_record", mutate: func(in *RecoveryProcess2Input) { in.Pair = nil }},
 	}
-	for name, mutate := range mutants {
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			input := cloneRecoveryProcess2Input(good)
-			mutate(&input)
+			tc.mutate(&input)
+			before := cloneRecoveryProcess2Input(input)
 			frame, err := BuildRecoveryProcess2Frame(input)
-			if err == nil || frame != nil {
-				t.Fatal("mismatched custody pair returned bytes")
+			var refusal *Refusal
+			if !errors.As(err, &refusal) || refusal.Code != tc.wantCode || frame != nil {
+				gotCode := ""
+				if refusal != nil {
+					gotCode = refusal.Code
+				}
+				t.Fatalf("wrong refusal or frame escaped: got code %q, frame nil=%t, want %q", gotCode, frame == nil, tc.wantCode)
+			}
+			if !reflect.DeepEqual(input.Selection, before.Selection) || !bytes.Equal(input.AccountPin, before.AccountPin) ||
+				!bytes.Equal(input.Sidecar, before.Sidecar) || !bytes.Equal(input.Record, before.Record) || !bytes.Equal(input.Pair, before.Pair) {
+				t.Fatal("rejected build mutated caller-owned public custody input")
 			}
 		})
 	}
 }
 
 func cloneRecoveryProcess2Input(in RecoveryProcess2Input) RecoveryProcess2Input {
+	in.Selection.Selection.RevealValuesPin = bytes.Clone(in.Selection.Selection.RevealValuesPin)
 	in.AccountPin = bytes.Clone(in.AccountPin)
 	in.Sidecar = bytes.Clone(in.Sidecar)
 	in.Record = bytes.Clone(in.Record)

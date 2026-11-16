@@ -86,6 +86,35 @@ func ParseArgs(argv []string) (Args, error) {
 	return a, nil
 }
 
+// HelperArgs builds the fixed process/1 argv from a validated public
+// selection. It always inserts the protocol version itself; callers cannot
+// supply a version or append an open-ended argument tail.
+func HelperArgs(a Args) ([]string, error) {
+	if a.validate() != nil {
+		return nil, namecoinwire.ErrInvalidRequest
+	}
+	argv := []string{"namecoin", string(a.Mode), "--process-contract", "1",
+		"--group", a.Group, "--account", a.Account,
+		"--profile", a.ProfilePath, "--profile-sha256", a.ProfileSHA256,
+		"--account-pin", a.AccountPinPath}
+	switch a.Mode {
+	case SignPSBT:
+		argv = append(argv, "--request", a.RequestPath, "--request-sha256", a.RequestSHA256,
+			"--output", a.OutputPath)
+	case Reconcile:
+		argv = append(argv, "--query", a.QueryPath, "--output", a.OutputPath)
+	case InitializeJournal:
+		argv = append(argv, "--adoption-plan-sha256", a.AdoptionPlanSHA256)
+	default:
+		return nil, namecoinwire.ErrInvalidRequest
+	}
+	argv = append(argv, "--timeout-seconds", strconv.Itoa(int(a.Timeout/time.Second)))
+	if a.Mode == SignPSBT && a.RevealPinPath != "" {
+		argv = append(argv, "--reveal-values-pin", a.RevealPinPath)
+	}
+	return argv, nil
+}
+
 func (a Args) validate() error {
 	bad := namecoinwire.ErrInvalidRequest
 	if !identity(a.Group, "recovery") || !identity(a.Account, "namecoin") || !absoluteFile(a.ProfilePath) || !hashString(a.ProfileSHA256) || !absoluteFile(a.AccountPinPath) || a.Timeout < time.Second || a.Timeout > time.Hour || a.Timeout%time.Second != 0 {

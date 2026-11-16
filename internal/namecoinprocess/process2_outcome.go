@@ -35,6 +35,8 @@ type process2Evidence struct {
 	admitted                    bool
 	contextCancelledDuringInput bool
 	closeObservations           []process2CloseObservation
+	afterFinalValidation        func()
+	finalDeadlineOK             func() bool
 }
 
 func unknownProcess2Outcome() Outcome {
@@ -68,6 +70,12 @@ func process2Outcome(e process2Evidence) Outcome {
 	}
 	outcome, err := verifyProcessResult(e.context, e.stdout, e.result)
 	if err != nil || !outcome.Success() || !bytes.Equal(outcome.Result(), e.result) {
+		return unknownProcess2Outcome()
+	}
+	if e.afterFinalValidation != nil {
+		e.afterFinalValidation()
+	}
+	if e.finalDeadlineOK == nil || !e.finalDeadlineOK() {
 		return unknownProcess2Outcome()
 	}
 	return outcome

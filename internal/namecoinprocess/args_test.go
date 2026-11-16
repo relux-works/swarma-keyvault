@@ -58,6 +58,35 @@ func TestArgsClosedModes(t *testing.T) {
 	}
 }
 
+func TestHelperArgsInjectsFixedProcessVersionAndRoundTripsClosedModes(t *testing.T) {
+	for _, mode := range []Mode{SignPSBT, Reconcile, InitializeJournal} {
+		argv := argvFixture(mode)
+		if mode == SignPSBT {
+			argv = append(argv, "--reveal-values-pin", "/public/reveal.json")
+		}
+		selected, err := ParseArgs(argv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		helperArgv, err := HelperArgs(selected)
+		if err != nil || len(helperArgv) < 4 || !reflect.DeepEqual(helperArgv[:4], []string{"namecoin", string(mode), "--process-contract", "1"}) {
+			t.Fatalf("mode=%s argv=%q err=%v", mode, helperArgv, err)
+		}
+		got, err := ParseArgs(helperArgv)
+		if err != nil || !reflect.DeepEqual(got, selected) {
+			t.Fatalf("mode=%s round trip=%+v want=%+v err=%v", mode, got, selected, err)
+		}
+		for _, arg := range helperArgv {
+			if strings.Contains(arg, "PIN_BYTES") || arg == "--process-contract=1" {
+				t.Fatalf("open/secret process argument: %q", arg)
+			}
+		}
+	}
+	if _, err := HelperArgs(Args{Mode: "name_update"}); err == nil {
+		t.Fatal("unsupported mode produced helper argv")
+	}
+}
+
 // Malformed grammar and every cross-mode extra option return the independent
 // C5 invalid_request/REFUSED/2 line. Near valid cases are exercised above.
 func TestArgsRefusals(t *testing.T) {

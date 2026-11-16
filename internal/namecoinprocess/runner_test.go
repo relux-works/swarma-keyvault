@@ -76,9 +76,14 @@ func (p *policyTrace) count(k RunnerActionKind) int {
 
 func (p *policyTrace) completeChild(result, ack []byte) {
 	p.t.Helper()
+	if p.r.context.Mode != RunnerReconcile && !p.r.runEntered {
+		p.send(RunnerEvent{Kind: RunnerEffectStarted})
+	}
 	p.send(RunnerEvent{Kind: RunnerStdout, Data: ack})
 	p.send(RunnerEvent{Kind: RunnerNativeCompleted, Digest: sha256.Sum256(result)})
+	p.send(RunnerEvent{Kind: RunnerStatusEOF, Child: 7})
 	p.send(RunnerEvent{Kind: RunnerEOF})
+	p.send(RunnerEvent{Kind: RunnerStderrEOF})
 	p.send(RunnerEvent{Kind: RunnerExited, Normal: true, Exit: 0})
 	a := p.send(RunnerEvent{Kind: RunnerReaped})
 	if len(a) != 1 || a[0].Kind != RunnerReadResult || p.outcome.Done() {
@@ -92,6 +97,16 @@ func (p *policyTrace) close(ok bool) {
 		p.t.Fatalf("close not requested exactly once: %+v", p.actions)
 	}
 	p.send(RunnerEvent{Kind: RunnerClosed, OK: ok})
+}
+
+func TestRunnerStatusEOFCorrelatesToRetainedChild(t *testing.T) {
+	context, _, _ := publicContext(t, "all-four-before-release", "A")
+	p := trace(t, context, time.Minute)
+	p.start()
+	p.send(RunnerEvent{Kind: RunnerStatusEOF, Child: 7})
+	if p.r.fault || !p.r.statusEOF || p.outcome.Done() {
+		t.Fatalf("status EOF was not accepted from the retained child: fault=%t statusEOF=%t outcome=%+v", p.r.fault, p.r.statusEOF, p.outcome)
+	}
 }
 
 // Every parent gate keeps public signatures quarantined. Only the final owned
@@ -142,7 +157,9 @@ func TestInitializationCompletionAndUncertainty(t *testing.T) {
 			if name != "no-native-completion" && name != "mutation-then-refusal" {
 				p.send(RunnerEvent{Kind: RunnerNativeCompleted})
 			}
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
 			p.send(RunnerEvent{Kind: RunnerEOF})
+			p.send(RunnerEvent{Kind: RunnerStderrEOF})
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: true})
 			p.send(RunnerEvent{Kind: RunnerReaped})
 			if p.count(RunnerCloseOwned) == 0 {
@@ -177,6 +194,8 @@ func TestAdmittedRefusalTable(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerStdout, Data: line})
 			p.send(RunnerEvent{Kind: RunnerDefiniteRefusal, Data: line, Boundary: BeforeDispatch})
 			p.send(RunnerEvent{Kind: RunnerEOF})
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
+			p.send(RunnerEvent{Kind: RunnerStderrEOF})
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: true, Exit: row.exit})
 			p.send(RunnerEvent{Kind: RunnerReaped})
 			p.close(true)
@@ -192,10 +211,13 @@ func TestAdmittedRefusalTable(t *testing.T) {
 // valid signed fixture. Unreaped children and unclosed resources stay pending.
 func TestCompletionGateFailures(t *testing.T) {
 	c, result, ack := publicContext(t, "all-four-before-release", "A")
-	for _, name := range []string{"no-ack", "extra-stdout", "no-eof", "nonzero-exit", "abnormal-exit", "no-reap", "no-native", "bad-native-hash", "zero-native-hash", "readback-failure", "bad-result", "close-failure", "no-close", "stderr"} {
+	for _, name := range []string{"no-ack", "extra-stdout", "no-eof", "no-stderr-eof", "no-status-eof", "no-status-frames", "nonzero-exit", "abnormal-exit", "no-reap", "no-native", "bad-native-hash", "zero-native-hash", "readback-failure", "bad-result", "close-failure", "no-close", "stderr"} {
 		t.Run(name, func(t *testing.T) {
 			p := trace(t, c, time.Minute)
 			p.start()
+			if name != "no-status-frames" {
+				p.send(RunnerEvent{Kind: RunnerEffectStarted})
+			}
 			if name != "no-ack" {
 				p.send(RunnerEvent{Kind: RunnerStdout, Data: ack})
 			}
@@ -205,7 +227,7 @@ func TestCompletionGateFailures(t *testing.T) {
 			if name == "stderr" {
 				p.send(RunnerEvent{Kind: RunnerStderr, Data: []byte("unexpected")})
 			}
-			if name != "no-native" {
+			if name != "no-native" && name != "no-status-frames" {
 				hash := sha256.Sum256(result)
 				if name == "bad-native-hash" {
 					hash[0] ^= 1
@@ -218,6 +240,12 @@ func TestCompletionGateFailures(t *testing.T) {
 			if name != "no-eof" {
 				p.send(RunnerEvent{Kind: RunnerEOF})
 			}
+			if name != "no-status-eof" {
+				p.send(RunnerEvent{Kind: RunnerStatusEOF})
+			}
+			if name != "no-stderr-eof" {
+				p.send(RunnerEvent{Kind: RunnerStderrEOF})
+			}
 			exit, normal := 0, true
 			if name == "nonzero-exit" {
 				exit = 3
@@ -228,6 +256,9 @@ func TestCompletionGateFailures(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: normal, Exit: exit})
 			if name != "no-reap" {
 				p.send(RunnerEvent{Kind: RunnerReaped})
+			}
+			if name == "no-stderr-eof" && (p.count(RunnerReadResult) != 0 || p.outcome.Done()) {
+				t.Fatal("readback or verdict before stderr EOF")
 			}
 			if p.count(RunnerReadResult) == 1 {
 				switch name {
@@ -241,6 +272,12 @@ func TestCompletionGateFailures(t *testing.T) {
 			}
 			p.at = time.Minute
 			p.send(RunnerEvent{Kind: RunnerTick})
+			if name == "no-status-eof" {
+				if p.outcome.Done() || p.count(RunnerCloseOwned) != 0 {
+					t.Fatal("verdict or close before actual status EOF")
+				}
+				return
+			}
 			if name == "no-reap" || name == "no-close" {
 				if p.outcome.Done() {
 					t.Fatal("terminal before reap/close")
@@ -294,6 +331,7 @@ func TestPrestartCancellationAndStartRace(t *testing.T) {
 					p.send(RunnerEvent{Kind: RunnerTick})
 					p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 					p.send(RunnerEvent{Kind: RunnerReaped})
+					p.send(RunnerEvent{Kind: RunnerStatusEOF})
 					p.close(true)
 					assertUnknown(t, p.outcome)
 					return
@@ -345,6 +383,7 @@ func TestCancellationGraceAndExactChild(t *testing.T) {
 		}
 		p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 		p.send(RunnerEvent{Kind: RunnerReaped})
+		p.send(RunnerEvent{Kind: RunnerStatusEOF})
 		p.close(true)
 		assertUnknown(t, p.outcome)
 		for _, a := range p.actions {
@@ -418,6 +457,7 @@ func TestForcedRefusalExceptionAndForbiddenDowngrades(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerTick})
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 			p.send(RunnerEvent{Kind: RunnerReaped})
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
 			p.close(true)
 			if name == "valid" {
 				if !bytes.Equal(p.outcome.Line(), line) {
@@ -451,8 +491,10 @@ func TestHistoricalReconcileNeedsNativeCompletion(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerNativeCompleted, Digest: sha256.Sum256(result)})
 		}
 		p.send(RunnerEvent{Kind: RunnerEOF})
+		p.send(RunnerEvent{Kind: RunnerStderrEOF})
 		p.send(RunnerEvent{Kind: RunnerExited, Normal: true})
 		p.send(RunnerEvent{Kind: RunnerReaped})
+		p.send(RunnerEvent{Kind: RunnerStatusEOF})
 		if native {
 			p.send(RunnerEvent{Kind: RunnerReadback, Data: result})
 		} else {
@@ -484,9 +526,12 @@ func TestReapBeforePipeDrain(t *testing.T) {
 	p.start()
 	p.send(RunnerEvent{Kind: RunnerExited, Normal: true})
 	p.send(RunnerEvent{Kind: RunnerReaped})
+	p.send(RunnerEvent{Kind: RunnerEffectStarted})
 	p.send(RunnerEvent{Kind: RunnerNativeCompleted, Digest: sha256.Sum256(result)})
+	p.send(RunnerEvent{Kind: RunnerStatusEOF})
 	p.send(RunnerEvent{Kind: RunnerStdout, Data: ack})
 	p.send(RunnerEvent{Kind: RunnerEOF})
+	p.send(RunnerEvent{Kind: RunnerStderrEOF})
 	p.send(RunnerEvent{Kind: RunnerReadback, Data: result})
 	p.close(true)
 	if !p.outcome.Success() || p.count(RunnerTerminateChild) != 0 || p.count(RunnerKillChild) != 0 {
@@ -510,6 +555,7 @@ func TestLateRefusalCannotUndoForcedTermination(t *testing.T) {
 	p.send(RunnerEvent{Kind: RunnerDefiniteRefusal, Data: line, Boundary: BeforeDispatch})
 	p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 	p.send(RunnerEvent{Kind: RunnerReaped})
+	p.send(RunnerEvent{Kind: RunnerStatusEOF})
 	p.close(true)
 	assertUnknown(t, p.outcome)
 }
@@ -518,7 +564,7 @@ func TestLateRefusalCannotUndoForcedTermination(t *testing.T) {
 // admission cannot release an input or success; owned cleanup is not repeated.
 func TestProtocolAndOwnershipRefusals(t *testing.T) {
 	c, _, _ := publicContext(t, "all-four-before-release", "A")
-	for _, name := range []string{"foreign", "duplicate-admission", "backwards-time", "invalid-exit", "unknown-event", "early-readback", "early-close", "duplicate-start", "reconcile-mutation"} {
+	for _, name := range []string{"foreign", "duplicate-admission", "backwards-time", "invalid-exit", "unknown-event", "early-readback", "early-close", "duplicate-start", "duplicate-status-eof", "status-record-after-eof", "reconcile-mutation"} {
 		t.Run(name, func(t *testing.T) {
 			context := c
 			if name == "reconcile-mutation" {
@@ -546,6 +592,12 @@ func TestProtocolAndOwnershipRefusals(t *testing.T) {
 				p.send(RunnerEvent{Kind: RunnerClosed, OK: true})
 			case "duplicate-start":
 				p.send(RunnerEvent{Kind: RunnerStarted, Child: 9})
+			case "duplicate-status-eof":
+				p.send(RunnerEvent{Kind: RunnerStatusEOF})
+				p.send(RunnerEvent{Kind: RunnerStatusEOF})
+			case "status-record-after-eof":
+				p.send(RunnerEvent{Kind: RunnerStatusEOF})
+				p.send(RunnerEvent{Kind: RunnerEffectStarted})
 			case "reconcile-mutation":
 				p.send(RunnerEvent{Kind: RunnerEffectStarted})
 			}
@@ -553,6 +605,7 @@ func TestProtocolAndOwnershipRefusals(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerTick})
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 			p.send(RunnerEvent{Kind: RunnerReaped})
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
 			p.close(true)
 			assertUnknown(t, p.outcome)
 			if p.count(RunnerReleaseInputs) != 1 || p.count(RunnerStartChild) != 1 || p.count(RunnerCloseOwned) != 1 {
@@ -648,6 +701,7 @@ func TestAllCodesAfterPossibleEffectAreUnknown(t *testing.T) {
 			p.send(RunnerEvent{Kind: RunnerEOF})
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: true, Exit: row.exit})
 			p.send(RunnerEvent{Kind: RunnerReaped})
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
 			p.close(true)
 			assertUnknown(t, p.outcome)
 		})
@@ -697,6 +751,7 @@ func TestSoftDeadlineSchedule(t *testing.T) {
 			}
 			p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 			p.send(RunnerEvent{Kind: RunnerReaped})
+			p.send(RunnerEvent{Kind: RunnerStatusEOF})
 			p.close(true)
 			assertUnknown(t, p.outcome)
 		})
@@ -735,6 +790,7 @@ func TestLateStartAndShortTimeout(t *testing.T) {
 		p.send(RunnerEvent{Kind: RunnerTick})
 		p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 		p.send(RunnerEvent{Kind: RunnerReaped})
+		p.send(RunnerEvent{Kind: RunnerStatusEOF})
 		p.close(true)
 		assertUnknown(t, p.outcome)
 	}
@@ -820,8 +876,10 @@ func TestModeSpecificCancellationCutovers(t *testing.T) {
 					p.send(RunnerEvent{Kind: RunnerStdout, Data: line})
 					p.send(RunnerEvent{Kind: RunnerDefiniteRefusal, Data: line, Boundary: boundary})
 					p.send(RunnerEvent{Kind: RunnerEOF})
+					p.send(RunnerEvent{Kind: RunnerStderrEOF})
 					p.send(RunnerEvent{Kind: RunnerExited, Normal: true, Exit: namecoinwire.NewFailure(code, false).Exit()})
 					p.send(RunnerEvent{Kind: RunnerReaped})
+					p.send(RunnerEvent{Kind: RunnerStatusEOF})
 					p.close(true)
 					if entered {
 						assertUnknown(t, p.outcome)
@@ -851,6 +909,7 @@ func TestOverdueObservationDoesNotExtendDeadline(t *testing.T) {
 	}
 	p.send(RunnerEvent{Kind: RunnerExited, Normal: false})
 	p.send(RunnerEvent{Kind: RunnerReaped})
+	p.send(RunnerEvent{Kind: RunnerStatusEOF})
 	p.close(true)
 	assertUnknown(t, p.outcome)
 }

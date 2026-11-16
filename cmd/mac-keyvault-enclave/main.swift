@@ -1,3 +1,3 @@
 import KeyvaultNativeCore
 
-runKeyvaultHelper()
+await runKeyvaultHelper()

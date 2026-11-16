@@ -326,6 +326,54 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 
 }
 
+// Claim: the final public result-validation barrier rechecks the original
+// monotonic deadline before SUCCESS, while an in-budget result still releases.
+// Limit: the child, helper admission, clock seam, and output are software fixtures.
+func TestProcess2DeadlineRecheckedAfterPublicResultValidation(t *testing.T) {
+	helper := buildProcess2FixtureHelper(t)
+	for _, late := range []bool{false, true} {
+		name := "unexpired-after-final-validation"
+		if late {
+			name = "deadline-expires-after-final-validation"
+		}
+		t.Run(name, func(t *testing.T) {
+			outputPath := filepath.Join(t.TempDir(), "result.json")
+			command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "3600")
+			options.Deadline = time.Now().Add(time.Hour)
+			originalFrame := bytes.Clone(options.Frame)
+			deadline := options.Deadline
+			finalNow := deadline.Add(-time.Nanosecond)
+			validated := 0
+			options.testHooks = &process2RunTestHooks{
+				afterFinalValidation: func() {
+					validated++
+					if late {
+						finalNow = deadline.Add(time.Nanosecond)
+					}
+				},
+				finalDeadlineNow: func() time.Time { return finalNow },
+			}
+			outcome, evidence := runProcess2(context.Background(), command, options)
+			if validated != 1 || !evidence.admitted || evidence.frameBytes != evidence.frameLength || !evidence.resultReadbackOK ||
+				!evidence.writerCloseOK || !evidence.writerJoined || !evidence.stdinCloseOK || !evidence.childEndsCloseOK ||
+				!evidence.statusEOF || evidence.statusOverflow || !evidence.stdoutEOF || evidence.stdoutOverflow ||
+				!bytes.Equal(evidence.stdout, wantAck) || !evidence.stderrEOF || evidence.stderrHadBytes ||
+				!evidence.waitDone || evidence.waitErr || evidence.waitExit != 0 || !evidence.readerCloseOK || !evidence.outputCloseOK ||
+				!bytes.Equal(evidence.result, wantResult) || !allProcess2ClosesOK(evidence.closeObservations) || !bytes.Equal(options.Frame, originalFrame) {
+				t.Fatal("final deadline witness did not follow validated output and complete unchanged custody cleanup")
+			}
+			if late {
+				assertUnknown(t, outcome)
+			} else if !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) {
+				t.Fatal("unexpired final-validation control did not preserve the valid success")
+			}
+			if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, wantResult) {
+				t.Fatal("final deadline decision deleted or changed the retained public result", err)
+			}
+		})
+	}
+}
+
 func allProcess2ClosesOK(observations []process2CloseObservation) bool {
 	if len(observations) != 11 {
 		return false

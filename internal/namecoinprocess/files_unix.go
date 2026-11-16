@@ -16,11 +16,13 @@ import (
 // Prepared owns public once-frozen inputs only. It neither opens a journal nor
 // creates output, starts a child, supplies native custody or authorizes use.
 type Prepared struct {
-	mode                Mode
-	profile, pin, input []byte
-	config              namecoinpsbt.NativeSelection
-	attempt             namecoinpsbt.PublicAttempt
-	adoption            string
+	mode                           Mode
+	profile, pin, input            []byte
+	config                         namecoinpsbt.NativeSelection
+	attempt                        namecoinpsbt.PublicAttempt
+	adoption                       string
+	profileSHA256, operationSHA256 [32]byte
+	hasOperationSHA256             bool
 }
 
 func (p Prepared) Mode() Mode                          { return p.mode }
@@ -45,7 +47,10 @@ func preparePublic(a Args, mode Mode) (namecoinpsbt.PreparedInitialization, erro
 }
 
 func publicPrepared(mode Mode, p namecoinpsbt.PreparedInitialization) Prepared {
-	return Prepared{mode: mode, profile: p.ProfileBytes(), pin: p.PinBytes(), config: p.NativeSelection()}
+	profile := p.ProfileBytes()
+	config := p.NativeSelection()
+	return Prepared{mode: mode, profile: profile, pin: p.PinBytes(), config: config,
+		profileSHA256: sha256.Sum256(profile)}
 }
 
 func PrepareSigningFiles(a Args, now time.Time) (Prepared, error) {
@@ -86,6 +91,7 @@ func PrepareSigningFiles(a Args, now time.Time) (Prepared, error) {
 	}
 	p := publicPrepared(SignPSBT, public)
 	p.input, p.attempt = signing.RequestBytes(), signing.Attempt()
+	p.operationSHA256, p.hasOperationSHA256 = h, true
 	return p, nil
 }
 
@@ -96,6 +102,10 @@ func PrepareInitializationFiles(a Args) (Prepared, error) {
 	}
 	p := publicPrepared(InitializeJournal, public)
 	p.adoption = a.AdoptionPlanSHA256
+	if _, err := hex.Decode(p.operationSHA256[:], []byte(a.AdoptionPlanSHA256)); err != nil {
+		return Prepared{}, namecoinwire.ErrInvalidRequest
+	}
+	p.hasOperationSHA256 = true
 	return p, nil
 }
 
@@ -103,8 +113,10 @@ func PrepareInitializationFiles(a Args) (Prepared, error) {
 // Mac-owned fixed-store lookup. No caller-selectable root or lookup callback
 // exists here. The returned query is public correlation, not store membership.
 type ReconcileInput struct {
-	public namecoinpsbt.PreparedInitialization
-	query  namecoinwire.ReconcileQuery
+	public         namecoinpsbt.PreparedInitialization
+	query          namecoinwire.ReconcileQuery
+	querySHA256    [32]byte
+	hasQuerySHA256 bool
 }
 
 func PrepareReconcileFiles(a Args) (ReconcileInput, error) {
@@ -120,7 +132,7 @@ func PrepareReconcileFiles(a Args) (ReconcileInput, error) {
 	if err != nil {
 		return ReconcileInput{}, err
 	}
-	return ReconcileInput{public: public, query: query}, nil
+	return ReconcileInput{public: public, query: query, querySHA256: sha256.Sum256(raw), hasQuerySHA256: true}, nil
 }
 
 func (r ReconcileInput) Query() namecoinwire.ReconcileQuery { return r.query }
@@ -135,5 +147,6 @@ func (r ReconcileInput) WithDescriptor(descriptor []byte) (Prepared, error) {
 	}
 	p := publicPrepared(Reconcile, r.public)
 	p.input, p.attempt = a.Descriptor(), a
+	p.operationSHA256, p.hasOperationSHA256 = r.querySHA256, true
 	return p, nil
 }

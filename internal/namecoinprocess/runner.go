@@ -24,7 +24,9 @@ const (
 	RunnerAdmitted
 	RunnerStdout
 	RunnerStderr
+	RunnerStderrEOF
 	RunnerEOF
+	RunnerStatusEOF
 	RunnerEffectStarted
 	RunnerNativeCompleted
 	RunnerDefiniteRefusal
@@ -48,6 +50,9 @@ const (
 // RunnerEvent carries bounded observations, not a caller-supplied no-effect
 // flag or verifier callback. At is elapsed monotonic time since process entry.
 // All child events carry the exact retained handle; parent events carry zero.
+// Status records can be delivered after wait/reap when the concurrent reader
+// drains bytes already written by the child; no post-reap identity lookup is
+// needed or permitted for those buffered records.
 //
 // Adapter obligations:
 //   - Started reports actual start (including uncertain exec); StartRefused is
@@ -132,7 +137,7 @@ type Runner struct {
 	admitted, runEntered, nativeDone                         bool
 	nativeDigest                                             [32]byte
 	stdout                                                   []byte
-	eof, exited, normal, reaped                              bool
+	eof, stderrEOF, statusEOF, exited, normal, reaped        bool
 	exit                                                     int
 	refusal                                                  *namecoinwire.Failure
 	fault, stopping, expired, term, kill, reapRequested      bool
@@ -219,7 +224,7 @@ func (r *Runner) Step(e RunnerEvent) ([]RunnerAction, Outcome) {
 				add(RunnerReleaseInputs)
 			}
 		case RunnerStdout:
-			if r.eof || len(e.Data) > 512-len(r.stdout) {
+			if !r.admitted || r.eof || len(e.Data) > 512-len(r.stdout) {
 				r.fail()
 			} else {
 				r.stdout = append(r.stdout, e.Data...)
@@ -228,11 +233,17 @@ func (r *Runner) Step(e RunnerEvent) ([]RunnerAction, Outcome) {
 				}
 			}
 		case RunnerStderr:
-			if len(e.Data) != 0 {
+			if !r.admitted || r.stderrEOF || len(e.Data) != 0 {
 				r.fail()
 			}
+		case RunnerStderrEOF:
+			if !r.admitted || r.stderrEOF {
+				r.fail()
+			} else {
+				r.stderrEOF = true
+			}
 		case RunnerEOF:
-			if r.eof {
+			if !r.admitted || r.eof {
 				r.fail()
 			}
 			r.eof = true
@@ -250,13 +261,22 @@ func (r *Runner) Step(e RunnerEvent) ([]RunnerAction, Outcome) {
 					r.fail()
 				}
 			}
-		case RunnerEffectStarted:
-			if !r.admitted || r.reaped || r.nativeDone || r.context.Mode == RunnerReconcile {
+		case RunnerStatusEOF:
+			if !r.begun || r.statusEOF {
 				r.fail()
+			} else {
+				r.statusEOF = true
 			}
-			r.runEntered = true
+		case RunnerEffectStarted:
+			if !r.admitted || r.runEntered || r.nativeDone || r.statusEOF || r.context.Mode == RunnerReconcile {
+				r.fail()
+			} else {
+				r.runEntered = true
+			}
 		case RunnerNativeCompleted:
-			if !r.admitted || r.nativeDone || r.refusal != nil || r.kill ||
+			phaseOK := r.context.Mode == RunnerReconcile && !r.runEntered ||
+				r.context.Mode != RunnerReconcile && r.runEntered
+			if !r.admitted || !phaseOK || r.nativeDone || r.refusal != nil || r.kill || r.statusEOF ||
 				(r.context.Mode == RunnerInitialize && e.Digest != [32]byte{}) {
 				r.fail()
 			} else {
@@ -367,26 +387,28 @@ func (r *Runner) Step(e RunnerEvent) ([]RunnerAction, Outcome) {
 	}
 	if r.reaped && !r.closeRequested {
 		completionLineOK := r.context.Mode != RunnerInitialize || len(r.stdout) == 0
-		completeSuccess := !r.fault && !r.kill && !r.expired && r.admitted && r.nativeDone && r.eof && r.normal && r.exit == 0 && completionLineOK
+		completeSuccess := !r.fault && !r.kill && !r.expired && r.admitted && r.nativeDone && r.statusEOF && r.eof && r.stderrEOF && r.normal && r.exit == 0 && completionLineOK
 		if completeSuccess && r.context.Mode != RunnerInitialize && !r.readRequested {
 			r.readRequested = true
 			add(RunnerReadResult)
 		}
 		// A valid ACK without authentic completion waits only until the deadline;
 		// it cannot turn a cache into native proof or release a public result.
-		completeFailure := r.fault || r.kill || r.expired ||
-			(r.eof && r.exited && (!r.normal || r.exit != 0 || r.refusal != nil || !completionLineOK))
+		streamSettled := r.statusEOF && r.eof && r.stderrEOF && r.exited && r.reaped
+		childSettled := r.statusEOF && r.exited && r.reaped
+		completeFailure := ((r.fault || r.kill || r.expired) && childSettled) ||
+			(streamSettled && !completeSuccess)
 		if completeFailure || (completeSuccess && (r.context.Mode == RunnerInitialize || r.readDone)) {
 			r.closeRequested = true
 			add(RunnerCloseOwned)
 		}
 	}
-	if r.reaped && r.closed {
+	if r.reaped && r.closed && r.statusEOF {
 		r.outcome = refusedOutcome(namecoinwire.NewFailure(namecoinwire.OutcomeUnknown, true))
 		if !r.fault && r.closeOK && r.refusal != nil && !r.runEntered &&
 			((r.normal && r.exit == r.refusal.Exit() && r.eof) || r.kill) {
 			r.outcome = refusedOutcome(*r.refusal)
-		} else if !r.fault && r.closeOK && !r.kill && !r.expired && r.admitted && r.nativeDone && r.eof && r.normal && r.exit == 0 &&
+		} else if !r.fault && r.closeOK && !r.kill && !r.expired && r.admitted && r.nativeDone && r.statusEOF && r.eof && r.stderrEOF && r.normal && r.exit == 0 &&
 			(r.context.Mode != RunnerInitialize || len(r.stdout) == 0) {
 			if r.context.Mode == RunnerInitialize {
 				r.outcome = Outcome{done: true, success: true}
@@ -403,8 +425,8 @@ func (r *Runner) fail() { r.fault, r.stopping = true, true }
 
 func childEvent(k RunnerEventKind) bool {
 	switch k {
-	case RunnerAdmitted, RunnerStdout, RunnerStderr, RunnerEOF, RunnerEffectStarted,
-		RunnerNativeCompleted, RunnerDefiniteRefusal, RunnerExited, RunnerReaped:
+	case RunnerAdmitted, RunnerStdout, RunnerStderr, RunnerStderrEOF, RunnerEOF, RunnerEffectStarted,
+		RunnerStatusEOF, RunnerNativeCompleted, RunnerDefiniteRefusal, RunnerExited, RunnerReaped:
 		return true
 	}
 	return false
