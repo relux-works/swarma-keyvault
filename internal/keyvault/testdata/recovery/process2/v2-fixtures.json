@@ -1,0 +1,115 @@
+{
+  "schema": "keyvault-namecoin-process2-v2-public-fixtures/1",
+  "producer": "RecoveryManager.Create using recoverySeal, the v2 recovery binding, and the production ECIES/AES-GCM code",
+  "seed": "Published recoveryFixturePhrase constant in recovery_test.go; public 24-word input only; no plaintext is serialized",
+  "fixtures": [
+    {
+      "name": "v2-equal-service",
+      "root_service": "same-fixture",
+      "namecoin_service": "same-fixture",
+      "recovery_version": 7,
+      "nostr_version": 4,
+      "namecoin_version": 9,
+      "files": {
+        "v2-equal-service-account-pin.json": {
+          "size_bytes": 304,
+          "sha256": "a813dc349e62f1b50f6501d1c7b6ff14c7a053f6b6c8a5f0b31ec05324bbc0a2"
+        },
+        "v2-equal-service-pair.json": {
+          "size_bytes": 1166,
+          "sha256": "9d52e0d493adfbb4ee77fab4a2e8da76270a7691217b60abcb97c22202aa41fd"
+        },
+        "v2-equal-service-record.json": {
+          "size_bytes": 1188,
+          "sha256": "c52263a7f70a4f11c8e3864b67e55f133a6caf3237838075d56a698d8d96a6a6"
+        },
+        "v2-equal-service-selection.json": {
+          "size_bytes": 1467,
+          "sha256": "e27d1201dbc2cd30b7508c9d0247b4afc8b8b0c399f232842022cd2aec479336"
+        },
+        "v2-equal-service-sidecar.kvns": {
+          "size_bytes": 264,
+          "sha256": "1eb65d59fc40cbc1106d44ad54020756acdea7abbe1ce6b2104a79d624dc2d48"
+        }
+      },
+      "bindings": [
+        {
+          "purpose": "nostr",
+          "domain": "works.relux.mac-keyvault.recovery-envelope.v2",
+          "namespace": "works.relux.mac-keyvault.nostr-wrap.v1",
+          "physical_account": "same-fixture/recovery@7",
+          "logical_account": "same-fixture/nostr@4",
+          "metadata_file": "v2-equal-service-record.json",
+          "wrapping_point_hex": "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+          "preimage_sha256": "4ff52a58d88d428618210f000848d5615a0c7b584e45d0f25492477d8d323f3c",
+          "binding_sha256": "4ff52a58d88d428618210f000848d5615a0c7b584e45d0f25492477d8d323f3c"
+        },
+        {
+          "purpose": "namecoin",
+          "domain": "works.relux.mac-keyvault.recovery-envelope.v2",
+          "namespace": "works.relux.mac-keyvault.namecoin-wrap.v1",
+          "physical_account": "same-fixture/recovery@7",
+          "logical_account": "same-fixture/namecoin@9",
+          "metadata_file": "v2-equal-service-record.json",
+          "wrapping_point_hex": "047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc4766997807775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
+          "preimage_sha256": "90ccc9519f26fa33f3273f49faf1ad4218df3f7847f77f7d5fcdba6ceadee797",
+          "binding_sha256": "90ccc9519f26fa33f3273f49faf1ad4218df3f7847f77f7d5fcdba6ceadee797"
+        }
+      ]
+    },
+    {
+      "name": "v2-distinct-service",
+      "root_service": "nostr-fixture",
+      "namecoin_service": "namecoin-fixture",
+      "recovery_version": 7,
+      "nostr_version": 4,
+      "namecoin_version": 9,
+      "files": {
+        "v2-distinct-service-account-pin.json": {
+          "size_bytes": 309,
+          "sha256": "53efd1f7aa7a4de036cf3b866764f973b012458777a6649f2468731acbefa753"
+        },
+        "v2-distinct-service-pair.json": {
+          "size_bytes": 1166,
+          "sha256": "82d6a74b7120b67a75a8178a788c4fa4ab8e2b7c644b128292ca0d6ba849a3cc"
+        },
+        "v2-distinct-service-record.json": {
+          "size_bytes": 1194,
+          "sha256": "b557a13f962b92ba25d46604d518b25d25a6dd4c06947da02e85737b520c8961"
+        },
+        "v2-distinct-service-selection.json": {
+          "size_bytes": 1475,
+          "sha256": "9c2b20c564437c0716a1c7ecfde2285ebfaa333a131c89e2b4d0b4a6fb330082"
+        },
+        "v2-distinct-service-sidecar.kvns": {
+          "size_bytes": 270,
+          "sha256": "88f97130ebb066d8f6b1b9cee4447018111ffbd2a1f4ab65e3c06cbc4cf0f679"
+        }
+      },
+      "bindings": [
+        {
+          "purpose": "nostr",
+          "domain": "works.relux.mac-keyvault.recovery-envelope.v2",
+          "namespace": "works.relux.mac-keyvault.nostr-wrap.v1",
+          "physical_account": "nostr-fixture/recovery@7",
+          "logical_account": "nostr-fixture/nostr@4",
+          "metadata_file": "v2-distinct-service-record.json",
+          "wrapping_point_hex": "046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5",
+          "preimage_sha256": "e5a9c4f91c2b1e6c6f3bcde35ec278beeb02aad54cacdff79c647b81f046b2c1",
+          "binding_sha256": "e5a9c4f91c2b1e6c6f3bcde35ec278beeb02aad54cacdff79c647b81f046b2c1"
+        },
+        {
+          "purpose": "namecoin",
+          "domain": "works.relux.mac-keyvault.recovery-envelope.v2",
+          "namespace": "works.relux.mac-keyvault.namecoin-wrap.v1",
+          "physical_account": "nostr-fixture/recovery@7",
+          "logical_account": "namecoin-fixture/namecoin@9",
+          "metadata_file": "v2-distinct-service-record.json",
+          "wrapping_point_hex": "047cf27b188d034f7e8a52380304b51ac3c08969e277f21b35a60b48fc4766997807775510db8ed040293d9ac69f7430dbba7dade63ce982299e04b79d227873d1",
+          "preimage_sha256": "5902277cbaecf8ca8bda3a6c2998e6e02c0444de4b732fa09e3171815a5372f8",
+          "binding_sha256": "5902277cbaecf8ca8bda3a6c2998e6e02c0444de4b732fa09e3171815a5372f8"
+        }
+      ]
+    }
+  ]
+}

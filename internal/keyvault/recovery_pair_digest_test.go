@@ -259,13 +259,14 @@ const recoveryShared = "recoveryMetadataSHA256"
 // non-test source files of this package that use a hash package. A new hashing
 // function anywhere in the package fails the guard by name until it is reviewed
 // and added here.
+// BuildRecoveryProcess2Frame hashes the complete account-pin bytes before comparing the selected pin digest.
 var recoveryReviewedHashers = []string{
 	"EnclaveStore.signOwnerDocument", "ExportRootGrants", "NewRootGrantsRecord", "RootQualificationCreate",
 	"SSHAgent.signAudited", "deriveRecovery", "masterRecoveryNode", "mnemonicIndices", "newRecoveryAdoptionPlan",
 	"prepareRootGrantsAttach", "recoveryBinding", "recoveryHash160", "recoveryMetadataSHA256", "recoveryNode.derive",
 	"recoveryNode.xpub", "recoverySeal", "rootGrantsBIP85Entropy", "rootGrantsCompletionACK", "rootGrantsPlaintextBinding",
 	"sealRootGrantsWithRandom", "validRecoveryNamecoinPins", "validateWrapping",
-	"SignRootGrantsGrantV3With", "rootGrantsGrantV3Digest", "rootGrantsHashHex",
+	"BuildRecoveryProcess2Frame", "SignRootGrantsGrantV3With", "rootGrantsGrantV3Digest", "rootGrantsHashHex",
 }
 
 // recoveryIsHashPath is a BOUNDED list of the hash packages the inventory knows,

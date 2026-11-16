@@ -52,3 +52,9 @@ binding and software unwrap-to-signature path across later versions. The fixture
 contains ciphertext and public metadata only. Its tests establish software
 compatibility under known-public toy wrapping keys. Native custody, code-identity
 ACLs and hardware enforcement require their separate qualified lane.
+
+The process/2 public software fixtures, including equal-service and
+distinct-service v2 records with independent Nostr and Namecoin generations,
+are documented in [`process2/README.md`](process2/README.md). They use the
+published synthetic mnemonic and test-only software wrapping keys; the files
+contain only public metadata and ciphertext.

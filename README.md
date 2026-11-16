@@ -4,7 +4,9 @@ macOS key custody and narrow signing/KEK interfaces, extracted from the publishe
 `relux-works/mac-infra` component at `3e9ee3e749f3ef8b6f6d4f188c39bb8207efa337`.
 The current source candidate retains P-256 key custody, the paired Secure Enclave
 helper, signer contract 1, the SSH agent bridge and the `kek-1` broker/client.
-Standalone validation and installed adoption are pending.
+It also contains portable process/2 Go custody codecs and a subprocess adapter;
+the existing CLI remains on contract 1, and no native process/2 helper or pin is
+included here. Standalone validation and installed adoption are pending.
 
 The module is `github.com/relux-works/swarma-keyvault`. The public KEK client is
 `pkg/kekclient`; the signer client remains internal in this initial extraction.
@@ -16,6 +18,16 @@ keep their current compatibility contract. Source extraction performs no store
 migration or installed binary replacement.
 
 ## Tools and local build
+
+The portable process/2 codecs, complete-pair projection and launch/status/result
+barrier are built with Go 1.26.10 or later. Run
+`go test -count=1 ./internal/namecoinprocess ./internal/keyvault` for their
+bounded codec, v1/v2 software-fixture and subprocess integration coverage. The
+tests build a test-only helper and keep it with temporary result files under Go's
+`TMPDIR`; the compiler cache uses `GOCACHE`. Linux tests also shrink a real
+fd5 pipe to exercise deadline-driven writer close and join. These tests use
+public fixtures only and do not perform Keychain operations. Process/2 CLI
+integration and the matched native helper/pin remain a separate platform gate.
 
 The [offline registration interoperability suite](interop/namecoin-registration/README.md)
 checks the independently built identity CLI against public Namecoin wire, review
