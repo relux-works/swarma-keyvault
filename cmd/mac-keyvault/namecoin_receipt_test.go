@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -22,7 +24,7 @@ import (
 const namecoinReceiptLostDiagnostic = "namecoin_signature_receipt_unavailable: signing may have completed; preserve the stored result and do not retry automatically\n"
 
 // Claim: JSON and text success are reported only after their complete canonical
-// receipt bytes reach stdout using a public software-runner fixture.
+// receipt bytes reach stdout using privately staged public software fixtures.
 func TestNamecoinSuccessReceiptRequiresCompleteDelivery(t *testing.T) {
 	fixture := newNamecoinReceiptFixture(t)
 	for _, jsonMode := range []bool{true, false} {
@@ -148,10 +150,10 @@ type namecoinReceiptFixture struct {
 
 func newNamecoinReceiptFixture(t *testing.T) namecoinReceiptFixture {
 	t.Helper()
-	profilePath := filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", "native-selection", "two-stage-reservation.json")
-	pinPath := filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", "two-stage", "account-pin.json")
-	requestPath := filepath.Join("..", "..", "internal", "namecoinwire", "testdata", "two-stage", "A-request.json")
-	profile, err := os.ReadFile(profilePath)
+	profileSource := filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", "native-selection", "two-stage-reservation.json")
+	pinSource := filepath.Join("..", "..", "internal", "namecoinpsbt", "testdata", "two-stage", "account-pin.json")
+	requestSource := filepath.Join("..", "..", "internal", "namecoinwire", "testdata", "two-stage", "A-request.json")
+	profile, err := os.ReadFile(profileSource)
 	if err != nil {
 		t.Fatal("read public profile fixture:", err)
 	}
@@ -159,10 +161,43 @@ func newNamecoinReceiptFixture(t *testing.T) namecoinReceiptFixture {
 	if err != nil {
 		t.Fatal("decode public profile fixture:", err)
 	}
-	request, err := os.ReadFile(requestPath)
+	pin, err := os.ReadFile(pinSource)
+	if err != nil {
+		t.Fatal("read public account pin fixture:", err)
+	}
+	request, err := os.ReadFile(requestSource)
 	if err != nil {
 		t.Fatal("read public request fixture:", err)
 	}
+	account, err := user.LookupId(strconv.Itoa(os.Getuid()))
+	if err != nil {
+		t.Fatal("lookup fixture owner home:", err)
+	}
+	fixtureDir, err := os.MkdirTemp(account.HomeDir, ".namecoin-receipt-fixture-")
+	if err != nil {
+		t.Fatal("create private fixture directory:", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(fixtureDir); err != nil {
+			t.Error("remove private fixture directory:", err)
+		}
+	})
+	// Checked-in public inputs remain readable; only disposable staged copies
+	// receive the exact private modes required by the production file guard.
+	stagePrivate := func(name string, raw []byte) string {
+		path := filepath.Join(fixtureDir, name)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal("stage private fixture:", err)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("staged fixture mode=%v err=%v, want 0600", info, err)
+		}
+		return path
+	}
+	profilePath := stagePrivate("profile.json", profile)
+	pinPath := stagePrivate("account-pin.json", pin)
+	requestPath := stagePrivate("request.json", request)
 	profileAbs, err := filepath.Abs(profilePath)
 	if err != nil {
 		t.Fatal(err)
