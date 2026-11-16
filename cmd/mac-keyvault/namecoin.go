@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/relux-works/swarma-keyvault/internal/namecoinprocess"
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
@@ -73,12 +73,32 @@ func runNamecoinWith(ctx context.Context, args []string, out output, sign nameco
 			"sitting_id":    completion.sittingID,
 			"unsigned_txid": completion.unsignedTxID,
 		}
-		return out.success(result, func(w io.Writer) {
-			fmt.Fprintf(w, "status: SIGNED\nresult_path: %s\nresult_sha256: %s\n", result["result_path"], result["result_sha256"])
-		})
+		return namecoinSuccessReceipt(out, result)
 	default:
 		return out.fail(usagef("unsupported Namecoin operation"))
 	}
+}
+
+func namecoinSuccessReceipt(out output, result map[string]string) int {
+	var receipt []byte
+	if out.json {
+		encoded, err := json.MarshalIndent(response{OK: true, Command: out.command, Result: result}, "", "  ")
+		if err != nil {
+			return namecoinReceiptLost(out)
+		}
+		receipt = append(encoded, '\n')
+	} else {
+		receipt = []byte(fmt.Sprintf("status: SIGNED\nresult_path: %s\nresult_sha256: %s\n", result["result_path"], result["result_sha256"]))
+	}
+	if !writeRecoveryReceipt(out.stdout, receipt) {
+		return namecoinReceiptLost(out)
+	}
+	return exitOK
+}
+
+func namecoinReceiptLost(out output) int {
+	writeRecoveryReceipt(out.stderr, []byte("namecoin_signature_receipt_unavailable: signing may have completed; preserve the stored result and do not retry automatically\n"))
+	return exitFailure
 }
 
 func failNamecoin(out output, mode namecoinprocess.Mode, failure namecoinwire.Failure) int {

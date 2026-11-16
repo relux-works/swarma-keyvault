@@ -11,6 +11,10 @@ import (
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
 )
 
+// Core28 requires name outputs to carry at least COIN/100 on the supported
+// modern network profiles; relay dust is a separate lower bound.
+const core28MinimumNameOutputAtoms uint64 = 1_000_000
+
 type InputView struct {
 	TxID         string
 	Vout         uint32
@@ -238,6 +242,9 @@ func inspectTemplate(template namecoinwire.Transaction, plan namecoinwire.Plan, 
 		if facts.operation != "" {
 			nameOutputs++
 			view.NameAmount = v.amount
+			if v.amount < core28MinimumNameOutputAtoms {
+				return refuse(namecoinwire.FeeRefused)
+			}
 			if meta.Kind != "name" || meta.Path != reg.NameOutputPath || !bytes.Equal(v.script, nameScript(reg, reveal, facts.program)) {
 				return refuse(namecoinwire.IntentMismatch)
 			}
