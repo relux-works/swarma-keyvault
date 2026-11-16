@@ -134,6 +134,10 @@ struct NativeNamecoinProcess2Frame {
                 throw NativeJournalRefusal.mismatch
             }
             let pin = try NativeArchiveJSON.decode(inputs.accountPin, maximum: 32768, canonical: true)
+            _ = try pin.fields(["schema", "group", "account", "account_xpub", "master_fingerprint", "account_path"])
+            guard try pin.field("schema").text() == "keyvault-namecoin-account-pin/1",
+                  try pin.field("group").text() == inputs.journal.group,
+                  try pin.field("account").text() == inputs.journal.account else { throw NativeJournalRefusal.mismatch }
             guard try pin.field("account_xpub").text() == namecoin[offset + 7].text(),
                   try namecoin[offset + 8].text() == "[" + pin.field("master_fingerprint").text() + "/84h/7h/0h]",
                   try pin.field("account_path").text() == "m/84h/7h/0h" else { throw NativeJournalRefusal.mismatch }
@@ -176,6 +180,7 @@ func nativeNamecoinReadCustody(_ descriptor: Int32, deadline: UInt64) throws -> 
         var watched = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
         let ready = Darwin.poll(&watched, 1, Int32(milliseconds))
         if ready < 0 && errno == EINTR { continue }
+        if ready == 0 { throw NativeNamecoinProcessFailure("request_expired") }
         guard ready > 0, watched.revents & Int16(POLLERR | POLLNVAL) == 0 else {
             throw NativeNamecoinProcessFailure("invalid_request")
         }
@@ -205,7 +210,7 @@ func runNamecoinProcess2(arguments argv: [String], stdinDescriptor: Int32, resul
         let arguments = try NativeNamecoinProcessArguments.parse2(argv)
         let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(arguments.timeoutSeconds) * 1_000_000_000
         try nativeNamecoinRequireEmptyStdin(stdinDescriptor)
-        let inputs = try nativeNamecoinLoadInputs(arguments, dependencies: dependencies)
+        let inputs = try nativeNamecoinLoadInputs(arguments, dependencies: dependencies, requestMaximum: 2 << 20, psbtMaximum: 1 << 20)
         let raw = try nativeNamecoinReadCustody(custodyDescriptor, deadline: deadline)
         let closeResult = Darwin.close(custodyDescriptor)
         custodyClosed = true

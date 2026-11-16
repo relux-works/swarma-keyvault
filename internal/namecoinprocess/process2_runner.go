@@ -283,6 +283,7 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	deadlineChannel := timer.C
 	contextChannel := ctx.Done()
 	frame := bytes.Clone(options.Frame)
+	defer clear(frame)
 	output, err := namecoinfiles.CreateOutput(options.Invocation.args.OutputPath)
 	if err != nil {
 		return unknown, evidence

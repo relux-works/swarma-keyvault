@@ -232,7 +232,8 @@ func runNamecoinProcess1(arguments argv: [String], stdinDescriptor: Int32, resul
 }
 
 func nativeNamecoinLoadInputs(_ arguments: NativeNamecoinProcessArguments,
-                                      dependencies: NativeNamecoinProcessDependencies) throws -> NativeNamecoinProcessInputs {
+                                      dependencies: NativeNamecoinProcessDependencies,
+                                      requestMaximum: Int = 8 << 20, psbtMaximum: Int = 4 << 20) throws -> NativeNamecoinProcessInputs {
     let profile = try dependencies.readPublicFile(arguments.profilePath, 4 << 20)
     guard Data(SHA256.hash(data: profile)) == arguments.profileDigest else {
         throw NativeNamecoinProcessFailure("policy_refused")
@@ -271,11 +272,12 @@ func nativeNamecoinLoadInputs(_ arguments: NativeNamecoinProcessArguments,
     let operationInput: Data
     switch arguments.mode {
     case .sign:
-        operationInput = try dependencies.readPublicFile(arguments.requestPath, 8 << 20)
-        guard Data(SHA256.hash(data: operationInput)) == arguments.requestDigest else {
+        operationInput = try dependencies.readPublicFile(arguments.requestPath, requestMaximum)
+        guard operationInput.count <= requestMaximum, Data(SHA256.hash(data: operationInput)) == arguments.requestDigest else {
             throw NativeNamecoinProcessFailure("invalid_request")
         }
         let request = try NativeArchiveRequest(operationInput, selected: selected)
+        guard request.psbt.count <= psbtMaximum else { throw NativeNamecoinProcessFailure("invalid_request") }
         try nativeNamecoinValidateRevealPin(request, selection: selected, path: arguments.revealValuesPinPath,
                                             readPublicFile: dependencies.readPublicFile)
     case .reconcile:

@@ -119,7 +119,7 @@ private struct P2Fixture {
     let pinOffset = groupOffset + parsed.physicalAccount.count
     let sidecarOffset = pinOffset + 32 + 4
     let recordOffset = sidecarOffset + parsed.sidecar.count + 4
-    for index in [serviceOffset, groupOffset, pinOffset, sidecarOffset, recordOffset, fixture.frame.count - 33, fixture.frame.count - 1] {
+    for index in [serviceOffset, groupOffset, pinOffset, sidecarOffset, recordOffset, fixture.frame.count - 32 - 181 - 65, fixture.frame.count - 1] {
         var changed = fixture.frame; changed[index] ^= 1
         #expect(throws: NativeNamecoinProcessFailure("account_mismatch")) {
             _ = try NativeNamecoinProcess2Frame(changed).selectedAccount(fixture.inputs)
@@ -149,7 +149,121 @@ private struct P2Fixture {
     let bytes = Data([1, 2, 3])
     #expect(bytes.withUnsafeBytes { Darwin.write(descriptors[1], $0.baseAddress!, $0.count) } == bytes.count)
     let deadline = DispatchTime.now().uptimeNanoseconds + 10_000_000
-    #expect(throws: (any Error).self) { _ = try nativeNamecoinReadCustody(descriptors[0], deadline: deadline) }
+    #expect(throws: NativeNamecoinProcessFailure("request_expired")) { _ = try nativeNamecoinReadCustody(descriptors[0], deadline: deadline) }
     _ = Darwin.close(descriptors[1]); descriptors[1] = -1
     #expect(try nativeNamecoinReadCustody(descriptors[0], deadline: DispatchTime.now().uptimeNanoseconds + 1_000_000_000).isEmpty)
+}
+
+private func p2Pipe(_ raw: Data = Data()) throws -> (Int32, Int32) {
+    var fds = [Int32](repeating: -1, count: 2)
+    guard pipe(&fds) == 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+    guard raw.count < 8192 else { _ = Darwin.close(fds[0]); _ = Darwin.close(fds[1]); throw NativeNamecoinProcessFailure("invalid_request") }
+    if !raw.isEmpty {
+        let written = raw.withUnsafeBytes { Darwin.write(fds[1], $0.baseAddress!, $0.count) }
+        guard written == raw.count else { _ = Darwin.close(fds[0]); _ = Darwin.close(fds[1]); throw NativeNamecoinProcessFailure("output_unavailable") }
+    }
+    return (fds[0], fds[1])
+}
+
+private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws -> Data {
+    var request = syntax.request
+    var manifest = try NativeArchiveJSON.decode(Data(request.field("plan_manifest_utf8").text().utf8), maximum: 1 << 20, canonical: false)
+    let selected = fixture.inputs.selection
+    for (key, value) in [("group", selected.group), ("account", selected.account), ("network", selected.network),
+                          ("genesis", nativeArchiveHex(selected.genesis)), ("account_pin_sha256", nativeArchiveHex(selected.publicPin))] {
+        manifest = try p2Replace(manifest, key, .string(value))
+    }
+    manifest = try p2Replace(manifest, "policy", selected.policy)
+    let bytes = try manifest.canonical()
+    request = try p2Replace(request, "plan_manifest_utf8", .string(String(decoding: bytes, as: UTF8.self)))
+    request = try p2Replace(request, "plan_sha256", .string(nativeArchiveHex(Data(SHA256.hash(data: Data("swarma-identity/namecoin-registration-plan/2\0".utf8) + p2Field(bytes))))))
+    request = try p2Replace(request, "network", .string(selected.network))
+    return try request.canonical()
+}
+
+// The protected-run closure is explicitly simulated; this checks real pipes,
+// fd3/status/ACK ordering and refusal boundaries, never native signing success.
+@MainActor @Test func process2DispatcherBridgesOnlyValidatedCustody() async throws {
+    let fixture = try P2Fixture("v2-distinct-service")
+    for mode in ["complete", "malformed", "metadata", "before-effect", "after-effect"] {
+        let syntax = try BridgePublicFixture()
+        let request = try p2Request(fixture, syntax: syntax)
+        var argv = ["namecoin", "sign-psbt", "--process-contract", "2", "--group", fixture.inputs.journal.group,
+                    "--account", fixture.inputs.journal.account, "--profile", "/public/profile.json",
+                    "--profile-sha256", nativeArchiveHex(Data(SHA256.hash(data: fixture.inputs.canonicalSelection))),
+                    "--account-pin", "/public/pin.json", "--request", "/public/request.json",
+                    "--request-sha256", nativeArchiveHex(Data(SHA256.hash(data: request))), "--output", "/public/result.json",
+                    "--timeout-seconds", "30"]
+        #expect(argv.count > 2)
+        let stdin = try p2Pipe(); _ = Darwin.close(stdin.1)
+        defer { _ = Darwin.close(stdin.0) }
+        var raw = fixture.frame
+        if mode == "malformed" { raw.append(0) }
+        if mode == "metadata" { raw[14 + 6 + 2] ^= 1 }
+        let custody = try p2Pipe(raw); _ = Darwin.close(custody.1)
+        // runNamecoinProcess2 owns custody.0 and the status writer after creation.
+        let status = try p2Pipe()
+        defer { _ = Darwin.close(status.0) }
+        var protectedCalls = 0, sinkCreated = false
+        let resultBytes = Data("public simulated result".utf8)
+        let digest = Data(SHA256.hash(data: resultBytes))
+        var ack = try NativeArchiveJSON.object([("schema", .string("keyvault-namecoin-psbt-ack/2")),
+            ("status", .string("SIGNED")), ("result_sha256", .string(nativeArchiveHex(digest)))]).canonical()
+        ack.append(10)
+        let dependencies = NativeNamecoinProcessDependencies(readPublicFile: { path, maximum in
+            let bytes: Data
+            switch path {
+            case "/public/profile.json": bytes = fixture.inputs.canonicalSelection
+            case "/public/pin.json": bytes = fixture.inputs.accountPin
+            case "/public/request.json":
+                #expect(maximum == 2 << 20)
+                bytes = request
+            default: throw NativeNamecoinProcessFailure("invalid_request")
+            }
+            guard bytes.count <= maximum else { throw NativeNamecoinProcessFailure("invalid_request") }
+            return bytes
+        }, currentHelperCDHash: { fixture.inputs.journal.helperCDHash }, sealedAccountSource: nil,
+        makeStatusSink: { descriptor, binding in
+            sinkCreated = true
+            return try NativeNamecoinStatusWriter(descriptor: descriptor, binding: binding)
+        }, runArchive: { operation, _, before in
+            protectedCalls += 1
+            if mode == "before-effect" { throw NativeNamecoinProcessFailure("journal_unavailable") }
+            try before()
+            if mode == "after-effect" { throw NativeNamecoinProcessFailure("auth_refused") }
+            try operation.output.writePublicResult(resultBytes, expectedSHA256: digest)
+            try operation.output.close()
+            return ack
+        })
+        let result = await runNamecoinProcess2(arguments: argv, stdinDescriptor: stdin.0, resultDescriptor: syntax.descriptor,
+            statusDescriptor: status.1, custodyDescriptor: custody.0, dependencies: dependencies)
+        if !sinkCreated { _ = Darwin.close(status.1) }
+        var frames = Data()
+        var buffer = [UInt8](repeating: 0, count: 256)
+        while true {
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(status.0, $0.baseAddress!, $0.count) }
+            guard count >= 0 else { throw NativeNamecoinProcessFailure("outcome_unknown") }
+            if count == 0 { break }
+            frames.append(contentsOf: buffer.prefix(count))
+        }
+        switch mode {
+        case "complete":
+            #expect(protectedCalls == 1 && result.exitCode == 0 && result.stdout == ack && frames.count == 160)
+            if frames.count == 160 {
+                let binding = try nativeNamecoinStatusBinding(.parse2(argv))
+                #expect(frames[6] == 1 && frames[86] == 2)
+                #expect(Data(frames[8..<40]) == binding && Data(frames[88..<120]) == binding)
+                #expect(Data(frames[120..<152]) == digest)
+            }
+        case "malformed", "metadata":
+            #expect(protectedCalls == 0 && frames.isEmpty && result.exitCode != 0)
+        case "before-effect":
+            #expect(protectedCalls == 1 && frames.isEmpty && result.exitCode != 0)
+        default:
+            #expect(protectedCalls == 1 && frames.count == 80 && result.exitCode != 0)
+            #expect(String(decoding: result.stdout, as: UTF8.self).contains("UNKNOWN"))
+        }
+        // Every invocation is distinct. No failed/unknown case invokes a retry.
+        argv.removeAll()
+    }
 }
