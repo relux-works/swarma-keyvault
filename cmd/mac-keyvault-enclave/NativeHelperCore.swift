@@ -1051,7 +1051,7 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--recovery-private"] {
 }
 
 if CommandLine.arguments.dropFirst().first == "namecoin" {
-    let result = await runNamecoinProcess1(arguments: Array(CommandLine.arguments.dropFirst()),
+    let result = await runNamecoinProcess(arguments: Array(CommandLine.arguments.dropFirst()),
                                            stdinDescriptor: 0, resultDescriptor: 3, statusDescriptor: 4,
                                            dependencies: .live())
     FileHandle.standardOutput.write(result.stdout)

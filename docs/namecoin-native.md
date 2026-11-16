@@ -1,11 +1,28 @@
 # Namecoin native internal components
 
-The native custody target is macOS. These internal source components do not add
-an available Namecoin transaction command. There is no Namecoin PSBT, raw-digest,
-account-unwrapping, journal-initialization or reconciliation dispatch operation
-in the Swift helper. Existing P-256, document and recovery routes retain their
-interfaces. Source preparation does not qualify Touch ID, Keychain isolation,
-installed code identity, native durability or transaction signing.
+The native custody target is macOS. The explicit process/2 sign-psbt route
+connects the vault's selected paired-item read to one bounded KVCY1 frame on fd5.
+The vault alone checks the complete pair, sole-application ACL and pinned
+metadata/value before projecting its Namecoin envelope. The helper verifies the
+exact KVMD1 metadata, retained public profile/sidecar/pin, versioned recovery
+record and KVNE1 binding. It never queries the paired item or receives the Nostr
+envelope. Frame lengths, exact end and transport EOF are required before effects.
+
+The retained child is admitted against the immutable matched-build helper
+CDHash before any frame byte is released. The attempt binding is a separate
+public correlation digest. fd3 is the retained exclusive public output, fd4
+carries status-r3, stdin is empty, stdout carries the exact ACK and stderr stays
+empty. One writer is joined and all owned descriptors close before the same
+child's wait/reap and final output verification release SUCCESS; the original
+deadline is checked again after public signature verification. UNKNOWN retains
+output and publishes no result or final transaction and never retries.
+
+Selector-absent CLI commands and the internal process/1 parser preserve their
+existing behavior. Explicit process/2 admits sign-psbt only. Journal initialization
+and reconciliation are not enabled by this route. The protected bridge still
+requires complete native review and fresh biometrics with no password fallback.
+Source tests and pre-effect refusals do not qualify live Keychain, Enclave,
+Touch ID, native durability, installed adoption or successful native signing.
 
 ## Process exclusion
 
@@ -29,8 +46,7 @@ same process must perform private transaction work; a parent-held or inherited
 listener is insufficient. Selected-item adoption uses the same gate for its own
 finite read/mutation/readback phase and releases it before launching a helper;
 the helper must independently acquire and reload. Those are separate operations,
-not one atomic transaction. The current internal package is not yet linked into
-a Namecoin engine.
+not one atomic transaction. The linked native archive owns this gate during protected signing.
 
 The tests use real paired processes and a public simulated effect counter. They
 cover a replaced/unlinked disposable filesystem lock/root, different request IDs
@@ -68,8 +84,8 @@ create a fresh `LAContext`, request biometrics without password fallback, use th
 full operation/account/fee/64-digit SHA-256 reason, invoke its in-process operation
 and invalidate the context on every exit. It does not clip the reason or return a
 consent boolean/token. Exact OS prompt presentation still requires attended native
-qualification. No public operation currently reaches this primitive, and no
-signing capability is claimed from its existence.
+qualification. The process/2 signing bridge reaches this primitive only after input and
+custody validation. Successful native signing still needs attended qualification.
 
 Journal initialization has a separate operation label/review and fresh biometric
 context inside the first post-review owner adoption sitting. It signs no

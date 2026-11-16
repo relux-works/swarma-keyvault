@@ -748,6 +748,79 @@ int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned 
     CFRelease(item); return status;
 }
 
+// One selected item; the helper never calls this vault-only operation. Check
+// the exact canonical metadata pin before retrieving any paired ciphertext.
+int MacKeyVaultRecoveryReadSelected(const char *account, const unsigned char *metadataHash,
+    unsigned char **record, size_t *recordLength, unsigned char **pair, size_t *pairLength) {
+    if (!account || !metadataHash || !record || !recordLength || !pair || !pairLength) return errSecParam;
+    *record = NULL; *recordLength = 0; *pair = NULL; *pairLength = 0;
+    OSStatus status = MacKeyVaultRecoveryCode(0, NULL, 0);
+    if (status != errSecSuccess) return status;
+    CFMutableDictionaryRef query = NULL; SecKeychainRef keychain = NULL;
+    status = MacKeyVaultNostrQuery(&query, &keychain, 0);
+    if (status != errSecSuccess) return status;
+    CFStringRef name = MacKeyVaultString(account);
+    if (!name) { CFRelease(query); CFRelease(keychain); return errSecParam; }
+    CFDictionarySetValue(query, kSecAttrAccount, name);
+    CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll);
+    CFTypeRef matches = NULL;
+    status = SecItemCopyMatching(query, &matches);
+    CFRelease(name); CFRelease(query); CFRelease(keychain);
+    if (status != errSecSuccess) return status;
+    if (!matches || CFGetTypeID(matches) != CFArrayGetTypeID() || CFArrayGetCount((CFArrayRef)matches) != 1) {
+        if (matches) CFRelease(matches);
+        return errSecDecode;
+    }
+    SecKeychainItemRef item = (SecKeychainItemRef)CFArrayGetValueAtIndex((CFArrayRef)matches, 0);
+    status = MacKeyVaultNostrCheckAccess(item);
+    UInt32 tag = kSecCommentItemAttr, format = CSSM_DB_ATTRIBUTE_FORMAT_BLOB;
+    SecKeychainAttributeInfo info = {1, &tag, &format};
+    SecKeychainAttributeList *attributes = NULL;
+    if (status == errSecSuccess) status = SecKeychainItemCopyAttributesAndData(item, &info, NULL, &attributes, NULL, NULL);
+    if (status == errSecSuccess) {
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        if (!attributes || attributes->count != 1 || attributes->attr[0].tag != tag ||
+            !attributes->attr[0].data || attributes->attr[0].length < 1 || attributes->attr[0].length > 32768) status = errSecDecode;
+        else {
+            CC_SHA256(attributes->attr[0].data, attributes->attr[0].length, digest);
+            if (memcmp(digest, metadataHash, sizeof(digest)) != 0) status = errSecDecode;
+            else {
+                *recordLength = attributes->attr[0].length;
+                *record = malloc(*recordLength);
+                if (!*record) status = errSecAllocate;
+                else memcpy(*record, attributes->attr[0].data, *recordLength);
+            }
+        }
+    }
+    if (attributes) SecKeychainItemFreeAttributesAndData(attributes, NULL);
+    attributes = NULL;
+    UInt32 length = 0; void *data = NULL;
+    // Read metadata again together with the value; a changed item refuses.
+    if (status == errSecSuccess) status = SecKeychainItemCopyAttributesAndData(item, &info, NULL, &attributes, &length, &data);
+    if (status == errSecSuccess) {
+        if (!attributes || attributes->count != 1 || attributes->attr[0].tag != tag ||
+            attributes->attr[0].length != *recordLength || !attributes->attr[0].data ||
+            memcmp(attributes->attr[0].data, *record, *recordLength) != 0 || !data || length < 1 || length > 65536) status = errSecDecode;
+        else {
+            *pair = malloc(length);
+            if (!*pair) status = errSecAllocate;
+            else { memcpy(*pair, data, length); *pairLength = length; }
+        }
+    }
+    if (data) memset_s(data, length, 0, length);
+    if (attributes || data) SecKeychainItemFreeAttributesAndData(attributes, data);
+    // Recheck the sole-application ACL before releasing the projection source.
+    if (status == errSecSuccess) status = MacKeyVaultNostrCheckAccess(item);
+    CFRelease(matches);
+    if (status != errSecSuccess) {
+        free(*record); *record = NULL; *recordLength = 0;
+        if (*pair) { memset_s(*pair, *pairLength, 0, *pairLength); free(*pair); }
+        *pair = NULL; *pairLength = 0;
+    }
+    return status;
+}
+
 // Exact public metadata pins removal. OS delete authorization is separate from
 // decrypt authorization; removal never retrieves the old private value.
 int MacKeyVaultNostrDelete(const char *account, const char *metadata, int *mutationAttempted) {

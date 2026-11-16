@@ -4,9 +4,9 @@ macOS key custody and narrow signing/KEK interfaces, extracted from the publishe
 `relux-works/mac-infra` component at `3e9ee3e749f3ef8b6f6d4f188c39bb8207efa337`.
 The current source candidate retains P-256 key custody, the paired Secure Enclave
 helper, signer contract 1, the SSH agent bridge and the `kek-1` broker/client.
-It also contains portable process/2 Go custody codecs and a subprocess adapter;
-the existing CLI remains on contract 1, and no native process/2 helper or pin is
-included here. Standalone validation and installed adoption are pending.
+Namecoin signing has an explicit `--process-contract 2` route with a bounded
+fd5 custody bridge to the paired native helper. Selector-absent commands retain
+contract 1. Native qualification and installed adoption remain separate gates.
 
 The module is `github.com/relux-works/swarma-keyvault`. The public KEK client is
 `pkg/kekclient`; the signer client remains internal in this initial extraction.
@@ -19,15 +19,18 @@ migration or installed binary replacement.
 
 ## Tools and local build
 
-The portable process/2 codecs, complete-pair projection and launch/status/result
-barrier are built with Go 1.26.10 or later. Run
+The process/2 codecs, selected complete-pair projection, native decoder and
+launch/status/result barrier are built with Go 1.26.10 or later. Run
 `go test -count=1 ./internal/namecoinprocess ./internal/keyvault` for their
 bounded codec, v1/v2 software-fixture and subprocess integration coverage. The
 tests build a test-only helper and keep it with temporary result files under Go's
 `TMPDIR`; the compiler cache uses `GOCACHE`. Linux tests also shrink a real
 fd5 pipe to exercise deadline-driven writer close and join. These tests use
-public fixtures only and do not perform Keychain operations. Process/2 CLI
-integration and the matched native helper/pin remain a separate platform gate.
+public fixtures only and do not perform Keychain operations. CLI dispatch and selected-projection tests use fake custody boundaries. Native
+code admission, Enclave access and attended signing require a separately
+qualified matched helper/vault pair; software fixtures do not prove them. On
+macOS use the confined test wrapper and a canonical private `TMPDIR` without
+symlink or writable-by-other ancestors for subprocess output fixtures.
 
 The [offline registration interoperability suite](interop/namecoin-registration/README.md)
 checks the independently built identity CLI against public Namecoin wire, review
@@ -286,8 +289,20 @@ a pinned pair for the current macOS user and creates a pair for two explicitly
 chosen identities in an attended terminal. Namecoin spending and registration are outside
 this interface. Existing P-256 interfaces retain their contracts.
 
-Internal Namecoin request/PSBT validation and public journal persistence are
-under development; they are not yet a qualified signing command. See the
+Namecoin's explicit process/2 route is:
+
+```text
+mac-keyvault namecoin sign-psbt --process-contract 2 --group ID --account ID --profile ABS --profile-sha256 HEX --account-pin ABS --request ABS --request-sha256 HEX --output NEW_ABS --timeout-seconds N [--reveal-values-pin ABS]
+```
+
+Use the separately retained public profile and account pin. The vault reads only
+that selected complete pair and sends its Namecoin sealed projection after
+admitting the exact retained child against the build-pinned helper CDHash.
+The helper reads no paired Keychain item. It validates fd5 framing, EOF and public
+metadata before the existing protected archive bridge, native review and fresh
+Touch ID. There is no helper/pin override, password fallback or retry. Ambiguous
+outcomes preserve the output and return UNKNOWN without publishing a result.
+Positive native signing remains an attended qualification gate. See the
 [journal and focused test entry point](docs/namecoin-journal.md) for file,
 recovery and test limits, and [native source](docs/namecoin-native.md) for the
 remaining custody integration and qualification requirements.

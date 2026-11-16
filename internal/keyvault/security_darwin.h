@@ -85,6 +85,10 @@ int MacKeyVaultNostrCreate(const char *account, const char *metadata, const unsi
 int MacKeyVaultNostrList(char **out, size_t *outLen);
 int MacKeyVaultNostrRead(const char *account, const char *metadata, unsigned char *secret);
 int MacKeyVaultRecoveryCreate(const char *account, const char *metadata, const unsigned char *data, size_t length, int *mutationAttempted);
+// Selected complete-pair read: verify sole-vault ACL and exact public metadata
+// hash before reading the value of the same retained item. No inventory/export.
+int MacKeyVaultRecoveryReadSelected(const char *account, const unsigned char *metadataHash,
+    unsigned char **record, size_t *recordLength, unsigned char **pair, size_t *pairLength);
 int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned char **out, size_t *length);
 int MacKeyVaultNostrDelete(const char *account, const char *metadata, int *mutationAttempted);
 int MacKeyVaultRecoveryCode(int pid, const unsigned char *expectedHash, size_t hashLength);

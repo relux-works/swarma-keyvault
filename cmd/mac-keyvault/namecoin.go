@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/relux-works/swarma-keyvault/internal/namecoinprocess"
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
 )
 
-const namecoinUsage = `mac-keyvault [--json] namecoin sign-psbt --group ID --account ID --profile ABS --profile-sha256 HEX --account-pin ABS --request ABS --request-sha256 HEX --output ABS --timeout-seconds N [--reveal-values-pin ABS]
+const namecoinUsage = `mac-keyvault [--json] namecoin sign-psbt [--process-contract 2] --group ID --account ID --profile ABS --profile-sha256 HEX --account-pin ABS --request ABS --request-sha256 HEX --output ABS --timeout-seconds N [--reveal-values-pin ABS]
 mac-keyvault [--json] namecoin reconcile --group ID --account ID --profile ABS --profile-sha256 HEX --account-pin ABS --query ABS --output ABS --timeout-seconds N
 mac-keyvault [--json] namecoin initialize-journal --group ID --account ID --profile ABS --profile-sha256 HEX --account-pin ABS --adoption-plan-sha256 HEX --timeout-seconds N`
 
@@ -21,18 +22,35 @@ func runNamecoin(args []string, out output) int {
 }
 
 func runNamecoinWith(ctx context.Context, args []string, out output, sign namecoinSignRunner) int {
+	return runNamecoinWithRunners(ctx, args, out, sign, runNamecoinSign2)
+}
+
+func runNamecoinWithRunners(ctx context.Context, args []string, out output, sign namecoinSignRunner, sign2 namecoinSign2Runner) int {
 	if len(args) == 0 {
 		return out.fail(usagef("namecoin requires an operation"))
 	}
-	// The public CLI exposes the three process/1 modes but never lets its caller
-	// choose a process-contract version. Parse through the same closed parser the
-	// helper uses, injecting only the fixed version marker here.
-	argv := []string{"namecoin", args[0], "--process-contract", "1"}
-	argv = append(argv, args[1:]...)
-	selection, err := namecoinprocess.ParseArgs(argv)
+	// A caller selector always enters the closed process/2 parser. A malformed
+	// selector cannot fall through to the selector-absent process/1 route.
+	var invocation namecoinprocess.Process2Invocation
+	var selection namecoinprocess.Args
+	var err error
+	process2 := false
+	for _, arg := range args[1:] {
+		if arg == "--process-contract" || strings.HasPrefix(arg, "--process-contract=") {
+			process2 = true
+		}
+	}
+	if process2 {
+		invocation, err = namecoinprocess.ParseProcess2Args(append([]string{"namecoin"}, args...))
+		selection = invocation.Args()
+	} else {
+		argv := []string{"namecoin", args[0], "--process-contract", "1"}
+		selection, err = namecoinprocess.ParseArgs(append(argv, args[1:]...))
+	}
 	if err != nil {
 		return out.fail(usagef("invalid Namecoin arguments; see help"))
 	}
+
 	switch selection.Mode {
 	case namecoinprocess.Reconcile:
 		// The query format has no agreed parent-local receipt selection contract.
@@ -49,10 +67,16 @@ func runNamecoinWith(ctx context.Context, args []string, out output, sign nameco
 	case namecoinprocess.InitializeJournal:
 		return failNamecoin(out, selection.Mode, namecoinwire.NewFailure(namecoinwire.HelperNotAdmitted, false))
 	case namecoinprocess.SignPSBT:
-		if sign == nil {
+		if (!process2 && sign == nil) || (process2 && sign2 == nil) {
 			return failNamecoin(out, selection.Mode, namecoinwire.NewFailure(namecoinwire.HelperNotAdmitted, false))
 		}
-		completion, err := sign(ctx, selection, namecoinprocess.FramedStatusSource{})
+		var completion namecoinSigningResult
+		var err error
+		if process2 {
+			completion, err = sign2(ctx, invocation)
+		} else {
+			completion, err = sign(ctx, selection, namecoinprocess.FramedStatusSource{})
+		}
 		if err != nil {
 			var failure namecoinwire.Failure
 			if !errors.As(err, &failure) {

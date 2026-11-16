@@ -192,12 +192,12 @@ func TestNamecoinUsageListsOnlyTheThreeClosedForms(t *testing.T) {
 	if code != exitUsage {
 		t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	for _, required := range []string{"namecoin sign-psbt", "namecoin reconcile", "namecoin initialize-journal"} {
+	for _, required := range []string{"namecoin sign-psbt", "namecoin reconcile", "namecoin initialize-journal", "[--process-contract 2]"} {
 		if !strings.Contains(stderr.String(), required) {
 			t.Fatalf("missing %q in usage hint: %s", required, stderr.String())
 		}
 	}
-	for _, forbidden := range []string{"name_update", "--process-contract", "<arbitrary"} {
+	for _, forbidden := range []string{"name_update", "<arbitrary"} {
 		if strings.Contains(stderr.String(), forbidden) {
 			t.Fatalf("public usage exposes %q: %s", forbidden, stderr.String())
 		}

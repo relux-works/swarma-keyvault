@@ -164,7 +164,7 @@ func build(out, seedVersion string) error {
 	}
 	goTool := filepath.Join(runtime.GOROOT(), "bin", "go")
 	link := "-X github.com/relux-works/swarma-keyvault/internal/keyvault.recoveryHelperCDHash=" + h.CDHash
-	if _, err := command(ctx, log, goTool, "build", "-trimpath", "-ldflags", link, "-o", vault, "./cmd/mac-keyvault"); err != nil {
+	if _, err := command(ctx, log, goTool, "build", "-p", "1", "-trimpath", "-ldflags", link, "-o", vault, "./cmd/mac-keyvault"); err != nil {
 		return err
 	}
 	if err := signArtifact(ctx, log, vault, codesignpolicy.Vault); err != nil {

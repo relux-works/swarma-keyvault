@@ -231,7 +231,7 @@ func runNamecoinProcess1(arguments argv: [String], stdinDescriptor: Int32, resul
     }
 }
 
-private func nativeNamecoinLoadInputs(_ arguments: NativeNamecoinProcessArguments,
+func nativeNamecoinLoadInputs(_ arguments: NativeNamecoinProcessArguments,
                                       dependencies: NativeNamecoinProcessDependencies) throws -> NativeNamecoinProcessInputs {
     let profile = try dependencies.readPublicFile(arguments.profilePath, 4 << 20)
     guard Data(SHA256.hash(data: profile)) == arguments.profileDigest else {
@@ -362,7 +362,7 @@ func nativeNamecoinStatusBinding(_ arguments: NativeNamecoinProcessArguments) th
     return Data(SHA256.hash(data: material))
 }
 
-private func nativeNamecoinAcknowledgementDigest(_ raw: Data) throws -> Data {
+func nativeNamecoinAcknowledgementDigest(_ raw: Data) throws -> Data {
     guard !raw.isEmpty, raw.count <= 256, raw.last == 10 else {
         throw NativeNamecoinProcessFailure("outcome_unknown")
     }
@@ -379,7 +379,7 @@ private func nativeNamecoinAcknowledgementDigest(_ raw: Data) throws -> Data {
     }
 }
 
-private func nativeNamecoinFailureCode(_ error: Error, effectStarted: Bool) -> String {
+func nativeNamecoinFailureCode(_ error: Error, effectStarted: Bool) -> String {
     if effectStarted { return "outcome_unknown" }
     if let failure = error as? NativeNamecoinProcessFailure { return failure.code }
     if let failure = error as? NativeNamecoinArchiveFailure { return failure.code }
@@ -398,7 +398,7 @@ private func nativeNamecoinFailureCode(_ error: Error, effectStarted: Bool) -> S
     return "invalid_request"
 }
 
-private func nativeNamecoinRequireEmptyStdin(_ descriptor: Int32) throws {
+func nativeNamecoinRequireEmptyStdin(_ descriptor: Int32) throws {
     var byte: UInt8 = 0
     let count = Darwin.read(descriptor, &byte, 1)
     guard count == 0 else { throw NativeNamecoinProcessFailure("invalid_request") }
