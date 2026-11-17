@@ -2,7 +2,7 @@
   "schema": "agent-nostr-test-fixtures/1",
   "generator": "tools/agentnostrfixture",
   "generator_version": "1",
-  "generator_source_sha256": "421fd00772d69b237c15fddd6e37d1a2fc4e733e8ddde3a58202bf995de2fca9",
+  "generator_source_sha256": "4ae43507b58f124989e152aa70cd2e3033099d869453657a6821244bbb455805",
   "repository_base": "1c16bd56bae850a7f4837e55e4a42059cd829912",
   "bip340_repository": "bitcoin/bips",
   "bip340_revision": "200f9b26fe0a2f235a2af8b30c4be9f12f6bc9cb",
