@@ -268,6 +268,7 @@ var recoveryReviewedHashers = []string{
 	"recoveryNode.xpub", "recoverySeal", "rootGrantsBIP85Entropy", "rootGrantsCompletionACK", "rootGrantsPlaintextBinding",
 	"sealRootGrantsWithRandom", "validRecoveryNamecoinPins", "validateWrapping",
 	"BuildRecoveryProcess2Frame", "projectSelectedRecoveryProcess2", "SignRootGrantsGrantV3With", "rootGrantsGrantV3Digest", "rootGrantsHashHex",
+	"AgentNostrManager.Generate", "AgentNostrManager.Sign", "agentNostrSeal", "sha256Hex",
 }
 
 // recoveryIsHashPath is a BOUNDED list of the hash packages the inventory knows,
