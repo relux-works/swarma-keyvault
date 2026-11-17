@@ -60,7 +60,7 @@ func TestAllNineteenOfficialBIP340RowsRemain(t *testing.T) {
 
 // Claim: the synthetic fixture owner comes from a pinned data input and a
 // changed input is refused; limit: the public test identity grants no authority.
-func TestFixtureOwnerInputIsPinnedData(t *testing.T) {
+func TestFixtureIdentityInputsArePinnedData(t *testing.T) {
 	root, err := findRepositoryRoot()
 	if err != nil {
 		t.Fatal("repository root unavailable")
@@ -69,16 +69,32 @@ func TestFixtureOwnerInputIsPinnedData(t *testing.T) {
 	if err != nil || ownerMXID == "" {
 		t.Fatal("pinned fixture owner input unavailable")
 	}
-	mutantRoot := t.TempDir()
-	ownerPath := filepath.Join(mutantRoot, fixtureOwnerPath)
-	if err := os.MkdirAll(filepath.Dir(ownerPath), 0700); err != nil {
-		t.Fatal("cannot create mutant fixture input directory")
+	service, err := readFixtureService(root)
+	if err != nil || service == "" {
+		t.Fatal("pinned fixture service input unavailable")
 	}
-	if err := os.WriteFile(ownerPath, []byte(ownerMXID+"x\n"), 0600); err != nil {
-		t.Fatal("cannot write mutated fixture owner input")
-	}
-	if _, err := readFixtureOwner(mutantRoot); err == nil {
-		t.Fatal("mutated fixture owner input passed its pin")
+	for _, input := range []struct {
+		label string
+		path  string
+		pin   string
+		value string
+	}{
+		{label: "owner", path: fixtureOwnerPath, pin: fixtureOwnerSHA256, value: ownerMXID},
+		{label: "service", path: fixtureServicePath, pin: fixtureServiceSHA256, value: service},
+	} {
+		t.Run(input.label, func(t *testing.T) {
+			mutantRoot := t.TempDir()
+			inputPath := filepath.Join(mutantRoot, input.path)
+			if err := os.MkdirAll(filepath.Dir(inputPath), 0700); err != nil {
+				t.Fatal("cannot create mutant fixture input directory")
+			}
+			if err := os.WriteFile(inputPath, []byte(input.value+"x\n"), 0600); err != nil {
+				t.Fatal("cannot write mutated fixture input")
+			}
+			if _, err := readPinnedFixtureInput(mutantRoot, input.path, input.pin, input.label); err == nil {
+				t.Fatal("mutated fixture input passed its pin")
+			}
+		})
 	}
 }
 
@@ -333,8 +349,12 @@ func checkPositiveFixture(t *testing.T, doc fixtureDocument, source vector, wrap
 	if err != nil {
 		t.Fatal("pinned fixture owner input unavailable")
 	}
+	service, err := readFixtureService(root)
+	if err != nil {
+		t.Fatal("pinned fixture service input unavailable")
+	}
 	meta := decodeDocumentMetadata(t, doc)
-	if meta.Schema != metadataSchema || meta.Namespace != agentNamespace || meta.Service != serviceName || meta.Purpose != "nostr" || meta.Version != 1 || meta.Algorithm != "secp256k1-bip340" || meta.Storage != "enclave-wrapped-keychain" || meta.Presence || meta.PrivateExport {
+	if meta.Schema != metadataSchema || meta.Namespace != agentNamespace || meta.Service != service || meta.Purpose != "nostr" || meta.Version != 1 || meta.Algorithm != "secp256k1-bip340" || meta.Storage != "enclave-wrapped-keychain" || meta.Presence || meta.PrivateExport {
 		t.Fatal("positive fixture metadata differs from the agreed public shape")
 	}
 	if meta.PublicKey != hex.EncodeToString(source.public) || doc.SourceVectorIndex != source.index {
@@ -344,7 +364,7 @@ func checkPositiveFixture(t *testing.T, doc fixtureDocument, source vector, wrap
 		t.Fatal("positive fixture metadata pin is invalid")
 	}
 	receipt := decodeDocumentReceipt(t, doc)
-	if receipt.OwnerMXID != ownerMXID || receipt.Service != serviceName || receipt.Purpose != "nostr" || receipt.Version != 1 || receipt.PublicKey != meta.PublicKey || receipt.RecordFingerprint != doc.RecordFingerprint {
+	if receipt.OwnerMXID != ownerMXID || receipt.Service != service || receipt.Purpose != "nostr" || receipt.Version != 1 || receipt.PublicKey != meta.PublicKey || receipt.RecordFingerprint != doc.RecordFingerprint {
 		t.Fatal("positive fixture enrollment does not bind the metadata")
 	}
 	keyHash := sha256.Sum256(source.public)

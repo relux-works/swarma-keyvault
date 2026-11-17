@@ -24,6 +24,8 @@ const (
 	fixtureDirectory          = "internal/keyvault/testdata/agent-nostr"
 	fixtureOwnerPath          = "tools/agentnostrfixture/testdata/enrollment-owner-mxid.txt"
 	fixtureOwnerSHA256        = "e6a00086aa8cadc937a20effc8307c26e18f7e888e85652e67e0a2209337284d"
+	fixtureServicePath        = "tools/agentnostrfixture/testdata/enrollment-service.txt"
+	fixtureServiceSHA256      = "87d922592ed9b53d1ffea905b76ed10bee80e36be91570f8676402201e76993d"
 	vectorPath                = "internal/keyvault/testdata/nostr/bip340.csv"
 	vectorSHA256              = "01c8cabba63b4c9b2f44c975902990086a4fe56eee9d265b187d1e2c1d98ccfb"
 	vectorRepository          = "bitcoin/bips"
@@ -38,7 +40,6 @@ const (
 	envelopeSchema            = "keyvault-agent-nostr-envelope/1"
 	agentNamespace            = "works.relux.mac-keyvault.agent-nostr.v1"
 	envelopeAlgorithm         = "kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM"
-	serviceName               = "agent-fixture"
 	createdAt                 = "2026-11-17T00:00:00Z"
 	secp256k1OrderHex         = "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141"
 	knownNIP19PublicKey       = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
@@ -184,6 +185,10 @@ func generateFiles(root string) (map[string][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	service, err := readFixtureService(root)
+	if err != nil {
+		return nil, err
+	}
 	publicPath := filepath.Join(root, fixtureDirectory, publicEncodingName)
 	publicEncoding, err := os.ReadFile(publicPath)
 	if err != nil || len(publicEncoding) != publicEncodingBytes || sha256Hex(publicEncoding) != publicEncodingSHA256 {
@@ -193,11 +198,11 @@ func generateFiles(root string) (map[string][]byte, error) {
 		return nil, err
 	}
 
-	a, err := createPositive("fixture-a.json", "A", rows[0], 1, 2, createdAt, ownerMXID)
+	a, err := createPositive("fixture-a.json", "A", rows[0], 1, 2, createdAt, ownerMXID, service)
 	if err != nil {
 		return nil, err
 	}
-	b, err := createPositive("fixture-b.json", "B", rows[1], 3, 4, "2026-11-17T00:00:01Z", ownerMXID)
+	b, err := createPositive("fixture-b.json", "B", rows[1], 3, 4, "2026-11-17T00:00:01Z", ownerMXID, service)
 	if err != nil {
 		return nil, err
 	}
@@ -281,18 +286,26 @@ func readVectors(path string) ([]vector, string, error) {
 }
 
 func readFixtureOwner(root string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(root, fixtureOwnerPath))
-	if err != nil || sha256Hex(raw) != fixtureOwnerSHA256 {
-		return "", errors.New("fixture enrollment owner input does not match its pin")
-	}
-	ownerMXID := strings.TrimSuffix(string(raw), "\n")
-	if ownerMXID == "" || strings.TrimSpace(ownerMXID) != ownerMXID || strings.ContainsAny(ownerMXID, "\r\n\x00") {
-		return "", errors.New("fixture enrollment owner input is malformed")
-	}
-	return ownerMXID, nil
+	return readPinnedFixtureInput(root, fixtureOwnerPath, fixtureOwnerSHA256, "enrollment owner")
 }
 
-func createPositive(fileName, name string, v vector, wrappingScalar, ephemeralScalar byte, created, ownerMXID string) (generatedFixture, error) {
+func readFixtureService(root string) (string, error) {
+	return readPinnedFixtureInput(root, fixtureServicePath, fixtureServiceSHA256, "enrollment service")
+}
+
+func readPinnedFixtureInput(root, path, expectedSHA256, label string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil || sha256Hex(raw) != expectedSHA256 {
+		return "", fmt.Errorf("fixture %s input does not match its pin", label)
+	}
+	value := strings.TrimSuffix(string(raw), "\n")
+	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
+		return "", fmt.Errorf("fixture %s input is malformed", label)
+	}
+	return value, nil
+}
+
+func createPositive(fileName, name string, v vector, wrappingScalar, ephemeralScalar byte, created, ownerMXID, service string) (generatedFixture, error) {
 	wrap, err := p256Private(wrappingScalar)
 	if err != nil {
 		return generatedFixture{}, err
@@ -306,7 +319,7 @@ func createPositive(fileName, name string, v vector, wrappingScalar, ephemeralSc
 	metadataValue := metadata{
 		Schema:              metadataSchema,
 		Namespace:           agentNamespace,
-		Service:             serviceName,
+		Service:             service,
 		Purpose:             "nostr",
 		Version:             1,
 		Algorithm:           "secp256k1-bip340",
@@ -328,7 +341,7 @@ func createPositive(fileName, name string, v vector, wrappingScalar, ephemeralSc
 	receiptValue := enrollment{
 		Schema:            enrollmentSchema,
 		OwnerMXID:         ownerMXID,
-		Service:           serviceName,
+		Service:           service,
 		Purpose:           "nostr",
 		Version:           1,
 		PublicKey:         public,
