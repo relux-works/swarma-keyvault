@@ -181,13 +181,36 @@ private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws
     return try request.canonical()
 }
 
+private struct P2OutputSnapshot: Equatable {
+    let device: dev_t, inode: ino_t, owner: uid_t, mode: mode_t, links: nlink_t
+    let size: off_t, offset: off_t
+    let flags: Int32, descriptorFlags: Int32
+
+    init(_ descriptor: Int32) throws {
+        var value = stat()
+        guard fstat(descriptor, &value) == 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        device = value.st_dev; inode = value.st_ino; owner = value.st_uid
+        mode = value.st_mode; links = value.st_nlink; size = value.st_size
+        offset = lseek(descriptor, 0, SEEK_CUR)
+        flags = fcntl(descriptor, F_GETFL); descriptorFlags = fcntl(descriptor, F_GETFD)
+        guard offset >= 0, flags >= 0, descriptorFlags >= 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+    }
+}
+
 // The protected-run closure is explicitly simulated; this checks real pipes,
 // fd3/status/ACK ordering and refusal boundaries, never native signing success.
 @MainActor @Test func process2DispatcherBridgesOnlyValidatedCustody() async throws {
     let fixture = try P2Fixture("v2-distinct-service")
-    for mode in ["complete", "malformed", "metadata", "oversized-psbt", "before-effect", "after-effect"] {
+    for mode in ["complete", "malformed", "metadata", "oversized-psbt", "oversized-request", "before-effect", "after-effect"] {
         let syntax = try BridgePublicFixture(psbtCount: mode == "oversized-psbt" ? (1 << 20) + 1 : 6)
-        let request = try p2Request(fixture, syntax: syntax)
+        let outputBefore = try P2OutputSnapshot(syntax.descriptor)
+        var request = try p2Request(fixture, syntax: syntax)
+        if mode == "oversized-request" {
+            request.append(Data(repeating: 0x20, count: (2 << 20) + 1 - request.count))
+            // A valid over-limit request reaches custody if the loader's own
+            // post-read ceiling is removed; malformed JSON cannot mask that bug.
+            #expect(try NativeArchiveRequest(request, selected: fixture.inputs.selection).psbt.count == 6)
+        }
         var argv = ["namecoin", "sign-psbt", "--process-contract", "2", "--group", fixture.inputs.journal.group,
                     "--account", fixture.inputs.journal.account, "--profile", "/public/profile.json",
                     "--profile-sha256", nativeArchiveHex(Data(SHA256.hash(data: fixture.inputs.canonicalSelection))),
@@ -220,7 +243,11 @@ private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws
                 bytes = request
             default: throw NativeNamecoinProcessFailure("invalid_request")
             }
-            guard bytes.count <= maximum else { throw NativeNamecoinProcessFailure("invalid_request") }
+            // Deliberately violate the reader's limit for this control: only
+            // the production loader may enforce the post-read request ceiling.
+            if mode != "oversized-request" || path != "/public/request.json" {
+                guard bytes.count <= maximum else { throw NativeNamecoinProcessFailure("invalid_request") }
+            }
             return bytes
         }, currentHelperCDHash: { fixture.inputs.journal.helperCDHash }, sealedAccountSource: nil,
         makeStatusSink: { descriptor, binding in
@@ -249,21 +276,186 @@ private func p2Request(_ fixture: P2Fixture, syntax: BridgePublicFixture) throws
         switch mode {
         case "complete":
             #expect(protectedCalls == 1 && result.exitCode == 0 && result.stdout == ack && frames.count == 160)
+            #expect(try Data(contentsOf: syntax.directory.appendingPathComponent("result")) == resultBytes)
             if frames.count == 160 {
                 let binding = try nativeNamecoinStatusBinding(.parse2(argv))
                 #expect(frames[6] == 1 && frames[86] == 2)
                 #expect(Data(frames[8..<40]) == binding && Data(frames[88..<120]) == binding)
                 #expect(Data(frames[120..<152]) == digest)
             }
-        case "malformed", "metadata", "oversized-psbt":
-            #expect(protectedCalls == 0 && frames.isEmpty && result.exitCode != 0)
+        case "malformed", "metadata", "oversized-psbt", "oversized-request":
+            #expect(protectedCalls == 0 && !sinkCreated && frames.isEmpty && result.exitCode != 0)
+            if mode == "oversized-request" {
+                #expect(result.exitCode == 2)
+                #expect(result.stdout == Data("{\"schema\":\"keyvault-namecoin-psbt-error/2\",\"code\":\"invalid_request\",\"status\":\"REFUSED\",\"message\":\"Namecoin signing invalid_request.\"}\n".utf8))
+            }
         case "before-effect":
             #expect(protectedCalls == 1 && frames.isEmpty && result.exitCode != 0)
         default:
             #expect(protectedCalls == 1 && frames.count == 80 && result.exitCode != 0)
             #expect(String(decoding: result.stdout, as: UTF8.self).contains("UNKNOWN"))
         }
+        if mode != "complete" {
+            // Refusals, including the simulated post-effect UNKNOWN, preserve
+            // the caller's exact empty descriptor and its identity/flags/offset.
+            #expect(try P2OutputSnapshot(syntax.descriptor) == outputBefore)
+            try syntax.requireEmptyOutput()
+        }
         // Every invocation is distinct. No failed/unknown case invokes a retry.
         argv.removeAll()
     }
+}
+
+// The production router owns fixed fd5. Run each route probe in a fresh exec
+// with fd5 reserved as /dev/null before Swift Testing starts, so no descriptor
+// belonging to this test runner or a parallel test can be replaced or closed.
+private final class P2RouterBundleMarker: NSObject {}
+
+@Test func processRouterSelectsClosedContracts() throws {
+    for mode in ["v2", "v1", "zero-padded", "unknown", "missing-value", "duplicate-v2", "duplicate-v1", "unknown-flag"] {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("namecoin-router-public-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let logURL = directory.appendingPathComponent("child.log")
+        let log = Darwin.open(logURL.path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
+        guard log >= 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        defer { _ = Darwin.close(log) }
+        let null = Darwin.open("/dev/null", O_RDONLY | O_CLOEXEC)
+        guard null >= 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        let source = fcntl(null, F_DUPFD_CLOEXEC, 64)
+        _ = Darwin.close(null)
+        guard source >= 64 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        defer { _ = Darwin.close(source) }
+        // Keep both action sources above the fixed destination descriptors.
+        let logSource = fcntl(log, F_DUPFD_CLOEXEC, 64)
+        guard logSource >= 64 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        defer { _ = Darwin.close(logSource) }
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        for (from, to) in [(source, Int32(0)), (source, Int32(5)), (logSource, Int32(1)), (logSource, Int32(2))] {
+            guard posix_spawn_file_actions_adddup2(&actions, from, to) == 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        }
+        guard posix_spawn_file_actions_addclose(&actions, source) == 0,
+              posix_spawn_file_actions_addclose(&actions, logSource) == 0 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).path
+        // Darwin's SwiftPM helper requires the current bundle as an explicit
+        // input; execing the helper alone can exit zero without running tests.
+        guard let bundleExecutable = Bundle(for: P2RouterBundleMarker.self).executableURL else {
+            throw NativeNamecoinProcessFailure("output_unavailable")
+        }
+        let arguments = [executable, "--test-bundle-path", bundleExecutable.path,
+                         "--testing-library", "swift-testing", "--filter", "processRouterChildProbe"]
+        var environment = ["PATH=/usr/bin:/bin", "HOME=" + NSHomeDirectory(),
+                           "TMPDIR=" + FileManager.default.temporaryDirectory.path,
+                           "MAC_KEYVAULT_SKIP_KEYCHAIN=1", "KEYVAULT_ROUTER_PUBLIC_TEST_CASE=" + mode]
+        // Preserve public toolchain lookup paths without forwarding unrelated
+        // runtime settings or credentials.
+        for name in ["DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"] {
+            if let value = ProcessInfo.processInfo.environment[name] { environment.append(name + "=" + value) }
+        }
+        var argv = arguments.map { strdup($0) } + [nil]
+        var envp = environment.map { strdup($0) } + [nil]
+        defer { for value in argv + envp { free(value) } }
+        var pid: pid_t = 0
+        let started = argv.withUnsafeMutableBufferPointer { a in
+            envp.withUnsafeMutableBufferPointer { e in
+                posix_spawn(&pid, executable, &actions, nil, a.baseAddress!, e.baseAddress!)
+            }
+        }
+        guard started == 0, pid > 1 else { throw NativeNamecoinProcessFailure("output_unavailable") }
+        print("Router public probe: case=\(mode) pid=\(pid)")
+        let deadline = DispatchTime.now().uptimeNanoseconds + 20_000_000_000
+        var status: Int32 = 0, timedOut = false
+        while true {
+            let waited = waitpid(pid, &status, WNOHANG)
+            if waited == pid { break }
+            if waited == -1 {
+                if errno == EINTR { continue }
+                throw NativeNamecoinProcessFailure("outcome_unknown")
+            }
+            if !timedOut && DispatchTime.now().uptimeNanoseconds >= deadline {
+                timedOut = true
+                _ = Darwin.kill(pid, SIGKILL)
+            }
+            usleep(5_000)
+        }
+        let output = try Data(contentsOf: logURL)
+        #expect(!timedOut && status == 0, "Router child \(mode): \(String(decoding: output.prefix(4096), as: UTF8.self))")
+        // An empty filter selection or skipped child must not count as proof.
+        #expect(String(decoding: output, as: UTF8.self).contains("ROUTER_PUBLIC_CASE_OK:" + mode))
+    }
+}
+
+// This probe is selected only by the parent test above. The two canonical
+// selectors must reach their distinct public-input ceilings; malformed/duplicate
+// selectors must reach neither path. All cases refuse before status/bridge and
+// preserve the caller's empty output. This is no custody or signing success.
+@MainActor @Test(.enabled(if: ProcessInfo.processInfo.environment["KEYVAULT_ROUTER_PUBLIC_TEST_CASE"] != nil))
+func processRouterChildProbe() async throws {
+    let mode = try #require(ProcessInfo.processInfo.environment["KEYVAULT_ROUTER_PUBLIC_TEST_CASE"])
+    let cases = ["v2", "v1", "zero-padded", "unknown", "missing-value", "duplicate-v2", "duplicate-v1", "unknown-flag"]
+    #expect(cases.contains(mode))
+    var inherited = stat()
+    guard fstat(5, &inherited) == 0, inherited.st_mode & mode_t(S_IFMT) == mode_t(S_IFCHR) else {
+        throw NativeNamecoinProcessFailure("invalid_request")
+    }
+    let fixture = try P2Fixture("v2-distinct-service")
+    let syntax = try BridgePublicFixture(psbtCount: (1 << 20) + 1)
+    let before = try P2OutputSnapshot(syntax.descriptor)
+    let request = try p2Request(fixture, syntax: syntax)
+    var argv = ["namecoin", "sign-psbt", "--process-contract", "2", "--group", fixture.inputs.journal.group,
+                "--account", fixture.inputs.journal.account, "--profile", "/public/profile.json",
+                "--profile-sha256", nativeArchiveHex(Data(SHA256.hash(data: fixture.inputs.canonicalSelection))),
+                "--account-pin", "/public/pin.json", "--request", "/public/request.json",
+                "--request-sha256", nativeArchiveHex(Data(SHA256.hash(data: request))), "--output", "/public/result.json",
+                "--timeout-seconds", "30"]
+    switch mode {
+    case "v1": argv[3] = "1"
+    case "zero-padded": argv[3] = "02"
+    case "unknown": argv[3] = "9"
+    case "missing-value": argv.remove(at: 3)
+    case "duplicate-v2": argv += ["--process-contract", "2"]
+    case "duplicate-v1": argv[3] = "1"; argv += ["--process-contract", "1"]
+    case "unknown-flag": argv += ["--unknown", "x"]
+    default: break
+    }
+    let stdin = try p2Pipe(); _ = Darwin.close(stdin.1)
+    defer { _ = Darwin.close(stdin.0) }
+    let status = try p2Pipe()
+    defer { _ = Darwin.close(status.0) }
+    var statusWriter = status.1
+    defer { if statusWriter >= 0 { _ = Darwin.close(statusWriter) } }
+    var reads: [String] = [], requestMaximum: Int?, helperChecks = 0, sinks = 0, bridges = 0
+    let dependencies = NativeNamecoinProcessDependencies(readPublicFile: { path, maximum in
+        reads.append(path)
+        switch path {
+        case "/public/profile.json": return fixture.inputs.canonicalSelection
+        case "/public/pin.json": return fixture.inputs.accountPin
+        case "/public/request.json": requestMaximum = maximum; return request
+        default: throw NativeNamecoinProcessFailure("invalid_request")
+        }
+    }, currentHelperCDHash: { helperChecks += 1; return fixture.inputs.journal.helperCDHash }, sealedAccountSource: nil,
+    makeStatusSink: { _, _ in sinks += 1; throw NativeNamecoinProcessFailure("output_unavailable") },
+    runArchive: { _, _, _ in bridges += 1; throw NativeNamecoinProcessFailure("journal_unavailable") })
+    let result = await runNamecoinProcess(arguments: argv, stdinDescriptor: stdin.0, resultDescriptor: syntax.descriptor,
+                                          statusDescriptor: statusWriter, dependencies: dependencies)
+    _ = Darwin.close(statusWriter); statusWriter = -1
+    var byte: UInt8 = 0
+    #expect(Darwin.read(status.0, &byte, 1) == 0)
+    #expect(sinks == 0 && bridges == 0)
+    #expect(try P2OutputSnapshot(syntax.descriptor) == before)
+    try syntax.requireEmptyOutput()
+    if mode == "v1" || mode == "v2" {
+        #expect(reads == ["/public/profile.json", "/public/pin.json", "/public/request.json"] && helperChecks == 1)
+        #expect(requestMaximum == (mode == "v2" ? 2 << 20 : 8 << 20))
+    } else {
+        #expect(reads.isEmpty && requestMaximum == nil && helperChecks == 0)
+    }
+    let code = mode == "v1" ? "journal_unavailable" : "invalid_request"
+    let refusal = try #require(JSONSerialization.jsonObject(with: result.stdout) as? [String: String])
+    #expect(refusal == ["schema": "keyvault-namecoin-psbt-error/2", "code": code,
+                        "status": "REFUSED", "message": "Namecoin signing " + code + "."])
+    #expect(result.exitCode == (mode == "v1" ? 1 : 2))
+    FileHandle.standardOutput.write(Data(("ROUTER_PUBLIC_CASE_OK:" + mode + "\n").utf8))
 }
