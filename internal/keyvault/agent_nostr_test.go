@@ -164,7 +164,7 @@ func TestAgentNostrSignRequiresExternalReceiptBeforeEnvelopeLoad(t *testing.T) {
 	}
 	private.plaintext = [][]byte{mustAgentNostrFixturePlaintext(t, b)}
 	result, err := manager.Sign(receiptB.OwnerMXID, receiptB, receiptB.Service, receiptB.Version, bytes.Repeat([]byte{0}, 32))
-	if err != nil || len(result.Signature) != 128 || result.RecordFingerprint != b.RecordFingerprint || result.KeySHA256 != b.KeySHA256 {
+	if err != nil || len(result.Signature) != 128 || result.RecordFingerprint != b.RecordFingerprint || result.KeySHA256 != b.KeySHA256 || store.loads != 1 || private.unwraps != 1 {
 		t.Fatal("B/E_B positive signing control failed")
 	}
 }
