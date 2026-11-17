@@ -18,6 +18,7 @@ let nativeArchive = archiveRoot.appendingPathComponent("libkeyvault_namecoin.a")
 
 let coreSources = [
     "NativeHelperCore.swift",
+    "AgentNostrPrivate.swift",
     "NamecoinBiometryPolicy.swift",
     "NamecoinJournalStorage.swift",
     "NamecoinJournalOperations.swift",
@@ -33,6 +34,7 @@ let coreSources = [
     "RootGrantsQualification.swift",
 ]
 let testSources = [
+    "AgentNostrPrivateTests.swift",
     "NamecoinJournalStorageTests.swift",
     "NamecoinReviewSnapshotTests.swift",
     "NamecoinPrivateOutputTests.swift",
@@ -73,6 +75,7 @@ let package = Package(
                 .unsafeFlags([nativeArchive]),
                 .linkedFramework("Security"),
                 .linkedFramework("CoreFoundation"),
+                .linkedLibrary("bsm"),
             ]
         ),
         .executableTarget(
@@ -88,7 +91,7 @@ let package = Package(
             path: "cmd/mac-keyvault-enclave",
             exclude: ["main.swift"] + coreSources,
             sources: testSources,
-            linkerSettings: [.linkedLibrary("util")]
+            linkerSettings: [.linkedLibrary("util"), .linkedLibrary("bsm")]
         ),
     ],
     swiftLanguageModes: [.v5]
