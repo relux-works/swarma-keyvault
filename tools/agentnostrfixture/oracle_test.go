@@ -58,6 +58,30 @@ func TestAllNineteenOfficialBIP340RowsRemain(t *testing.T) {
 	}
 }
 
+// Claim: the synthetic fixture owner comes from a pinned data input and a
+// changed input is refused; limit: the public test identity grants no authority.
+func TestFixtureOwnerInputIsPinnedData(t *testing.T) {
+	root, err := findRepositoryRoot()
+	if err != nil {
+		t.Fatal("repository root unavailable")
+	}
+	ownerMXID, err := readFixtureOwner(root)
+	if err != nil || ownerMXID == "" {
+		t.Fatal("pinned fixture owner input unavailable")
+	}
+	mutantRoot := t.TempDir()
+	ownerPath := filepath.Join(mutantRoot, fixtureOwnerPath)
+	if err := os.MkdirAll(filepath.Dir(ownerPath), 0700); err != nil {
+		t.Fatal("cannot create mutant fixture input directory")
+	}
+	if err := os.WriteFile(ownerPath, []byte(ownerMXID+"x\n"), 0600); err != nil {
+		t.Fatal("cannot write mutated fixture owner input")
+	}
+	if _, err := readFixtureOwner(mutantRoot); err == nil {
+		t.Fatal("mutated fixture owner input passed its pin")
+	}
+}
+
 // Claim: this independent NIP-19 encoder retains the published row-0 npub;
 // limit: one public encoding anchor does not prove all possible inputs.
 func TestNIP19PublishedPublicEncoding(t *testing.T) {
@@ -301,6 +325,14 @@ func TestManifestCoversEveryFixtureAndSource(t *testing.T) {
 
 func checkPositiveFixture(t *testing.T, doc fixtureDocument, source vector, wrappingScalar byte) {
 	t.Helper()
+	root, err := findRepositoryRoot()
+	if err != nil {
+		t.Fatal("repository root unavailable")
+	}
+	ownerMXID, err := readFixtureOwner(root)
+	if err != nil {
+		t.Fatal("pinned fixture owner input unavailable")
+	}
 	meta := decodeDocumentMetadata(t, doc)
 	if meta.Schema != metadataSchema || meta.Namespace != agentNamespace || meta.Service != serviceName || meta.Purpose != "nostr" || meta.Version != 1 || meta.Algorithm != "secp256k1-bip340" || meta.Storage != "enclave-wrapped-keychain" || meta.Presence || meta.PrivateExport {
 		t.Fatal("positive fixture metadata differs from the agreed public shape")
@@ -312,7 +344,7 @@ func checkPositiveFixture(t *testing.T, doc fixtureDocument, source vector, wrap
 		t.Fatal("positive fixture metadata pin is invalid")
 	}
 	receipt := decodeDocumentReceipt(t, doc)
-	if receipt.OwnerMXID != fixtureOwner || receipt.Service != serviceName || receipt.Purpose != "nostr" || receipt.Version != 1 || receipt.PublicKey != meta.PublicKey || receipt.RecordFingerprint != doc.RecordFingerprint {
+	if receipt.OwnerMXID != ownerMXID || receipt.Service != serviceName || receipt.Purpose != "nostr" || receipt.Version != 1 || receipt.PublicKey != meta.PublicKey || receipt.RecordFingerprint != doc.RecordFingerprint {
 		t.Fatal("positive fixture enrollment does not bind the metadata")
 	}
 	keyHash := sha256.Sum256(source.public)
