@@ -1,0 +1,203 @@
+{
+  "schema": "agent-nostr-test-fixtures/1",
+  "generator": "tools/agentnostrfixture",
+  "generator_version": "1",
+  "generator_source_sha256": "421fd00772d69b237c15fddd6e37d1a2fc4e733e8ddde3a58202bf995de2fca9",
+  "repository_base": "1c16bd56bae850a7f4837e55e4a42059cd829912",
+  "bip340_repository": "bitcoin/bips",
+  "bip340_revision": "200f9b26fe0a2f235a2af8b30c4be9f12f6bc9cb",
+  "bip340_path": "bip-0340/test-vectors.csv",
+  "bip340_csv_sha256": "01c8cabba63b4c9b2f44c975902990086a4fe56eee9d265b187d1e2c1d98ccfb",
+  "public_encoding_fixture": "public-encoding.json",
+  "public_encoding_fixture_sha256": "05fdeb31bdbd8c4ee5688f7ea3889aad96b45441fb0a82ecf11d03ba74930cf2",
+  "artifacts": [
+    {
+      "name": "fixture-a",
+      "file": "fixture-a.json",
+      "bytes": 2343,
+      "sha256": "89e8e110ca08c77ad5d02d513af23bcdd74c155955df3dfa6d977c6146fe1566",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "d930adc18e08cff5f0dc80952a3acad874aa14cd3d4fe080b5dc9da1c4276102",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "7465ca1ef91f8977fc5d9b28262790118052b1dc176ab944c1b4e9c7c8b157de",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "e582473c5e67298d227a96ab9e31da9cdc4ed3b5e33f7fecf58fce648594a66d",
+      "controls": [
+        "positive-full-path",
+        "valid-aead",
+        "valid-domain",
+        "valid-binding",
+        "valid-scalar",
+        "record-public-key-match"
+      ]
+    },
+    {
+      "name": "fixture-b",
+      "file": "fixture-b.json",
+      "bytes": 2343,
+      "sha256": "74944c5372688d8900f70fe293381fbe10bb79847ffd13761640459fad23a33e",
+      "metadata_bytes": 632,
+      "metadata_sha256": "fe449738fd166d2e564b02a0569972cf8e6755dbbe4857d34dedd50d52b20759",
+      "receipt_bytes": 387,
+      "receipt_sha256": "aa7928b2ffbbeaabd2e61fd669fc7f378f0720261b4c9f7a6416ea6c7714a592",
+      "envelope_bytes": 566,
+      "envelope_sha256": "aa73b23036bfc7ad2634edbdfa816555e59e1873e6f65e0cbcb3a05b8518cfcf",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "fb6776dc52d63638c04d67b6eb267ecfa27ff10cc24058606ecc34a92a4ab09a",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "a883ec43d41fcd5aa9e766ce6bcf59acb4a2835e27b492c1e2f2929c53ee7668",
+      "controls": [
+        "positive-full-path",
+        "valid-aead",
+        "valid-domain",
+        "valid-binding",
+        "valid-scalar",
+        "record-public-key-match"
+      ]
+    },
+    {
+      "name": "mutant-binding",
+      "file": "mutant-binding.json",
+      "bytes": 2281,
+      "sha256": "11a1412e6ab7831bea365d78ca859d466a6245de401a457d4ff3b69ea3f87ab0",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "a2eccfca3e0ba9b88dbca6567c4a63114aa882f733b4b9bbcc2856d35190653b",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "22c32cedd2373d61bf9763d71e46082d47a806558d9f539a82c566ae18907320",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "3d197c6e3831051880071e25ceca7686927a1a590c67bac36923e2841d488cc7",
+      "controls": [
+        "C11"
+      ],
+      "expected_first_failure": "metadata-binding"
+    },
+    {
+      "name": "mutant-domain-kvax1",
+      "file": "mutant-domain-kvax1.json",
+      "bytes": 2278,
+      "sha256": "1eced5c9a241f1bf26a70afce979a13d099805d0104e477e4b268a6560d81305",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "800bad8696e6090bad9e7aebaa2308e86d8ebdb6a99b4034b041c419a1c0e838",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "c393ab04f2dd95c4ee0411f7bf3e6c9faba0d006a0ceaefa3b9cdcef6efe00a4",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "334e6f2ea3aa3f496c314021df9f5cd5efc36fb5327931fed6510e192f8086bb",
+      "controls": [
+        "C09",
+        "C10"
+      ],
+      "expected_first_failure": "domain"
+    },
+    {
+      "name": "mutant-scalar-key-mismatch",
+      "file": "mutant-scalar-key-mismatch.json",
+      "bytes": 2284,
+      "sha256": "e699b7f432cc73291a036e99eea90d0d26aab27aea305ed8cb2dd3c86b410da9",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "174ea4013987b583b2ada0990a3589f5e5f2115fbe6e0a32425301293e577294",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "2fc58e123fb265432c5e45c2b9e1acdb7c615db0f61a3a0ed380ead340722a00",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "0e96a9727d91753bdb108504a26b608f28fcbfee0f49a6910f11b5d4fff32a68",
+      "controls": [
+        "C13"
+      ],
+      "expected_first_failure": "public-key-match"
+    },
+    {
+      "name": "mutant-scalar-n-plus-3",
+      "file": "mutant-scalar-n-plus-3.json",
+      "bytes": 2305,
+      "sha256": "9b794fb1288220455cbb4dfdb52aee82633e4445aa63469bc31da32433a29e1f",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "5380f7ab0a4c72c0148a22e48c95062b458cec9c217cecd3b7e6da7f06f2d785",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "ae3eda3f7dcd11102a7ab60b0b39d99bf9f8e6053a8d808c047936bdc43c9a0c",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "877bd80867bdc7b73940f1ce1751cdf814d634c43f67b58c48756adeb0a95a6e",
+      "controls": [
+        "N2-C12-overflow"
+      ],
+      "expected_first_failure": "scalar-range-before-reduction"
+    },
+    {
+      "name": "mutant-scalar-order",
+      "file": "mutant-scalar-order.json",
+      "bytes": 2286,
+      "sha256": "7acafa161384769825afb525f75beac05deb647a7b6b7da48c487cb434fcaeab",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "eda016ec12aa5a28d323fc2e04d973f6fc297595530b4b1e77f352912ccbe172",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "cd42d96c1844b926872a0ba9d738c7ea288b3239b7c44e17d6b7bf23b50471ab",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "dbf0a1b983734fd36222e1587a26460b49b27ffa38ad0433f7c85c35b14a38ed",
+      "controls": [
+        "C12-scalar-order"
+      ],
+      "expected_first_failure": "scalar-range"
+    },
+    {
+      "name": "mutant-scalar-zero",
+      "file": "mutant-scalar-zero.json",
+      "bytes": 2284,
+      "sha256": "6f99b9260e03477a7744ba438c931f7f93019b8190c883a94cae02beebf83575",
+      "metadata_bytes": 632,
+      "metadata_sha256": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "0081addf22cbd92467d740ab9680b49d50b96912926e42dd7d73be4617ef08e0",
+      "envelope_bytes": 566,
+      "envelope_sha256": "1e7f49ba5fdb8ad4fc0e15539d88a156a253edb6d9784b1c3f6328e6bd728d2b",
+      "plaintext_bytes": 69,
+      "plaintext_sha256": "f0a6b970ce250ede11ca0850f79d15855da17bfcfa41a8c7a1438d7ac3170487",
+      "ciphertext_bytes": 150,
+      "ciphertext_sha256": "4d541af46c0427af86e5308de5582f5c2cd69c3c991296388f47a52bd20fe44a",
+      "controls": [
+        "C12-scalar-zero"
+      ],
+      "expected_first_failure": "scalar-range"
+    },
+    {
+      "name": "public-encoding",
+      "file": "public-encoding.json",
+      "bytes": 1806,
+      "sha256": "05fdeb31bdbd8c4ee5688f7ea3889aad96b45441fb0a82ecf11d03ba74930cf2",
+      "metadata_bytes": 632,
+      "metadata_sha256": "2c4640b7c98308e19a0c4168d58fb532778c8f3b28093db666f4b9c6203970ae",
+      "receipt_bytes": 387,
+      "receipt_sha256": "e785305b862ababd0c94fee6c56769158759d66656b6675f7fa87e83d7a0864d",
+      "envelope_bytes": 0,
+      "envelope_sha256": "",
+      "plaintext_bytes": 0,
+      "plaintext_sha256": "",
+      "ciphertext_bytes": 0,
+      "ciphertext_sha256": "",
+      "controls": [
+        "public-encoding-byte-and-hash-baseline"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema": "agent-nostr-crypto-fixture/1",
+  "name": "B",
+  "source_vector_index": 1,
+  "controls": [
+    "positive-full-path",
+    "valid-aead",
+    "valid-domain",
+    "valid-binding",
+    "valid-scalar",
+    "record-public-key-match"
+  ],
+  "metadata_json": "{\"schema\":\"agent-nostr-key/1\",\"namespace\":\"works.relux.mac-keyvault.agent-nostr.v1\",\"service\":\"agent-fixture\",\"purpose\":\"nostr\",\"version\":1,\"algorithm\":\"secp256k1-bip340\",\"storage\":\"enclave-wrapped-keychain\",\"presence\":false,\"private_export\":false,\"created\":\"2026-11-17T00:00:01Z\",\"public_key\":\"dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659\",\"npub\":\"npub1mlcawle2vuw97dscxundkg6phev0atsa5t0vakzrys8hk5pt5evssm7a0a\",\"wrapping_point\":\"BF7L5NGmMwpEyPfvlR1L8WXmxrch762phftBZhvG5/1shzRkDEmY/343SwbOGmSi7NgqsDY4T7g9mnmxJ6J9UDI=\",\"wrapping_fingerprint\":\"89896264c58fca553508257b18703781fcd99c22a66186aa74f56e76f9b27cbe\"}",
+  "record_fingerprint": "fe449738fd166d2e564b02a0569972cf8e6755dbbe4857d34dedd50d52b20759",
+  "key_sha256": "4fbdbf30768ac87343fc0ebf5a5ed37c2cb9adbfb1e6ba84fdebbf874443cb86",
+  "enrollment_json": "{\"schema\":\"agent-nostr-enrollment/1\",\"owner_mxid\":\"@agent-fixture:example.invalid\",\"service\":\"agent-fixture\",\"purpose\":\"nostr\",\"version\":1,\"public_key\":\"dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659\",\"key_sha256\":\"4fbdbf30768ac87343fc0ebf5a5ed37c2cb9adbfb1e6ba84fdebbf874443cb86\",\"record_fingerprint\":\"fe449738fd166d2e564b02a0569972cf8e6755dbbe4857d34dedd50d52b20759\"}",
+  "envelope_json": "{\"schema\":\"keyvault-agent-nostr-envelope/1\",\"algorithm\":\"kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM\",\"enclave_blob\":\"cHVibGljLWZpeHR1cmUtYmxvYi1C\",\"point\":\"BF7L5NGmMwpEyPfvlR1L8WXmxrch762phftBZhvG5/1shzRkDEmY/343SwbOGmSi7NgqsDY4T7g9mnmxJ6J9UDI=\",\"fingerprint\":\"89896264c58fca553508257b18703781fcd99c22a66186aa74f56e76f9b27cbe\",\"ciphertext\":\"BOJTSjUy0I+7oC3eZZ7mK9ADH+LbeFWW71CTAkRrAwhS4PFXWkxjPMcZ3+5f2oYtdk78lsPzDuAFXELCPxhO2MZBCCB8707BO3jiYaooprjic7ArZK+HnYH/IysejabbkK5Hz0TYiLr5ilMfyP8rZ02Prxb2Ti9JDduTY80pL4CcAnuo0qY5eispPihS08QEpKHKZSF0\"}",
+  "plaintext_hex": "4b56414e31fe449738fd166d2e564b02a0569972cf8e6755dbbe4857d34dedd50d52b20759b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef"
+}

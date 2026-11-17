@@ -1,0 +1,19 @@
+{
+  "schema": "agent-nostr-crypto-fixture/1",
+  "name": "A",
+  "source_vector_index": 0,
+  "controls": [
+    "positive-full-path",
+    "valid-aead",
+    "valid-domain",
+    "valid-binding",
+    "valid-scalar",
+    "record-public-key-match"
+  ],
+  "metadata_json": "{\"schema\":\"agent-nostr-key/1\",\"namespace\":\"works.relux.mac-keyvault.agent-nostr.v1\",\"service\":\"agent-fixture\",\"purpose\":\"nostr\",\"version\":1,\"algorithm\":\"secp256k1-bip340\",\"storage\":\"enclave-wrapped-keychain\",\"presence\":false,\"private_export\":false,\"created\":\"2026-11-17T00:00:00Z\",\"public_key\":\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\",\"npub\":\"npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266\",\"wrapping_point\":\"BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\",\"wrapping_fingerprint\":\"698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be\"}",
+  "record_fingerprint": "f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae",
+  "key_sha256": "7c79f3071e28344e8153bf6c73c294ebe3754aec4e2cb8cb4471b2f44cb5f22d",
+  "enrollment_json": "{\"schema\":\"agent-nostr-enrollment/1\",\"owner_mxid\":\"@agent-fixture:example.invalid\",\"service\":\"agent-fixture\",\"purpose\":\"nostr\",\"version\":1,\"public_key\":\"f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9\",\"key_sha256\":\"7c79f3071e28344e8153bf6c73c294ebe3754aec4e2cb8cb4471b2f44cb5f22d\",\"record_fingerprint\":\"f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae\"}",
+  "envelope_json": "{\"schema\":\"keyvault-agent-nostr-envelope/1\",\"algorithm\":\"kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM\",\"enclave_blob\":\"cHVibGljLWZpeHR1cmUtYmxvYi1B\",\"point\":\"BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\",\"fingerprint\":\"698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be\",\"ciphertext\":\"BHzyexiNA09+ilI4AwS1GsPAiWnid/IbNaYLSPxHZpl4B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9FuD9TH/0/pHVgwAaoEFj+YTJCeAKQbOWm7LPuf+vb4cp1uV97QaW1bO04cvnEvnI2SKCsw11H1tlCINY2twTgWuXKaE6NNfuGiQnUT0UaBYk70X61q\"}",
+  "plaintext_hex": "4b56414e31f5e01256fe9eb92f2199e2fcfa646a0f3bd4dd049be5abc72fd2d66f73c7daae0000000000000000000000000000000000000000000000000000000000000003"
+}
