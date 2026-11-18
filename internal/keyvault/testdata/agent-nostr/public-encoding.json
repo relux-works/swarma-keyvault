@@ -1,0 +1,11 @@
+{
+  "scope": "Public encoding fixture only; no scalar, Enclave blob, ciphertext or native proof. npub fixture from internal/keyvault/nostr_test.go TestNostrNPub; P256 generator from security_darwin_test.go TestParseListRecords at main1c16bd56.",
+  "metadata_utf8": "{\"schema\":\"agent-nostr-key/1\",\"namespace\":\"works.relux.mac-keyvault.agent-nostr.v1\",\"service\":\"agent-example\",\"purpose\":\"nostr\",\"version\":1,\"algorithm\":\"secp256k1-bip340\",\"storage\":\"enclave-wrapped-keychain\",\"presence\":false,\"private_export\":false,\"created\":\"2026-11-17T00:00:00Z\",\"public_key\":\"7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e\",\"npub\":\"npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg\",\"wrapping_point\":\"BGsX0fLhLEJH+Lzm5WOkQPJ3A32BLeszoPShOUXYmMKWT+NC4v4af5uO5+tKfA+eFivOM1drMV7Oy7ZAaDe/UfU=\",\"wrapping_fingerprint\":\"698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be\"}",
+  "metadata_bytes": 632,
+  "record_fingerprint": "2c4640b7c98308e19a0c4168d58fb532778c8f3b28093db666f4b9c6203970ae",
+  "key_sha256": "74534fb5959a5d89cd740363ba2737918484c3a47b427a9697b6279db0fd89b0",
+  "enrollment_utf8": "{\"schema\":\"agent-nostr-enrollment/1\",\"owner_mxid\":\"@agent-example:example.invalid\",\"service\":\"agent-example\",\"purpose\":\"nostr\",\"version\":1,\"public_key\":\"7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e\",\"key_sha256\":\"74534fb5959a5d89cd740363ba2737918484c3a47b427a9697b6279db0fd89b0\",\"record_fingerprint\":\"2c4640b7c98308e19a0c4168d58fb532778c8f3b28093db666f4b9c6203970ae\"}",
+  "enrollment_bytes": 387,
+  "enrollment_sha256": "e785305b862ababd0c94fee6c56769158759d66656b6675f7fa87e83d7a0864d",
+  "wrapping_fingerprint": "698bea63dc44a344663ff1429aea10842df27b6b991ef25866b2c6c02cdcc5be"
+}

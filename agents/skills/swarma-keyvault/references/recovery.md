@@ -30,8 +30,11 @@ inspection, deletion and signing. Prepare the exact physical/logical versions,
 all retained public pins, expected prompts and complete write set first. The
 human uses an unrecorded foreground terminal; an agent never captures its TTY.
 The vault displays words only on `/dev/tty`, hides input, requires two offline
-backups and confirms three distinct word positions before storage. Absence of
-Touch ID for Nostr never supplies agent signing authority.
+backups and confirms three distinct word positions before storage. For this
+recovery-derived Nostr projection, absence of Touch ID never supplies agent
+signing authority. The separate `agent-nostr` exception follows its own
+manager/enrollment policy in [Nostr custody](nostr.md#agent-nostr-policy) and
+does not change this recovery flow's OWNER-SITTING requirements.
 
 All three restore pins (npub, Namecoin xpub and origin) are mandatory and checked
 before a wrapping key/item is created. A duplicate group or logical address

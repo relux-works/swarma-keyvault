@@ -23,6 +23,7 @@
 
 // Keep the namespace literal in agreement with NostrNamespace in nostr.go.
 static const CFStringRef MacKeyVaultNostrService = CFSTR("works.relux.mac-keyvault.nostr.v1");
+static const CFStringRef MacKeyVaultAgentNostrService = CFSTR("works.relux.mac-keyvault.agent-nostr.v1");
 
 static CFStringRef MacKeyVaultString(const char *value) {
     return CFStringCreateWithCString(kCFAllocatorDefault, value, kCFStringEncodingUTF8);
@@ -673,6 +674,296 @@ int MacKeyVaultNostrList(char **out, size_t *outLen) {
     }
     CFRelease(buffer);
     return (int)status;
+}
+
+static OSStatus MacKeyVaultAgentNostrQuery(CFMutableDictionaryRef *out, SecKeychainRef *keychain, int writing) {
+    OSStatus status = SecKeychainSetUserInteractionAllowed(false);
+    if (status != errSecSuccess) return status;
+    struct passwd user;
+    struct passwd *found = NULL;
+    char userBuffer[16384];
+    if (getpwuid_r(getuid(), &user, userBuffer, sizeof(userBuffer), &found) != 0 || found == NULL || user.pw_dir == NULL) return errSecNotAvailable;
+    char path[PATH_MAX];
+    int pathLen = snprintf(path, sizeof(path), "%s/Library/Keychains/login.keychain-db", user.pw_dir);
+    if (pathLen < 0 || (size_t)pathLen >= sizeof(path)) return errSecParam;
+    status = SecKeychainOpen(path, keychain);
+    if (status != errSecSuccess) return status;
+    SecKeychainStatus state = 0;
+    status = SecKeychainGetStatus(*keychain, &state);
+    if (status != errSecSuccess || !(state & kSecUnlockStateStatus)) {
+        CFRelease(*keychain); *keychain = NULL;
+        return status != errSecSuccess ? status : errSecInteractionNotAllowed;
+    }
+    *out = MacKeyVaultDictionary();
+    if (*out == NULL) { CFRelease(*keychain); *keychain = NULL; return errSecAllocate; }
+    CFDictionarySetValue(*out, kSecClass, kSecClassGenericPassword);
+    CFDictionarySetValue(*out, kSecAttrService, MacKeyVaultAgentNostrService);
+    if (writing) {
+        CFDictionarySetValue(*out, kSecUseKeychain, *keychain);
+    } else {
+        CFArrayRef search = CFArrayCreate(NULL, (const void **)keychain, 1, &kCFTypeArrayCallBacks);
+        if (search == NULL) { CFRelease(*out); *out = NULL; CFRelease(*keychain); *keychain = NULL; return errSecAllocate; }
+        CFDictionarySetValue(*out, kSecMatchSearchList, search);
+        CFRelease(search);
+    }
+    return errSecSuccess;
+}
+
+static OSStatus MacKeyVaultAgentNostrSelf(void) {
+    return MacKeyVaultRecoveryCode(0, NULL, 0);
+}
+
+static OSStatus MacKeyVaultAgentNostrAppendText(CFMutableDataRef buffer, CFTypeRef field, CFIndex maxLength) {
+    if (field == NULL || CFGetTypeID(field) != CFStringGetTypeID() || CFStringGetLength((CFStringRef)field) > maxLength) return errSecDecode;
+    CFDataRef text = CFStringCreateExternalRepresentation(NULL, (CFStringRef)field, kCFStringEncodingUTF8, 0);
+    if (text == NULL) return errSecDecode;
+    CFDataAppendBytes(buffer, CFDataGetBytePtr(text), CFDataGetLength(text));
+    CFRelease(text);
+    return errSecSuccess;
+}
+
+int MacKeyVaultAgentNostrList(char **out, size_t *outLen) {
+    if (out == NULL || outLen == NULL) return errSecParam;
+    *out = NULL; *outLen = 0;
+    OSStatus status = MacKeyVaultAgentNostrSelf();
+    if (status != errSecSuccess) return (int)status;
+    CFMutableDictionaryRef query = NULL;
+    SecKeychainRef keychain = NULL;
+    status = MacKeyVaultAgentNostrQuery(&query, &keychain, 0);
+    if (status != errSecSuccess) return (int)status;
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll);
+    CFDictionarySetValue(query, kSecReturnAttributes, kCFBooleanTrue);
+    CFTypeRef found = NULL;
+    status = SecItemCopyMatching(query, &found);
+    CFRelease(query); CFRelease(keychain);
+    if (status == errSecItemNotFound) return errSecSuccess;
+    if (status != errSecSuccess) return (int)status;
+    if (CFGetTypeID(found) != CFArrayGetTypeID()) { CFRelease(found); return errSecDecode; }
+    CFMutableDataRef buffer = CFDataCreateMutable(NULL, 0);
+    if (buffer == NULL) { CFRelease(found); return errSecAllocate; }
+    for (CFIndex i = 0; i < CFArrayGetCount((CFArrayRef)found); i++) {
+        CFTypeRef row = CFArrayGetValueAtIndex((CFArrayRef)found, i);
+        if (CFGetTypeID(row) != CFDictionaryGetTypeID()) { status = errSecDecode; break; }
+        CFStringRef account = CFDictionaryGetValue((CFDictionaryRef)row, kSecAttrAccount);
+        CFStringRef label = CFDictionaryGetValue((CFDictionaryRef)row, kSecAttrLabel);
+        CFStringRef comment = CFDictionaryGetValue((CFDictionaryRef)row, kSecAttrComment);
+        if (account == NULL || label == NULL || CFGetTypeID(account) != CFStringGetTypeID() ||
+            CFGetTypeID(label) != CFStringGetTypeID() || !CFEqual(account, label)) { status = errSecDecode; break; }
+        status = MacKeyVaultAgentNostrAppendText(buffer, account, 128);
+        if (status == errSecSuccess) MacKeyVaultAppendField(buffer, NULL, 0, MacKeyVaultFieldSeparator);
+        if (status == errSecSuccess) status = MacKeyVaultAgentNostrAppendText(buffer, comment, 8192);
+        if (status == errSecSuccess) MacKeyVaultAppendField(buffer, NULL, 0, MacKeyVaultRecordSeparator);
+        if (status != errSecSuccess) break;
+        if (CFDataGetLength(buffer) > 4 * 1024 * 1024) { status = MAC_KEYVAULT_AGENT_NOSTR_TOO_LARGE; break; }
+    }
+    CFRelease(found);
+    if (status == errSecSuccess) {
+        size_t length = (size_t)CFDataGetLength(buffer);
+        char *copy = malloc(length + 1);
+        if (copy == NULL) status = errSecAllocate;
+        else { memcpy(copy, CFDataGetBytePtr(buffer), length); copy[length] = 0; *out = copy; *outLen = length; }
+    }
+    CFRelease(buffer);
+    return (int)status;
+}
+
+int MacKeyVaultAgentNostrCreate(const char *account, const unsigned char *metadata, size_t metadataLength,
+    const unsigned char *envelope, size_t envelopeLength, int *mutationAttempted) {
+    if (mutationAttempted == NULL) return errSecParam;
+    *mutationAttempted = 0;
+    if (account == NULL || metadata == NULL || metadataLength == 0 || metadataLength > 8192 ||
+        envelope == NULL || envelopeLength == 0 || envelopeLength > 32768) return errSecParam;
+    OSStatus status = MacKeyVaultAgentNostrSelf();
+    if (status != errSecSuccess) return (int)status;
+    CFMutableDictionaryRef query = NULL;
+    SecKeychainRef keychain = NULL;
+    status = MacKeyVaultAgentNostrQuery(&query, &keychain, 1);
+    if (status != errSecSuccess) return (int)status;
+    SecAccessRef access = NULL;
+    status = MacKeyVaultCreateAccess(&access);
+    if (status == errSecSuccess) {
+        CFStringRef accountString = MacKeyVaultString(account);
+        CFStringRef metadataString = CFStringCreateWithBytes(kCFAllocatorDefault, metadata, (CFIndex)metadataLength, kCFStringEncodingUTF8, false);
+        CFDataRef data = CFDataCreateWithBytesNoCopy(NULL, envelope, (CFIndex)envelopeLength, kCFAllocatorNull);
+        if (accountString == NULL || metadataString == NULL || data == NULL) status = errSecAllocate;
+        else {
+            CFDictionarySetValue(query, kSecAttrAccount, accountString);
+            CFDictionarySetValue(query, kSecAttrLabel, accountString);
+            CFDictionarySetValue(query, kSecAttrComment, metadataString);
+            CFDictionarySetValue(query, kSecAttrAccess, access);
+            CFDictionarySetValue(query, kSecValueData, data);
+            // One atomic, exclusive item add. Duplicate is definite no-effect.
+            *mutationAttempted = 1;
+            status = SecItemAdd(query, NULL);
+        }
+        if (accountString) CFRelease(accountString);
+        if (metadataString) CFRelease(metadataString);
+        if (data) CFRelease(data);
+        CFRelease(access);
+    }
+    CFRelease(query); CFRelease(keychain);
+    return (int)status;
+}
+
+struct MacKeyVaultAgentNostrSelection {
+    SecKeychainItemRef item;
+    SecKeychainRef keychain;
+    char *account;
+};
+
+static int MacKeyVaultAgentNostrAttributeMatches(SecKeychainAttributeList *attributes, UInt32 tag,
+    const void *expected, size_t expectedLength, SecKeychainAttribute **out) {
+    if (out) *out = NULL;
+    if (attributes == NULL) return 0;
+    int count = 0;
+    for (UInt32 i = 0; i < attributes->count; i++) {
+        SecKeychainAttribute *attribute = &attributes->attr[i];
+        if (attribute->tag != tag) continue;
+        if (expected && (attribute->length != expectedLength ||
+            (expectedLength && (!attribute->data || memcmp(attribute->data, expected, expectedLength) != 0)))) return 0;
+        if (out) *out = attribute;
+        count++;
+    }
+    return count == 1;
+}
+
+static OSStatus MacKeyVaultAgentNostrCopyFields(SecKeychainItemRef item, SecKeychainRef expectedKeychain,
+    const char *account, const unsigned char *expectedMetadata, size_t expectedMetadataLength,
+    unsigned char **metadata, size_t *metadataLength, unsigned char **envelope, size_t *envelopeLength) {
+    int wantsEnvelope = envelope != NULL || envelopeLength != NULL;
+    if (item == NULL || expectedKeychain == NULL || account == NULL || metadata == NULL || metadataLength == NULL ||
+        (wantsEnvelope && (envelope == NULL || envelopeLength == NULL)) ||
+        (expectedMetadata && (expectedMetadataLength == 0 || expectedMetadataLength > 8192)) ||
+        (!expectedMetadata && expectedMetadataLength != 0)) return errSecParam;
+    *metadata = NULL; *metadataLength = 0;
+    if (wantsEnvelope) { *envelope = NULL; *envelopeLength = 0; }
+
+    SecKeychainRef actualKeychain = NULL;
+    SecKeychainAttributeInfo *info = NULL;
+    SecKeychainAttributeList *attributes = NULL;
+    SecItemClass itemClass = 0;
+    UInt32 dataLength = 0;
+    void *data = NULL;
+    OSStatus status = SecKeychainItemCopyKeychain(item, &actualKeychain);
+    if (status == errSecSuccess && (actualKeychain == NULL || !CFEqual(actualKeychain, expectedKeychain))) status = errSecAuthFailed;
+    if (status == errSecSuccess) status = SecKeychainAttributeInfoForItemID(actualKeychain, CSSM_DL_DB_RECORD_GENERIC_PASSWORD, &info);
+    if (status == errSecSuccess && (!info || info->count == 0 || info->count > 128)) status = errSecDecode;
+    if (status == errSecSuccess) status = SecKeychainItemCopyAttributesAndData(item, info, &itemClass, &attributes,
+        wantsEnvelope ? &dataLength : NULL, wantsEnvelope ? &data : NULL);
+    if (status == errSecSuccess) {
+        const char *service = "works.relux.mac-keyvault.agent-nostr.v1";
+        SecKeychainAttribute *comment = NULL;
+        if (itemClass != kSecGenericPasswordItemClass || attributes == NULL || attributes->count != info->count ||
+            !MacKeyVaultAgentNostrAttributeMatches(attributes, kSecServiceItemAttr, service, strlen(service), NULL) ||
+            !MacKeyVaultAgentNostrAttributeMatches(attributes, kSecAccountItemAttr, account, strlen(account), NULL) ||
+            !MacKeyVaultAgentNostrAttributeMatches(attributes, kSecLabelItemAttr, account, strlen(account), NULL) ||
+            !MacKeyVaultAgentNostrAttributeMatches(attributes, kSecCommentItemAttr, expectedMetadata, expectedMetadataLength, &comment) ||
+            comment == NULL || comment->data == NULL || comment->length == 0 || comment->length > 8192) status = errSecDecode;
+        if (status == errSecSuccess && wantsEnvelope && (data == NULL || dataLength == 0 || dataLength > 32768)) status = errSecDecode;
+        if (status == errSecSuccess) {
+            *metadataLength = comment->length;
+            *metadata = malloc(*metadataLength);
+            if (*metadata == NULL) status = errSecAllocate;
+            else memcpy(*metadata, comment->data, *metadataLength);
+        }
+        if (status == errSecSuccess && wantsEnvelope) {
+            *envelopeLength = dataLength;
+            *envelope = malloc(*envelopeLength);
+            if (*envelope == NULL) status = errSecAllocate;
+            else memcpy(*envelope, data, *envelopeLength);
+        }
+    }
+    if (data) memset_s(data, dataLength, 0, dataLength);
+    if (attributes || data) SecKeychainItemFreeAttributesAndData(attributes, data);
+    if (info) SecKeychainFreeAttributeInfo(info);
+    if (actualKeychain) CFRelease(actualKeychain);
+    if (status != errSecSuccess) {
+        if (*metadata) { memset_s(*metadata, *metadataLength, 0, *metadataLength); free(*metadata); }
+        *metadata = NULL; *metadataLength = 0;
+        if (wantsEnvelope && *envelope) { memset_s(*envelope, *envelopeLength, 0, *envelopeLength); free(*envelope); }
+        if (wantsEnvelope) { *envelope = NULL; *envelopeLength = 0; }
+    }
+    return status;
+}
+
+int MacKeyVaultAgentNostrSelect(const char *account, MacKeyVaultAgentNostrSelection **out,
+    unsigned char **metadata, size_t *metadataLength) {
+    if (account == NULL || out == NULL || metadata == NULL || metadataLength == NULL) return errSecParam;
+    *out = NULL; *metadata = NULL; *metadataLength = 0;
+    OSStatus status = MacKeyVaultAgentNostrSelf();
+    if (status != errSecSuccess) return (int)status;
+    CFMutableDictionaryRef query = NULL;
+    SecKeychainRef keychain = NULL;
+    status = MacKeyVaultAgentNostrQuery(&query, &keychain, 0);
+    if (status != errSecSuccess) return (int)status;
+    CFStringRef name = MacKeyVaultString(account);
+    if (name == NULL) { CFRelease(query); CFRelease(keychain); return errSecAllocate; }
+    CFDictionarySetValue(query, kSecAttrAccount, name);
+    CFDictionarySetValue(query, kSecReturnRef, kCFBooleanTrue);
+    CFDictionarySetValue(query, kSecMatchLimit, kSecMatchLimitAll);
+    CFTypeRef matches = NULL;
+    status = SecItemCopyMatching(query, &matches);
+    CFRelease(name); CFRelease(query);
+    if (status != errSecSuccess) { CFRelease(keychain); return (int)status; }
+    if (matches == NULL || CFGetTypeID(matches) != CFArrayGetTypeID() || CFArrayGetCount((CFArrayRef)matches) != 1) {
+        if (matches) CFRelease(matches);
+        CFRelease(keychain);
+        return errSecDecode;
+    }
+    SecKeychainItemRef item = (SecKeychainItemRef)CFArrayGetValueAtIndex((CFArrayRef)matches, 0);
+    status = MacKeyVaultNostrCheckAccess(item);
+    if (status == errSecSuccess) status = MacKeyVaultAgentNostrCopyFields(item, keychain, account, NULL, 0, metadata, metadataLength, NULL, NULL);
+    MacKeyVaultAgentNostrSelection *selection = NULL;
+    if (status == errSecSuccess) {
+        selection = calloc(1, sizeof(*selection));
+        if (selection == NULL) status = errSecAllocate;
+        else {
+            selection->item = (SecKeychainItemRef)CFRetain(item);
+            selection->keychain = (SecKeychainRef)CFRetain(keychain);
+            selection->account = strdup(account);
+            if (selection->account == NULL) status = errSecAllocate;
+            else *out = selection;
+        }
+    }
+    CFRelease(matches); CFRelease(keychain);
+    if (selection && status != errSecSuccess) MacKeyVaultAgentNostrCloseSelection(selection);
+    if (status != errSecSuccess) { free(*metadata); *metadata = NULL; *metadataLength = 0; }
+    return (int)status;
+}
+
+int MacKeyVaultAgentNostrReadSelected(MacKeyVaultAgentNostrSelection *selection,
+    const unsigned char *expectedMetadata, size_t expectedMetadataLength,
+    unsigned char **metadata, size_t *metadataLength, unsigned char **envelope, size_t *envelopeLength) {
+    if (selection == NULL || selection->item == NULL || selection->keychain == NULL || selection->account == NULL || expectedMetadata == NULL || expectedMetadataLength == 0 || expectedMetadataLength > 8192 ||
+        metadata == NULL || metadataLength == NULL || envelope == NULL || envelopeLength == NULL) return errSecParam;
+    *metadata = NULL; *metadataLength = 0; *envelope = NULL; *envelopeLength = 0;
+    OSStatus status = SecKeychainSetUserInteractionAllowed(false);
+    if (status == errSecSuccess) status = MacKeyVaultAgentNostrSelf();
+    if (status == errSecSuccess) status = MacKeyVaultNostrCheckAccess(selection->item);
+    unsigned char *first = NULL; size_t firstLength = 0;
+    if (status == errSecSuccess) status = MacKeyVaultAgentNostrCopyFields(selection->item, selection->keychain, selection->account,
+        expectedMetadata, expectedMetadataLength, &first, &firstLength, NULL, NULL);
+    if (status == errSecSuccess && (firstLength != expectedMetadataLength || memcmp(first, expectedMetadata, expectedMetadataLength) != 0)) status = errSecDecode;
+    if (first) { memset_s(first, firstLength, 0, firstLength); free(first); }
+
+    if (status == errSecSuccess) status = MacKeyVaultAgentNostrCopyFields(selection->item, selection->keychain, selection->account,
+        expectedMetadata, expectedMetadataLength, metadata, metadataLength, envelope, envelopeLength);
+    if (status == errSecSuccess) status = MacKeyVaultNostrCheckAccess(selection->item);
+    if (status != errSecSuccess) {
+        if (*metadata) { memset_s(*metadata, *metadataLength, 0, *metadataLength); free(*metadata); }
+        if (*envelope) { memset_s(*envelope, *envelopeLength, 0, *envelopeLength); free(*envelope); }
+        *metadata = NULL; *metadataLength = 0; *envelope = NULL; *envelopeLength = 0;
+    }
+    return (int)status;
+}
+
+void MacKeyVaultAgentNostrCloseSelection(MacKeyVaultAgentNostrSelection *selection) {
+    if (selection == NULL) return;
+    if (selection->item) CFRelease(selection->item);
+    if (selection->keychain) CFRelease(selection->keychain);
+    free(selection->account);
+    memset_s(selection, sizeof(*selection), 0, sizeof(*selection));
+    free(selection);
 }
 
 int MacKeyVaultNostrRead(const char *account, const char *metadata, unsigned char *secret) {

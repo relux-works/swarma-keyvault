@@ -112,7 +112,7 @@ func TestRootQualificationExactRolesAndLinkerPins(t *testing.T) {
 // Positive child environment plus poisoned ambient controls; no environment
 // values are logged and no subprocess/toolchain is executed by this test.
 func TestRootQualificationOfflineEnvironment(t *testing.T) {
-	for _, key := range []string{"GOFLAGS", "GOOS", "GOARCH", "GOTOOLCHAIN", "GOWORK", "GOENV", "CGO_LDFLAGS", "GOROOT", "SWIFT_EXEC", "SDKROOT", nativebuild.InputVariable} {
+	for _, key := range []string{"GOFLAGS", "GOOS", "GOARCH", "GOTOOLCHAIN", "GOWORK", "GOENV", "CGO_CFLAGS", "CGO_LDFLAGS", "GOROOT", "SWIFT_EXEC", "SDKROOT", nativebuild.InputVariable} {
 		t.Setenv(key, "PUBLIC poisoned selector")
 	}
 	env := map[string]string{}
@@ -120,7 +120,7 @@ func TestRootQualificationOfflineEnvironment(t *testing.T) {
 		k, v, _ := strings.Cut(entry, "=")
 		env[k] = v
 	}
-	for k, v := range map[string]string{"GOOS": "darwin", "GOARCH": runtime.GOARCH, "CGO_ENABLED": "1", "GOTOOLCHAIN": "local", "GOWORK": "off", "GOENV": "off", "GOPROXY": "off", "GOSUMDB": "off"} {
+	for k, v := range map[string]string{"GOOS": "darwin", "GOARCH": runtime.GOARCH, "CGO_ENABLED": "1", "CGO_CFLAGS": "-mmacosx-version-min=14.0", "GOTOOLCHAIN": "local", "GOWORK": "off", "GOENV": "off", "GOPROXY": "off", "GOSUMDB": "off"} {
 		if env[k] != v {
 			t.Fatal("closed environment lost required value")
 		}

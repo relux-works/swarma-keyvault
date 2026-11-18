@@ -22,10 +22,13 @@ Obtain the public pin independently. Verification proves a signature under that
 key, not release/grant authority. `--raw` instead selects 64-byte `r||s`;
 `--allow-high-s` explicitly relaxes the normal low-S policy and is not a default.
 
-## OWNER-SITTING custody catalogue
+## Existing OWNER-SITTING custody catalogue
 
-These names and flags describe interfaces for the owner, never agent steps.
-No key creation or Keychain-touching command is an agent action.
+These names and flags describe the existing general custody interfaces. Their
+operations require the OWNER-SITTING route and are not agent steps. The separate
+`agent-nostr` manager/own-agent policy is limited to its exact command family and
+workflow in [Nostr custody](nostr.md#agent-nostr-policy); it grants no generic
+key-creation authority or direct Keychain access.
 
 | Operation | Actual selector / boundary |
 | --- | --- |

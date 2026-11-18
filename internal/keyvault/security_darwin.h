@@ -93,6 +93,21 @@ int MacKeyVaultRecoveryRead(const char *account, const char *metadata, unsigned 
 int MacKeyVaultNostrDelete(const char *account, const char *metadata, int *mutationAttempted);
 int MacKeyVaultRecoveryCode(int pid, const unsigned char *expectedHash, size_t hashLength);
 
+// Standalone agent Nostr values use a separate fixed namespace and one atomic
+// ciphertext/public-record item. A selected item is retained across the
+// external-enrollment check and subsequent exact ciphertext read.
+#define MAC_KEYVAULT_AGENT_NOSTR_TOO_LARGE (-99999)
+typedef struct MacKeyVaultAgentNostrSelection MacKeyVaultAgentNostrSelection;
+int MacKeyVaultAgentNostrList(char **out, size_t *outLen);
+int MacKeyVaultAgentNostrCreate(const char *account, const unsigned char *metadata, size_t metadataLength,
+    const unsigned char *envelope, size_t envelopeLength, int *mutationAttempted);
+int MacKeyVaultAgentNostrSelect(const char *account, MacKeyVaultAgentNostrSelection **out,
+    unsigned char **metadata, size_t *metadataLength);
+int MacKeyVaultAgentNostrReadSelected(MacKeyVaultAgentNostrSelection *selection,
+    const unsigned char *expectedMetadata, size_t expectedMetadataLength,
+    unsigned char **metadata, size_t *metadataLength, unsigned char **envelope, size_t *envelopeLength);
+void MacKeyVaultAgentNostrCloseSelection(MacKeyVaultAgentNostrSelection *selection);
+
 // Fixed public-marker qualification only; result1 denied,2 access,3 unknown.
 // No raw Keychain value/status or caller-selected namespace is returned.
 int MacKeyVaultRootQualificationRead(int role, const unsigned char *reference, size_t length, int *result);

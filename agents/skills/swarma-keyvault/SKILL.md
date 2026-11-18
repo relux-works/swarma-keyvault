@@ -1,6 +1,6 @@
 ---
 name: swarma-keyvault
-description: Work with Swarma Keyvault key custody, signer and SSH/KEK interfaces, and typed local, a2a or multi-use grants. Use for this repository's contracts and public verification; route signing and owner-presence operations to an OWNER-SITTING.
+description: Work with Swarma Keyvault key custody, signer and SSH/KEK interfaces, and typed local, a2a or multi-use grants. Use this repository's contracts and public verification. Apply the narrow manager/own-agent agent-nostr policy in the Nostr reference; route other signing and owner-presence operations to an OWNER-SITTING.
 ---
 
 # Swarma Keyvault
@@ -14,7 +14,7 @@ profile publishing is outside this skill.
 | --- | --- |
 | Key records, public verification, one-shot key operations | [CLI and record policy](references/cli.md) |
 | One offline mnemonic for Nostr and a device-wrapped Namecoin account | [Attended recovery](references/recovery.md) |
-| Nostr secp256k1 keys, public npub and BIP-340 event-id signing | [Nostr custody](references/nostr.md) |
+| Legacy Nostr custody and agent-nostr issuance, enrollment or own-agent signing | [Nostr custody and agent-nostr policy](references/nostr.md) |
 | Generation-bound JSON-lines signing session | [Signer contract 1](references/signer-1.md) |
 | SSH authentication or Git SSH signing with new dedicated keys | [SSH interface](references/keyvault-ssh-new-keys.md) |
 | Service KEK client integration | [KEK integration](references/kek-integration.md), then [broker boundaries](references/kek.md) |
@@ -40,17 +40,31 @@ with up to 24 executables and their public fixture and state files. See [validat
 for the ten-minute cleanup policy, degraded-host interlock and observed-run
 command.
 
-**OWNER-SITTING:** all signing and owner-presence flows require the selected
-owner-led sitting. Explain the exact typed action, target, key generation,
-independent public pin and expected digest/presence prompt before handing off.
-The human alone handles OS confirmation. A denied, unavailable or mismatched
-prompt ends that attempt: no loop, dialog automation, store fallback or ACL edit.
-A non-presence requester/publisher key is still signing authority; its lack of
-an OS prompt does not authorize an agent to invoke it.
+**OWNER-SITTING:** except for the distinct `agent-nostr` policy below, existing
+signing and owner-presence flows require the selected owner-led sitting. Explain
+the exact typed action, target, key generation, independent public pin and
+expected digest/presence prompt before handing off. The human alone handles OS
+confirmation. A denied, unavailable or mismatched prompt ends that attempt: no
+loop, dialog automation, store fallback or ACL edit. A non-presence
+requester/publisher key remains signing authority; its lack of an OS prompt does
+not authorize an agent to invoke it outside the `agent-nostr` policy.
+
+The separate `agent-nostr` policy permits only an admitted issuing manager to
+generate, establish enrollment, list that namespace or reconcile incomplete
+first issuance, and a conforming enrolled agent to sign or perform limited
+`describe`/`pub` reconciliation for its own enrolled full identity, service and
+explicit generation. Actor admission comes from the authoritative operator
+assignment and issuer workflow, not the `--identity` flag or receipt path. This
+is trusted-actor policy on a shared OS user; it does not authenticate CLI
+principals or isolate against a hostile same-user process. Read the [Nostr
+reference](references/nostr.md#agent-nostr-policy) for the exact limits and
+required adoption gates.
 
 An agent may inspect source and prepare public documents within the task's
-permissions. Never make key creation, Keychain/Enclave inspection, signer startup,
-SSH-agent startup, KEK unwrap/rebind or private signing an agent step. State
+permissions. Never make key creation, direct Keychain/Enclave inspection, signer
+startup, SSH-agent startup, KEK unwrap/rebind or private signing an agent step
+outside the exact `agent-nostr` manager or own-agent operations above. That
+exception grants no direct store inspection or other command family. State
 initialization and effect execution (`grants execute`, `a2a-state-init`,
 `a2a-execute`, `mu-state-init`, `mu-execute`) need the custodian's
 authorization for that exact state or request; they are not agent steps either. Even
@@ -75,6 +89,10 @@ separate Enclave wrapping and a Touch-ID-only Namecoin account policy.
 Its separate `nostr` family manages software secp256k1 custody under a
 signed-binary-only login-Keychain ACL, without a presence or hardware
 non-extractability claim; read the Nostr reference before selecting it.
+Its distinct `agent-nostr` family implements the narrow manager-issuance and
+own-enrolled-agent policy described in that reference. It does not authenticate
+the caller from CLI fields, isolate hostile same-user processes, issue a2a
+grants or provision identities.
 There is no `keys` or `kek` subcommand. KEK custody uses the separate
 `cmd/mac-keyvault-kek` broker and public Go package
 `github.com/relux-works/swarma-keyvault/pkg/kekclient`.

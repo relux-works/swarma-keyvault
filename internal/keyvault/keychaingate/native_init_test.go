@@ -30,6 +30,7 @@ var reviewedNativeInputs = []string{
 	"cmd/mac-keyvault-namecoin-archive/root.go",
 	"cmd/mac-keyvault-namecoin-archive/root_cgo_fixture.go",
 	"internal/codesignpolicy/file_darwin.go",
+	"internal/keyvault/agent_nostr_store_darwin.go",
 	"internal/keyvault/kek/inspect_darwin.c",
 	"internal/keyvault/kek/inspect_darwin.go",
 	"internal/keyvault/kek/inspect_darwin.h",
