@@ -307,11 +307,15 @@ func readAgentNostrEnrollment(path string) (keyvault.AgentNostrEnrollment, error
 	if !ok || stat.Uid != uint32(os.Getuid()) {
 		return keyvault.AgentNostrEnrollment{}, fmt.Errorf("unsafe enrollment receipt")
 	}
-	raw, err := io.ReadAll(io.LimitReader(file, keyvault.AgentNostrMaxReceipt+1))
+	return parseAgentNostrEnrollmentReader(file, keyvault.ParseAgentNostrEnrollment)
+}
+
+func parseAgentNostrEnrollmentReader(reader io.Reader, parse func([]byte) (keyvault.AgentNostrEnrollment, error)) (keyvault.AgentNostrEnrollment, error) {
+	raw, err := io.ReadAll(io.LimitReader(reader, keyvault.AgentNostrMaxReceipt+1))
 	if err != nil || len(raw) == 0 || len(raw) > keyvault.AgentNostrMaxReceipt {
 		return keyvault.AgentNostrEnrollment{}, fmt.Errorf("invalid enrollment receipt")
 	}
-	receipt, err := keyvault.ParseAgentNostrEnrollment(raw)
+	receipt, err := parse(raw)
 	if err != nil {
 		return keyvault.AgentNostrEnrollment{}, fmt.Errorf("invalid enrollment receipt")
 	}

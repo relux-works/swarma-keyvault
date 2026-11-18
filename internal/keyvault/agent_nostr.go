@@ -59,6 +59,15 @@ var agentNostrScalarOrder = [32]byte{
 	0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
 }
 
+var errAgentNostrRawSizeLimit = errors.New("agent Nostr raw input exceeds size limit")
+
+func decodeAgentNostrRawWithinLimit(raw []byte, limit int, target any, decode func([]byte, any) error) error {
+	if len(raw) == 0 || len(raw) > limit {
+		return errAgentNostrRawSizeLimit
+	}
+	return decode(raw, target)
+}
+
 type AgentNostrRecord struct {
 	Schema              string `json:"schema"`
 	Namespace           string `json:"namespace"`
@@ -244,7 +253,7 @@ func AgentNostrIdentityValid(identity string) bool {
 
 func ParseAgentNostrRecord(raw []byte) (AgentNostrRecord, string, error) {
 	var record AgentNostrRecord
-	if len(raw) == 0 || len(raw) > AgentNostrMaxMetadata || DecodeSingleJSON(raw, &record) != nil || validateAgentNostrRecord(record) != nil {
+	if decodeAgentNostrRawWithinLimit(raw, AgentNostrMaxMetadata, &record, DecodeSingleJSON) != nil || validateAgentNostrRecord(record) != nil {
 		return AgentNostrRecord{}, "", errors.New("invalid agent Nostr record")
 	}
 	canonical, err := json.Marshal(record)
@@ -296,7 +305,7 @@ func validateAgentNostrRecord(record AgentNostrRecord) error {
 
 func ParseAgentNostrEnrollment(raw []byte) (AgentNostrEnrollment, error) {
 	var receipt AgentNostrEnrollment
-	if len(raw) == 0 || len(raw) > AgentNostrMaxReceipt || DecodeSingleJSON(raw, &receipt) != nil || validateAgentNostrEnrollment(receipt) != nil {
+	if decodeAgentNostrRawWithinLimit(raw, AgentNostrMaxReceipt, &receipt, DecodeSingleJSON) != nil || validateAgentNostrEnrollment(receipt) != nil {
 		return AgentNostrEnrollment{}, errors.New("invalid agent Nostr enrollment")
 	}
 	canonical, err := json.Marshal(receipt)
@@ -338,7 +347,7 @@ func validateAgentNostrEnrollment(receipt AgentNostrEnrollment) error {
 
 func ParseAgentNostrEnvelope(raw []byte, record AgentNostrRecord) (AgentNostrEnvelope, error) {
 	var envelope AgentNostrEnvelope
-	if len(raw) == 0 || len(raw) > AgentNostrMaxEnvelope || DecodeSingleJSON(raw, &envelope) != nil || validateAgentNostrEnvelope(envelope, record) != nil {
+	if decodeAgentNostrRawWithinLimit(raw, AgentNostrMaxEnvelope, &envelope, DecodeSingleJSON) != nil || validateAgentNostrEnvelope(envelope, record) != nil {
 		return AgentNostrEnvelope{}, errors.New("invalid agent Nostr envelope")
 	}
 	canonical, err := json.Marshal(envelope)

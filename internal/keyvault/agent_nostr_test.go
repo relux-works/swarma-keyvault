@@ -754,8 +754,8 @@ func TestAgentNostrDescribeSelectsExactPublicItem(t *testing.T) {
 }
 
 // Claim: a valid retained E_A never falls back when only the exact standalone
-// row is absent, and A works again when restored; limit: legacy/recovery rows
-// are inert fixture neighbors, not real namespace or native-store probes.
+// row is absent, and A works again when restored; limit: the visible legacy
+// and other-generation rows are fake-store controls, not native-store probes.
 func TestAgentNostrSignExactAbsenceDoesNotFallbackAndPreservesReceipt(t *testing.T) {
 	a := readAgentNostrFixture(t, "fixture-a.json")
 	receipt, err := ParseAgentNostrEnrollment([]byte(a.EnrollmentJSON))
@@ -764,13 +764,18 @@ func TestAgentNostrSignExactAbsenceDoesNotFallbackAndPreservesReceipt(t *testing
 	}
 	store := newAgentNostrFakeStore()
 	store.putFixture(t, a)
-	store.otherRows = map[string][]byte{
-		"legacy/agent-fixture/nostr@1":   []byte("legacy-fixture-row"),
-		"recovery/agent-fixture/nostr@1": []byte("recovery-fixture-row"),
+	item := store.items[AgentNostrAccount(receipt.Service, receipt.Version)]
+	store.otherRows = map[string]agentNostrFakeItem{
+		"legacy/agent-fixture/nostr@1":   {metadata: bytes.Clone(item.metadata), envelope: bytes.Clone(item.envelope)},
+		"recovery/agent-fixture/nostr@1": {metadata: bytes.Clone(item.metadata), envelope: bytes.Clone(item.envelope)},
 	}
-	neighbors := map[string][]byte{
-		"legacy/agent-fixture/nostr@1":   bytes.Clone(store.otherRows["legacy/agent-fixture/nostr@1"]),
-		"recovery/agent-fixture/nostr@1": bytes.Clone(store.otherRows["recovery/agent-fixture/nostr@1"]),
+	neighbors := map[string]agentNostrFakeItem{
+		"legacy/agent-fixture/nostr@1":   cloneAgentNostrFakeItem(store.otherRows["legacy/agent-fixture/nostr@1"]),
+		"recovery/agent-fixture/nostr@1": cloneAgentNostrFakeItem(store.otherRows["recovery/agent-fixture/nostr@1"]),
+	}
+	receiptBefore, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal("receipt snapshot failed")
 	}
 	private := &agentNostrFakePrivate{plaintext: [][]byte{mustAgentNostrFixturePlaintext(t, a), mustAgentNostrFixturePlaintext(t, a)}}
 	manager := newAgentNostrTestManager(store, private)
@@ -787,24 +792,34 @@ func TestAgentNostrSignExactAbsenceDoesNotFallbackAndPreservesReceipt(t *testing
 	original := store.items[account]
 	delete(store.items, account)
 	privateBefore, signBefore := private.unwraps, signCalls
+	selectsBefore, requestsBefore, listsBefore := store.selects, len(store.selectRequests), store.listCalls
 	if _, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); agentNostrFailureCode(err) != AgentNostrCodeNotFound {
 		t.Fatal("absent exact standalone generation did not return not_found")
 	}
-	if _, err := manager.Describe(receipt.Service, receipt.Version); agentNostrFailureCode(err) != AgentNostrCodeNotFound {
-		t.Fatal("absent exact describe did not return not_found")
-	}
-	if rows, err := manager.List(); err != nil || len(rows) != 0 {
-		t.Fatal("an empty standalone namespace was not a valid empty list")
+	if store.selects != selectsBefore+1 || len(store.selectRequests) != requestsBefore+1 || store.selectRequests[requestsBefore] != account || store.listCalls != listsBefore {
+		t.Fatal("absent sign did not make exactly one exact-account lookup without inventory")
 	}
 	if private.unwraps != privateBefore || signCalls != signBefore || store.adds != 0 || private.wraps != 0 ||
-		!bytes.Equal(store.otherRows["legacy/agent-fixture/nostr@1"], neighbors["legacy/agent-fixture/nostr@1"]) ||
-		!bytes.Equal(store.otherRows["recovery/agent-fixture/nostr@1"], neighbors["recovery/agent-fixture/nostr@1"]) {
+		!equalAgentNostrFakeItem(store.otherRows["legacy/agent-fixture/nostr@1"], neighbors["legacy/agent-fixture/nostr@1"]) ||
+		!equalAgentNostrFakeItem(store.otherRows["recovery/agent-fixture/nostr@1"], neighbors["recovery/agent-fixture/nostr@1"]) {
 		t.Fatal("absence caused private work, mutation, receipt rewriting, or neighboring-row change")
+	}
+	receiptAfter, err := json.Marshal(receipt)
+	if err != nil || !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatal("absence changed the held enrollment receipt")
 	}
 	store.items[account] = original
 	if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); err != nil || len(result.Signature) != 128 || private.unwraps != privateBefore+1 || signCalls != signBefore+1 {
 		t.Fatal("restored A/E_A positive control did not sign")
 	}
+}
+
+func cloneAgentNostrFakeItem(item agentNostrFakeItem) agentNostrFakeItem {
+	return agentNostrFakeItem{metadata: bytes.Clone(item.metadata), envelope: bytes.Clone(item.envelope)}
+}
+
+func equalAgentNostrFakeItem(left, right agentNostrFakeItem) bool {
+	return bytes.Equal(left.metadata, right.metadata) && bytes.Equal(left.envelope, right.envelope)
 }
 
 // Claim: maximum legitimate service, version, identity, receipt, metadata and
@@ -884,6 +899,37 @@ func TestAgentNostrMetadataAndEnvelopeRawSizeBoundaries(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// Claim: the size layer admits exactly-cap raw metadata, receipt, and envelope
+// bytes to decoding and rejects cap+1 first; limit: semantic validity is
+// covered by the canonical and full-sign fixtures above.
+func TestAgentNostrRawParserSizeLayerBeforeDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+	}{
+		{name: "metadata", limit: AgentNostrMaxMetadata},
+		{name: "receipt", limit: AgentNostrMaxReceipt},
+		{name: "envelope", limit: AgentNostrMaxEnvelope},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decodeErr := errors.New("decoder reached")
+			calls, decodedLength := 0, 0
+			decode := func(raw []byte, _ any) error {
+				calls++
+				decodedLength = len(raw)
+				return decodeErr
+			}
+			if err := decodeAgentNostrRawWithinLimit(bytes.Repeat([]byte{'x'}, tc.limit), tc.limit, new(any), decode); err != decodeErr || calls != 1 || decodedLength != tc.limit {
+				t.Fatal("exact-cap raw input did not reach the decoder exactly once")
+			}
+			calls, decodedLength = 0, 0
+			if err := decodeAgentNostrRawWithinLimit(bytes.Repeat([]byte{'x'}, tc.limit+1), tc.limit, new(any), decode); err != errAgentNostrRawSizeLimit || calls != 0 || decodedLength != 0 {
+				t.Fatal("cap+1 raw input was not stopped before the decoder")
+			}
+		})
 	}
 }
 
@@ -1003,18 +1049,19 @@ func TestAgentNostrDigestHexCaseEquivalenceSignsSameMessage(t *testing.T) {
 type agentNostrFakeItem struct{ metadata, envelope []byte }
 
 type agentNostrFakeStore struct {
-	items       map[string]agentNostrFakeItem
-	otherRows   map[string][]byte
-	listCalls   int
-	selects     int
-	loads       int
-	adds        int
-	lastAccount string
-	addAttempt  bool
-	addErr      error
-	readbackErr error
-	onSelect    func(*agentNostrFakeStore, string)
-	onAdd       func(*agentNostrFakeStore, string)
+	items          map[string]agentNostrFakeItem
+	otherRows      map[string]agentNostrFakeItem
+	listCalls      int
+	selects        int
+	selectRequests []string
+	loads          int
+	adds           int
+	lastAccount    string
+	addAttempt     bool
+	addErr         error
+	readbackErr    error
+	onSelect       func(*agentNostrFakeStore, string)
+	onAdd          func(*agentNostrFakeStore, string)
 }
 
 func newAgentNostrFakeStore() *agentNostrFakeStore {
@@ -1032,8 +1079,11 @@ func (s *agentNostrFakeStore) putFixture(t *testing.T, fixture agentNostrFixture
 
 func (s *agentNostrFakeStore) ListAgentNostr() ([]AgentNostrItem, error) {
 	s.listCalls++
-	rows := make([]AgentNostrItem, 0, len(s.items))
+	rows := make([]AgentNostrItem, 0, len(s.items)+len(s.otherRows))
 	for account, item := range s.items {
+		rows = append(rows, AgentNostrItem{Account: account, Metadata: bytes.Clone(item.metadata)})
+	}
+	for account, item := range s.otherRows {
 		rows = append(rows, AgentNostrItem{Account: account, Metadata: bytes.Clone(item.metadata)})
 	}
 	return rows, nil
@@ -1041,10 +1091,14 @@ func (s *agentNostrFakeStore) ListAgentNostr() ([]AgentNostrItem, error) {
 
 func (s *agentNostrFakeStore) SelectAgentNostr(account string) (AgentNostrSelection, error) {
 	s.selects++
+	s.selectRequests = append(s.selectRequests, account)
 	if s.adds > 0 && s.readbackErr != nil {
 		return nil, s.readbackErr
 	}
 	item, ok := s.items[account]
+	if !ok {
+		item, ok = s.otherRows[account]
+	}
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -1081,6 +1135,9 @@ func (s *agentNostrFakeSelection) Metadata() []byte { return bytes.Clone(s.item.
 func (s *agentNostrFakeSelection) LoadEnvelope() ([]byte, []byte, error) {
 	s.store.loads++
 	current, ok := s.store.items[s.account]
+	if !ok {
+		current, ok = s.store.otherRows[s.account]
+	}
 	if !ok {
 		return nil, nil, ErrNotFound
 	}

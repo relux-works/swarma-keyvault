@@ -535,6 +535,30 @@ func TestAgentNostrReceiptRawSizeBoundaries(t *testing.T) {
 	}
 }
 
+// Claim: the bounded receipt reader passes exactly 8,192 bytes to its parser
+// and stops 8,193 bytes before parsing; limit: this component probe does not
+// establish semantic validity, which is covered by the CLI receipt fixtures.
+func TestAgentNostrReceiptReaderSizeLayerBeforeParser(t *testing.T) {
+	for _, size := range []int{keyvault.AgentNostrMaxReceipt, keyvault.AgentNostrMaxReceipt + 1} {
+		calls, parsedLength := 0, 0
+		parser := func(raw []byte) (keyvault.AgentNostrEnrollment, error) {
+			calls++
+			parsedLength = len(raw)
+			return keyvault.AgentNostrEnrollment{}, nil
+		}
+		_, err := parseAgentNostrEnrollmentReader(bytes.NewReader(bytes.Repeat([]byte{'x'}, size)), parser)
+		if size == keyvault.AgentNostrMaxReceipt {
+			if err != nil || calls != 1 || parsedLength != size {
+				t.Fatal("exact-cap receipt did not reach the parser exactly once")
+			}
+			continue
+		}
+		if err == nil || calls != 0 || parsedLength != 0 {
+			t.Fatal("cap+1 receipt was not stopped before the parser")
+		}
+	}
+}
+
 // Claim: exact describe and pub absence return not_found without invoking
 // generation or a fallback; limit: the fake exposes only the CLI dispatch seam.
 func TestAgentNostrMissingDescribeAndPubDoNotCreate(t *testing.T) {
