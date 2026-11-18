@@ -228,6 +228,63 @@ func TestOutputRefusalKeepsSyscallCauseBehindSentinel(t *testing.T) {
 	}
 }
 
+func requireFileRefusalCause(t *testing.T, err error, want unix.Errno) {
+	t.Helper()
+	var errno unix.Errno
+	if err == nil || !errors.Is(err, ErrUnsafe) || err.Error() != ErrUnsafe.Error() ||
+		!errors.As(err, &errno) || errno != want || !errors.Is(err, want) {
+		t.Fatalf("refusal error = %v; want the stable sentinel with cause %s", err, want)
+	}
+}
+
+func TestFileForChildPreservesSecondValidationCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "result.json")
+	output, err := CreateOutput(path)
+	if err != nil {
+		t.Fatal("create output", err)
+	}
+	defer func() { _ = output.Close() }()
+
+	// A normal second-stage check passes before the final name is moved.
+	file, err := output.FileForChild()
+	if err != nil || file == nil {
+		t.Fatal("valid FileForChild control refused", err)
+	}
+	if err := os.Rename(path, path+".moved"); err != nil {
+		t.Fatal("move output for second-validation failure", err)
+	}
+	if _, err := output.FileForChild(); err == nil {
+		t.Fatal("missing output path passed second validation")
+	} else {
+		requireFileRefusalCause(t, err, unix.ENOENT)
+	}
+}
+
+func TestFileForChildPreservesDescriptorCheckCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "result.json")
+	output, err := CreateOutput(path)
+	if err != nil {
+		t.Fatal("create output", err)
+	}
+	defer func() { _ = output.Close() }()
+
+	// The valid descriptor is accepted first; closing it forces the later Fstat.
+	file, err := output.FileForChild()
+	if err != nil || file == nil {
+		t.Fatal("valid descriptor control refused", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal("close descriptor for forced Fstat failure", err)
+	}
+	if _, err := output.FileForChild(); err == nil {
+		t.Fatal("closed output descriptor passed validation")
+	} else {
+		requireFileRefusalCause(t, err, unix.EBADF)
+	}
+}
+
 func TestReadInputDoesNotExposeWalkSyscallCause(t *testing.T) {
 	base, _ := privateFixture(t)
 	missing := filepath.Join(base, "missing-parent", "request.json")

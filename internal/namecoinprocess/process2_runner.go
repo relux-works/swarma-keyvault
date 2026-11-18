@@ -48,6 +48,7 @@ type process2RunTestHooks struct {
 	beforeAdmission       func(*os.Process)
 	onSetupError          func(string, error)
 	afterOutputOpen       func(*os.File)
+	beforeFileForChild    func()
 	createPipe            func(string) (process2Pipe, error)
 	beforeWriter          func()
 	writerComplete        func()
@@ -302,6 +303,9 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	if err != nil {
 		reportSetupError("output-create", err)
 		return unknown, evidence
+	}
+	if hooks := options.testHooks; hooks != nil && hooks.beforeFileForChild != nil {
+		hooks.beforeFileForChild()
 	}
 	outputFile, err := output.FileForChild()
 	if err != nil {

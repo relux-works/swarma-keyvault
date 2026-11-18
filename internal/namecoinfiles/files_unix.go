@@ -282,9 +282,9 @@ func (o *Output) FileForChild() (*os.File, error) {
 	if o.closed {
 		return nil, ErrUnsafe
 	}
-	stat, ok := o.path.check(o.file)
+	stat, ok, cause := o.path.checkWithCause(o.file)
 	if !ok || stat.Size != 0 {
-		return nil, ErrUnsafe
+		return nil, unsafeWithCause(cause)
 	}
 	return o.file, nil
 }

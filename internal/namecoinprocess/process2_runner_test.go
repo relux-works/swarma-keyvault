@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,7 +140,7 @@ func process2SetupErrorText(err error) string {
 // isProcess2TestHookField names only the private fields whose values must stay test-installed.
 func isProcess2TestHookField(name string) bool {
 	switch name {
-	case "testHooks", "onSetupError", "afterOutputOpen", "createPipe":
+	case "testHooks", "onSetupError", "afterOutputOpen", "beforeFileForChild", "createPipe":
 		return true
 	default:
 		return false
@@ -147,6 +148,15 @@ func isProcess2TestHookField(name string) bool {
 }
 
 func process2TestHookViolations(fset *token.FileSet, files []*ast.File) []string {
+	process2UnwrapParens := func(expression ast.Expr) ast.Expr {
+		for {
+			parenthesized, ok := expression.(*ast.ParenExpr)
+			if !ok {
+				return expression
+			}
+			expression = parenthesized.X
+		}
+	}
 	hookTypes := map[string]bool{"Process2RunOptions": true, "process2RunTestHooks": true}
 	for changed := true; changed; {
 		changed = false
@@ -184,7 +194,7 @@ func process2TestHookViolations(fset *token.FileSet, files []*ast.File) []string
 				}
 			case *ast.UnaryExpr:
 				if node.Op == token.AND {
-					if selector, ok := node.X.(*ast.SelectorExpr); ok && isProcess2TestHookField(selector.Sel.Name) {
+					if selector, ok := process2UnwrapParens(node.X).(*ast.SelectorExpr); ok && isProcess2TestHookField(selector.Sel.Name) {
 						violations = append(violations, fmt.Sprintf("%s:%d", fset.Position(selector.Pos()).Filename, fset.Position(selector.Pos()).Line))
 					}
 				}
@@ -214,20 +224,32 @@ func process2TestHookViolations(fset *token.FileSet, files []*ast.File) []string
 
 func TestProcess2TestHookGuardDetectsIndirectWritesAndAliases(t *testing.T) {
 	const source = `package namecoinprocess
+type Process2RunOptions struct { testHooks *process2RunTestHooks }
+type process2RunTestHooks struct { afterOutputOpen func() }
 type optionsAlias = Process2RunOptions
 func install(options *optionsAlias) {
-	callback := &options.testHooks.afterOutputOpen
+	callback := &(options.testHooks.afterOutputOpen)
 	*callback = nil
-	_ = optionsAlias{nil}
+	_ = optionsAlias{testHooks: nil}
 }`
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "fixture.go", source, 0)
 	if err != nil {
 		t.Fatal("parse indirect-write guard fixture", err)
 	}
+	var config types.Config
+	if _, err := config.Check("fixture", fset, []*ast.File{file}, nil); err != nil {
+		t.Fatal("type-check indirect-write guard fixture", err)
+	}
 	violations := process2TestHookViolations(fset, []*ast.File{file})
-	if len(violations) != 2 {
-		t.Fatalf("guard violations = %v; want an indirect hook write and aliased positional literal", violations)
+	want := []string{"fixture.go:6", "fixture.go:8"}
+	if len(violations) != len(want) {
+		t.Fatalf("guard violations = %v; want %v", violations, want)
+	}
+	for i := range want {
+		if violations[i] != want[i] {
+			t.Fatalf("guard violation %d = %q; want %q", i, violations[i], want[i])
+		}
 	}
 }
 
@@ -586,6 +608,34 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		}
 		if info, err := os.Stat(outputPath); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
 			t.Fatalf("post-open refusal did not preserve the newly created empty output: info=%v err=%v", info, err)
+		}
+	})
+
+	t.Run("file-for-child-second-validation-error", func(t *testing.T) {
+		// The complete-pair-control above proves the positive path. Remove only the
+		// just-created public output without dropping its link count.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		options.testHooks = &process2RunTestHooks{beforeFileForChild: func() {
+			if err := os.Rename(outputPath, outputPath+".moved"); err != nil {
+				t.Errorf("move output for FileForChild validation failure: %v", err)
+			}
+		}}
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertUnknown(t, outcome)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-file-for-child")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != namecoinfiles.ErrUnsafe.Error() ||
+			!errors.As(outputErr, &errno) || errno != syscall.ENOENT || !errors.Is(outputErr, syscall.ENOENT) ||
+			process2SetupErrorText(outputErr) != syscall.ENOENT.Error() {
+			t.Fatal("FileForChild refusal did not preserve its safe sentinel and ENOENT cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
+		if command.Process != nil {
+			t.Fatal("FileForChild refusal started a helper")
+		}
+		if _, err := os.Stat(outputPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("forced refusal unexpectedly restored the output path", err)
 		}
 	})
 
