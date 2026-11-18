@@ -819,7 +819,7 @@ func TestAgentNostrLargestLegitimateEndpointAndBlobSign(t *testing.T) {
 	}
 	t.Logf("largest legitimate fixture sizes: metadata=%d/8192 bytes (service/version fields), receipt=%d/8192 bytes (owner identity 1024), envelope=%d/32768 bytes (decoded blob 16384)",
 		len(fixture.metadata), len(fixture.receiptRaw), len(fixture.envelope))
-	if _, err := ParseAgentNostrRecord(fixture.metadata); err != nil {
+	if _, _, err := ParseAgentNostrRecord(fixture.metadata); err != nil {
 		t.Fatal("largest legitimate metadata sibling was not canonical")
 	}
 	if _, err := ParseAgentNostrEnrollment(fixture.receiptRaw); err != nil {
