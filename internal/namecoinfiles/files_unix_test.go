@@ -5,10 +5,12 @@ package namecoinfiles
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -213,6 +215,32 @@ func TestOutputRefusalKeepsSyscallCauseBehindSentinel(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, sentinel) {
 		t.Fatal("existing output was modified")
+	}
+	for _, format := range []string{"%v", "%+v", "%#v"} {
+		cause := &os.PathError{Op: "stat", Path: path, Err: unix.EIO}
+		got := fmt.Sprintf(format, unsafeWithCause(cause))
+		if got != ErrUnsafe.Error() || strings.Contains(got, path) || strings.Contains(got, unix.EIO.Error()) {
+			t.Fatalf("format %q exposed the setup cause: %q", format, got)
+		}
+	}
+	if _, err := CreateOutput("relative-result"); err != ErrUnsafe {
+		t.Fatal("policy rejection did not keep the bare refusal sentinel")
+	}
+}
+
+func TestReadInputDoesNotExposeWalkSyscallCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	missing := filepath.Join(base, "missing-parent", "request.json")
+	if _, err := ReadInput(missing, 64); err != ErrUnsafe {
+		t.Fatalf("ReadInput changed its syscall-refusal surface: %v", err)
+	}
+	if _, err := CreateOutput(missing); err == nil || !errors.Is(err, ErrUnsafe) {
+		t.Fatalf("output setup did not return the refusal sentinel: %v", err)
+	} else {
+		var errno unix.Errno
+		if !errors.As(err, &errno) || errno != unix.ENOENT {
+			t.Fatalf("output setup lost the parent-open cause: %v", err)
+		}
 	}
 }
 

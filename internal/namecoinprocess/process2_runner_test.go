@@ -139,10 +139,95 @@ func process2SetupErrorText(err error) string {
 // isProcess2TestHookField names only the private fields whose values must stay test-installed.
 func isProcess2TestHookField(name string) bool {
 	switch name {
-	case "testHooks", "onSetupError", "createPipe":
+	case "testHooks", "onSetupError", "afterOutputOpen", "createPipe":
 		return true
 	default:
 		return false
+	}
+}
+
+func process2TestHookViolations(fset *token.FileSet, files []*ast.File) []string {
+	hookTypes := map[string]bool{"Process2RunOptions": true, "process2RunTestHooks": true}
+	for changed := true; changed; {
+		changed = false
+		for _, file := range files {
+			for _, declaration := range file.Decls {
+				group, ok := declaration.(*ast.GenDecl)
+				if !ok || group.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range group.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					underlying, ok := typeSpec.Type.(*ast.Ident)
+					if ok && hookTypes[underlying.Name] && !hookTypes[typeSpec.Name.Name] {
+						hookTypes[typeSpec.Name.Name] = true
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	var violations []string
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					selector, ok := lhs.(*ast.SelectorExpr)
+					if ok && isProcess2TestHookField(selector.Sel.Name) {
+						position := fset.Position(selector.Pos())
+						violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+					}
+				}
+			case *ast.UnaryExpr:
+				if node.Op == token.AND {
+					if selector, ok := node.X.(*ast.SelectorExpr); ok && isProcess2TestHookField(selector.Sel.Name) {
+						violations = append(violations, fmt.Sprintf("%s:%d", fset.Position(selector.Pos()).Filename, fset.Position(selector.Pos()).Line))
+					}
+				}
+			case *ast.KeyValueExpr:
+				if field, ok := node.Key.(*ast.Ident); ok && isProcess2TestHookField(field.Name) {
+					position := fset.Position(field.Pos())
+					violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+				}
+			case *ast.CompositeLit:
+				typ, ok := node.Type.(*ast.Ident)
+				if !ok || !hookTypes[typ.Name] {
+					break
+				}
+				for _, element := range node.Elts {
+					if _, keyed := element.(*ast.KeyValueExpr); !keyed {
+						position := fset.Position(node.Pos())
+						violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+						break
+					}
+				}
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func TestProcess2TestHookGuardDetectsIndirectWritesAndAliases(t *testing.T) {
+	const source = `package namecoinprocess
+type optionsAlias = Process2RunOptions
+func install(options *optionsAlias) {
+	callback := &options.testHooks.afterOutputOpen
+	*callback = nil
+	_ = optionsAlias{nil}
+}`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", source, 0)
+	if err != nil {
+		t.Fatal("parse indirect-write guard fixture", err)
+	}
+	violations := process2TestHookViolations(fset, []*ast.File{file})
+	if len(violations) != 2 {
+		t.Fatalf("guard violations = %v; want an indirect hook write and aliased positional literal", violations)
 	}
 }
 
@@ -152,7 +237,7 @@ func TestProcess2TestHooksAreAssignedOnlyInTestFiles(t *testing.T) {
 		t.Fatal("read Process2 source directory")
 	}
 	fset := token.NewFileSet()
-	var violations []string
+	var sourceFiles []*ast.File
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -162,34 +247,9 @@ func TestProcess2TestHooksAreAssignedOnlyInTestFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse non-test Go source %q", name)
 		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch node := node.(type) {
-			case *ast.AssignStmt:
-				for _, lhs := range node.Lhs {
-					selector, ok := lhs.(*ast.SelectorExpr)
-					if ok && isProcess2TestHookField(selector.Sel.Name) {
-						violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(selector.Pos()).Line))
-					}
-				}
-			case *ast.KeyValueExpr:
-				if field, ok := node.Key.(*ast.Ident); ok && isProcess2TestHookField(field.Name) {
-					violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(field.Pos()).Line))
-				}
-			case *ast.CompositeLit:
-				typ, ok := node.Type.(*ast.Ident)
-				if !ok || (typ.Name != "Process2RunOptions" && typ.Name != "process2RunTestHooks") {
-					break
-				}
-				for _, element := range node.Elts {
-					if _, keyed := element.(*ast.KeyValueExpr); !keyed {
-						violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(node.Pos()).Line))
-						break
-					}
-				}
-			}
-			return true
-		})
+		sourceFiles = append(sourceFiles, file)
 	}
+	violations := process2TestHookViolations(fset, sourceFiles)
 	if len(violations) != 0 {
 		t.Fatalf("non-test source assigns Process2 test hook or pipe factory: %s", strings.Join(violations, ", "))
 	}
@@ -245,6 +305,22 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		}
 		if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, wantResult) {
 			t.Fatal("retained result file differs from the public fixture", err)
+		}
+	})
+	t.Run("complete-pair-control-production-nil-hooks", func(t *testing.T) {
+		// This pairs the observed fixture with the normal nil-hook Process2 path.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
+		outcome := RunProcess2(context.Background(), command, options)
+		if !outcome.Done() || !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) {
+			t.Fatal("nil-hook production path did not complete the valid fixture pair")
+		}
+		info, err := os.Stat(outputPath)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatal("nil-hook fd3 output did not remain an exclusive mode-0600 public result", err)
+		}
+		if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, wantResult) {
+			t.Fatal("nil-hook retained result differs from the public fixture", err)
 		}
 	})
 
@@ -482,6 +558,34 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		if !bytes.Equal(publicOutcome.Line(), unknownProcess2Outcome().Line()) ||
 			bytes.Contains(publicOutcome.Line(), []byte(outputPath)) || bytes.Contains(publicOutcome.Line(), []byte("EEXIST")) {
 			t.Fatal("public Process2 outcome exposed the internal output-creation cause")
+		}
+	})
+
+	t.Run("output-revalidation-error-after-exclusive-open", func(t *testing.T) {
+		// The output is really created exclusively; closing its descriptor forces
+		// the following Fstat revalidation to fail with an OS cause.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		options.testHooks = &process2RunTestHooks{afterOutputOpen: func(file *os.File) {
+			if err := file.Close(); err != nil {
+				t.Errorf("close output descriptor for forced revalidation failure: %v", err)
+			}
+		}}
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertUnknown(t, outcome)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-create")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != "namecoin_file_unavailable" ||
+			!errors.As(outputErr, &errno) || errno != syscall.EBADF ||
+			process2SetupErrorText(outputErr) != syscall.EBADF.Error() {
+			t.Fatal("post-open output refusal did not preserve the safe sentinel and EBADF cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
+		if command.Process != nil {
+			t.Fatal("post-open output refusal started a helper")
+		}
+		if info, err := os.Stat(outputPath); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
+			t.Fatalf("post-open refusal did not preserve the newly created empty output: info=%v err=%v", info, err)
 		}
 	})
 

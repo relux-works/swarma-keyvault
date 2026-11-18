@@ -47,6 +47,7 @@ type Process2RunOptions struct {
 type process2RunTestHooks struct {
 	beforeAdmission       func(*os.Process)
 	onSetupError          func(string, error)
+	afterOutputOpen       func(*os.File)
 	createPipe            func(string) (process2Pipe, error)
 	beforeWriter          func()
 	writerComplete        func()
@@ -291,7 +292,13 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	contextChannel := ctx.Done()
 	frame := bytes.Clone(options.Frame)
 	defer clear(frame)
-	output, err := namecoinfiles.CreateOutput(options.Invocation.args.OutputPath)
+	createOutput := namecoinfiles.CreateOutput
+	if hooks := options.testHooks; hooks != nil && hooks.afterOutputOpen != nil {
+		createOutput = func(path string) (*namecoinfiles.Output, error) {
+			return namecoinfiles.CreateOutputAfterOpenForTest(path, hooks.afterOutputOpen)
+		}
+	}
+	output, err := createOutput(options.Invocation.args.OutputPath)
 	if err != nil {
 		reportSetupError("output-create", err)
 		return unknown, evidence

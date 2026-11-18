@@ -8,6 +8,7 @@ package namecoinfiles
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,6 +28,9 @@ type refusalWithCause struct {
 func (e refusalWithCause) Error() string        { return ErrUnsafe.Error() }
 func (e refusalWithCause) Unwrap() error        { return e.cause }
 func (e refusalWithCause) Is(target error) bool { return target == ErrUnsafe }
+func (e refusalWithCause) Format(state fmt.State, _ rune) {
+	_, _ = io.WriteString(state, e.Error())
+}
 
 func unsafeWithCause(cause error) error {
 	if cause == nil {
@@ -45,13 +49,22 @@ type heldPath struct {
 	name string
 }
 
-func safeDirectory(fd int, uid uint32) bool {
+func safeDirectory(fd int, uid uint32) (bool, error) {
 	var s unix.Stat_t
-	return unix.Fstat(fd, &s) == nil && s.Mode&unix.S_IFMT == unix.S_IFDIR && (s.Uid == 0 || s.Uid == uid) && s.Mode&0o7022 == 0
+	if err := unix.Fstat(fd, &s); err != nil {
+		return false, err
+	}
+	return s.Mode&unix.S_IFMT == unix.S_IFDIR && (s.Uid == 0 || s.Uid == uid) && s.Mode&0o7022 == 0, nil
 }
-func walkParent(path string) (*heldPath, error) {
+func walkParent(path string, retainCause bool) (*heldPath, error) {
 	if os.Getuid() != os.Geteuid() || !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" || strings.ContainsRune(path, 0) {
 		return nil, ErrUnsafe
+	}
+	refusal := func(err error) error {
+		if retainCause {
+			return unsafeWithCause(err)
+		}
+		return ErrUnsafe
 	}
 	h := &heldPath{uid: uint32(os.Getuid()), name: filepath.Base(path)}
 	good := false
@@ -62,10 +75,12 @@ func walkParent(path string) (*heldPath, error) {
 	}()
 	root, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, unsafeWithCause(err)
+		return nil, refusal(err)
 	}
 	h.dirs = append(h.dirs, directory{parent: -1, fd: root})
-	if !safeDirectory(root, h.uid) {
+	if ok, err := safeDirectory(root, h.uid); err != nil {
+		return nil, refusal(err)
+	} else if !ok {
 		return nil, ErrUnsafe
 	}
 	current := root
@@ -75,37 +90,55 @@ func walkParent(path string) (*heldPath, error) {
 		}
 		fd, err := unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
-			return nil, unsafeWithCause(err)
+			return nil, refusal(err)
 		}
 		h.dirs = append(h.dirs, directory{parent: current, fd: fd, name: component})
-		if !safeDirectory(fd, h.uid) {
+		if ok, err := safeDirectory(fd, h.uid); err != nil {
+			return nil, refusal(err)
+		} else if !ok {
 			return nil, ErrUnsafe
 		}
 		current = fd
 	}
-	if !h.valid() {
+	if ok, err := h.validWithCause(); err != nil {
+		return nil, refusal(err)
+	} else if !ok {
 		return nil, ErrUnsafe
 	}
 	good = true
 	return h, nil
 }
 func (h *heldPath) parent() int { return h.dirs[len(h.dirs)-1].fd }
-func (h *heldPath) valid() bool {
+func (h *heldPath) validWithCause() (bool, error) {
 	if h == nil || len(h.dirs) == 0 {
-		return false
+		return false, nil
 	}
 	for _, d := range h.dirs {
-		if !safeDirectory(d.fd, h.uid) {
-			return false
+		ok, err := safeDirectory(d.fd, h.uid)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			return false, nil
 		}
 		if d.parent >= 0 {
 			var path, held unix.Stat_t
-			if unix.Fstatat(d.parent, d.name, &path, unix.AT_SYMLINK_NOFOLLOW) != nil || unix.Fstat(d.fd, &held) != nil || path.Dev != held.Dev || path.Ino != held.Ino || path.Mode&unix.S_IFMT != unix.S_IFDIR {
-				return false
+			if err := unix.Fstatat(d.parent, d.name, &path, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return false, err
+			}
+			if err := unix.Fstat(d.fd, &held); err != nil {
+				return false, err
+			}
+			if path.Dev != held.Dev || path.Ino != held.Ino || path.Mode&unix.S_IFMT != unix.S_IFDIR {
+				return false, nil
 			}
 		}
 	}
-	return true
+	return true, nil
+}
+func (h *heldPath) valid() bool {
+	valid, err := h.validWithCause()
+	return err == nil && valid
 }
 func (h *heldPath) close() {
 	for i := len(h.dirs) - 1; i >= 0; i-- {
@@ -113,13 +146,36 @@ func (h *heldPath) close() {
 	}
 	h.dirs = nil
 }
-func (h *heldPath) check(f *os.File) (unix.Stat_t, bool) {
+func (h *heldPath) checkWithCause(f *os.File) (unix.Stat_t, bool, error) {
 	var held, path unix.Stat_t
-	if !h.valid() || f == nil || unix.Fstat(int(f.Fd()), &held) != nil || held.Mode&unix.S_IFMT != unix.S_IFREG || held.Uid != h.uid || held.Mode&0o7777 != 0o600 || held.Nlink != 1 || unix.Fstatat(h.parent(), h.name, &path, unix.AT_SYMLINK_NOFOLLOW) != nil || path.Dev != held.Dev || path.Ino != held.Ino || path.Mode&unix.S_IFMT != unix.S_IFREG {
-		return held, false
+	valid, err := h.validWithCause()
+	if err != nil {
+		return held, false, err
+	}
+	if !valid || f == nil {
+		return held, false, nil
+	}
+	if err := unix.Fstat(int(f.Fd()), &held); err != nil {
+		return held, false, err
+	}
+	if held.Mode&unix.S_IFMT != unix.S_IFREG || held.Uid != h.uid || held.Mode&0o7777 != 0o600 || held.Nlink != 1 {
+		return held, false, nil
+	}
+	if err := unix.Fstatat(h.parent(), h.name, &path, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return held, false, err
+	}
+	if path.Dev != held.Dev || path.Ino != held.Ino || path.Mode&unix.S_IFMT != unix.S_IFREG {
+		return held, false, nil
 	}
 	flags, err := unix.FcntlInt(f.Fd(), unix.F_GETFD, 0)
-	return held, err == nil && flags == unix.FD_CLOEXEC
+	if err != nil {
+		return held, false, err
+	}
+	return held, flags == unix.FD_CLOEXEC, nil
+}
+func (h *heldPath) check(f *os.File) (unix.Stat_t, bool) {
+	stat, ok, _ := h.checkWithCause(f)
+	return stat, ok
 }
 func (h *heldPath) read(f *os.File, maximum int) ([]byte, error) {
 	before, ok := h.check(f)
@@ -153,7 +209,7 @@ func (h *heldPath) read(f *os.File, maximum int) ([]byte, error) {
 // edits cannot change the returned bytes. This is no hostile-writer atomicity
 // guarantee, and parsing/independent trusted selection remain separate checks.
 func ReadInput(path string, maximum int) ([]byte, error) {
-	h, err := walkParent(path)
+	h, err := walkParent(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +236,21 @@ type Output struct {
 }
 
 func CreateOutput(path string) (*Output, error) {
-	h, err := walkParent(path)
+	return createOutput(path, nil)
+}
+
+// CreateOutputAfterOpenForTest creates and exclusively opens the output before
+// invoking afterOpen, then runs the normal output revalidation path. It exists
+// only for deterministic setup-failure controls in internal package tests.
+func CreateOutputAfterOpenForTest(path string, afterOpen func(*os.File)) (*Output, error) {
+	if afterOpen == nil {
+		return nil, ErrUnsafe
+	}
+	return createOutput(path, afterOpen)
+}
+
+func createOutput(path string, afterOpen func(*os.File)) (*Output, error) {
+	h, err := walkParent(path, true)
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +260,14 @@ func CreateOutput(path string) (*Output, error) {
 		return nil, unsafeWithCause(err)
 	}
 	f := os.NewFile(uintptr(fd), "namecoin public result")
-	stat, ok := h.check(f)
+	if afterOpen != nil {
+		afterOpen(f)
+	}
+	stat, ok, cause := h.checkWithCause(f)
 	if !ok || stat.Size != 0 {
 		f.Close()
 		h.close()
-		return nil, ErrUnsafe
+		return nil, unsafeWithCause(cause)
 	}
 	if err := unix.Fsync(h.parent()); err != nil {
 		f.Close()
