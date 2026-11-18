@@ -81,6 +81,14 @@ var agentNostrJSONEncode = func(value any) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+var agentNostrPlainEncode = func(operation string, result any) ([]byte, error) {
+	encoded := agentNostrPlainSuccess(operation, result)
+	if encoded == "" {
+		return nil, errors.New("invalid agent Nostr text result")
+	}
+	return []byte(encoded), nil
+}
+
 func runAgentNostr(args []string, out output) int {
 	opts, ok := parseAgentNostrArgs(args)
 	if !ok {
@@ -145,12 +153,11 @@ func runAgentNostr(args []string, out output) int {
 		return deliverAgentNostrFailure(out, agentNostrInvalid(opts.operation), false)
 	}
 
-	plain := agentNostrPlainSuccess(opts.operation, result)
 	var success []byte
 	if out.json {
 		success, err = agentNostrJSONEncode(agentNostrResponse{OK: true, Command: "agent-nostr", Result: result})
 	} else {
-		success = []byte(plain)
+		success, err = agentNostrPlainEncode(opts.operation, result)
 	}
 	if err != nil || len(success) == 0 {
 		failure := agentNostrFailure("unavailable", opts.operation, opts.service, opts.version)
@@ -287,7 +294,7 @@ func parseAgentNostrArgs(args []string) (agentNostrOptions, bool) {
 }
 
 func readAgentNostrEnrollment(path string) (keyvault.AgentNostrEnrollment, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return keyvault.AgentNostrEnrollment{}, err
 	}

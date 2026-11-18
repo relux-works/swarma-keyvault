@@ -5,7 +5,6 @@ package keyvault
 import (
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -22,10 +21,7 @@ type agentNostrProcessPrivate struct{}
 func NewAgentNostrPrivate() AgentNostrPrivate { return agentNostrProcessPrivate{} }
 
 func (agentNostrProcessPrivate) CreateWrap() (AgentNostrWrap, error) {
-	request, err := json.Marshal(struct {
-		Op      string `json:"op"`
-		Purpose string `json:"purpose"`
-	}{"create-wrap", "nostr"})
+	request, err := agentNostrCreateWrapRequest()
 	if err != nil {
 		clear(request)
 		return AgentNostrWrap{}, &AgentNostrPrivateError{Code: "unavailable"}
@@ -40,29 +36,8 @@ func (agentNostrProcessPrivate) CreateWrap() (AgentNostrWrap, error) {
 }
 
 func (agentNostrProcessPrivate) UnwrapAgentNostr(envelope AgentNostrEnvelope) ([]byte, error) {
-	blob, err := decodeAgentNostrBase64(envelope.EnclaveBlob)
+	request, err := agentNostrUnwrapRequest(envelope)
 	if err != nil {
-		return nil, &AgentNostrPrivateError{Code: "bad_request"}
-	}
-	point, err := decodeAgentNostrBase64(envelope.Point)
-	if err != nil {
-		return nil, &AgentNostrPrivateError{Code: "bad_request"}
-	}
-	ciphertext, err := decodeAgentNostrBase64(envelope.Ciphertext)
-	if err != nil {
-		return nil, &AgentNostrPrivateError{Code: "bad_request"}
-	}
-	request, err := json.Marshal(struct {
-		Op         string `json:"op"`
-		Blob       []byte `json:"blob"`
-		Point      []byte `json:"point"`
-		Ciphertext []byte `json:"ciphertext"`
-	}{"unwrap-agent-nostr", blob, point, ciphertext})
-	clear(blob)
-	clear(point)
-	clear(ciphertext)
-	if err != nil || len(request) > 32768 {
-		clear(request)
 		return nil, &AgentNostrPrivateError{Code: "bad_request"}
 	}
 	defer clear(request)
@@ -78,7 +53,7 @@ func (agentNostrProcessPrivate) UnwrapAgentNostr(envelope AgentNostrEnvelope) ([
 }
 
 func agentNostrCall(operation string, request []byte, maxSuccess int) ([]byte, error) {
-	if len(request) == 0 || len(request) > 32768 || (operation != "create-wrap" && operation != "unwrap-agent-nostr") {
+	if !agentNostrPrivateRequestWithinLimit(request) || (operation != "create-wrap" && operation != "unwrap-agent-nostr") {
 		return nil, &AgentNostrPrivateError{Code: "bad_request"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), agentNostrPrivateTimeout)

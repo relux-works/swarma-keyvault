@@ -185,16 +185,22 @@ func (e *AgentNostrFailure) Error() string {
 }
 
 type AgentNostrManager struct {
-	store   AgentNostrStore
-	private AgentNostrPrivate
-	lock    Locker
-	now     func() time.Time
-	random  io.Reader
-	sign    func(secret, digest []byte, aux [32]byte) ([]byte, error)
+	store             AgentNostrStore
+	private           AgentNostrPrivate
+	lock              Locker
+	now               func() time.Time
+	random            io.Reader
+	sign              func(secret, digest []byte, aux [32]byte) ([]byte, error)
+	scalarInRange     func([]byte) bool
+	publicFromSecret  func([]byte) ([]byte, error)
+	signGuardObserved func(string)
 }
 
 func NewAgentNostrManager(store AgentNostrStore, private AgentNostrPrivate, lock Locker) *AgentNostrManager {
-	return &AgentNostrManager{store: store, private: private, lock: lock, now: time.Now, random: rand.Reader, sign: signNostrWithAux}
+	return &AgentNostrManager{
+		store: store, private: private, lock: lock, now: time.Now, random: rand.Reader, sign: signNostrWithAux,
+		scalarInRange: agentNostrScalarInRange, publicFromSecret: agentNostrPublicFromSecret,
+	}
 }
 
 func ValidateAgentNostrService(service string) error {
@@ -649,24 +655,37 @@ func (m *AgentNostrManager) Sign(identity string, receipt AgentNostrEnrollment, 
 	}
 	defer clear(plaintext)
 	if len(plaintext) != AgentNostrPlaintextSize || !bytes.Equal(plaintext[:5], []byte("KVAN1")) {
+		m.observeAgentNostrSignGuard("domain")
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
 	metadataHash := sha256.Sum256(metadata)
 	if subtle.ConstantTimeCompare(plaintext[5:37], metadataHash[:]) != 1 {
+		m.observeAgentNostrSignGuard("metadata-binding")
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
 	secret := plaintext[37:]
-	if !agentNostrScalarInRange(secret) {
+	scalarInRange := m.scalarInRange
+	if scalarInRange == nil {
+		scalarInRange = agentNostrScalarInRange
+	}
+	if !scalarInRange(secret) {
+		m.observeAgentNostrSignGuard("scalar-range")
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
-	privateKey, err := nostrPrivate(secret)
+	publicFromSecret := m.publicFromSecret
+	if publicFromSecret == nil {
+		publicFromSecret = agentNostrPublicFromSecret
+	}
+	actualPublic, err := publicFromSecret(secret)
 	if err != nil {
+		m.observeAgentNostrSignGuard("private-scalar-construction")
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
-	actualPublic := schnorr.SerializePubKey(privateKey.PubKey())
-	privateKey.Zero()
+	defer clear(actualPublic)
 	expectedPublic, _ := hex.DecodeString(record.PublicKey)
+	defer clear(expectedPublic)
 	if subtle.ConstantTimeCompare(actualPublic, expectedPublic) != 1 {
+		m.observeAgentNostrSignGuard("public-key-match")
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
 	var aux [32]byte
@@ -687,6 +706,12 @@ func (m *AgentNostrManager) Sign(identity string, receipt AgentNostrEnrollment, 
 		return AgentNostrSignature{}, agentNostrFailure(AgentNostrCodeCorruptRecord, "sign", service, version)
 	}
 	return AgentNostrSignature{Algorithm: AgentNostrAlgorithm, Signature: hex.EncodeToString(signature), RecordFingerprint: fingerprint, KeySHA256: public.KeySHA256}, nil
+}
+
+func (m *AgentNostrManager) observeAgentNostrSignGuard(guard string) {
+	if m != nil && m.signGuardObserved != nil {
+		m.signGuardObserved(guard)
+	}
 }
 
 func agentNostrNewSecret(random io.Reader) ([]byte, []byte, error) {
@@ -724,6 +749,15 @@ func agentNostrScalarInRange(secret []byte) bool {
 	return less == 1 && subtle.ConstantTimeLessOrEq(1, nonzero) == 1
 }
 
+func agentNostrPublicFromSecret(secret []byte) ([]byte, error) {
+	privateKey, err := nostrPrivate(secret)
+	if err != nil {
+		return nil, err
+	}
+	defer privateKey.Zero()
+	return schnorr.SerializePubKey(privateKey.PubKey()), nil
+}
+
 func validateAgentNostrWrap(wrap AgentNostrWrap) error {
 	if len(wrap.Blob) < 1 || len(wrap.Blob) > AgentNostrMaxBlob || len(wrap.Point) != 65 || wrap.Policy != "none" || wrap.SilentRefused ||
 		!lowerHex(wrap.Fingerprint, 32) || validateWrapping(wrap.Point, wrap.Fingerprint) != nil {
@@ -752,25 +786,39 @@ func agentNostrSeal(wrappingPoint, plaintext []byte, random io.Reader) ([]byte, 
 		return nil, err
 	}
 	defer clear(shared)
-	transcript := append(bytes.Clone(shared), 0, 0, 0, 1)
-	transcript = append(transcript, point...)
-	derived := sha256.Sum256(transcript)
-	defer clear(transcript)
-	block, err := aes.NewCipher(derived[:16])
+	var sealed []byte
+	err = agentNostrWithDerived(shared, point, sha256.Sum256, func(derived []byte) error {
+		block, err := aes.NewCipher(derived[:16])
+		if err != nil {
+			return err
+		}
+		aead, err := cipher.NewGCMWithNonceSize(block, 16)
+		if err != nil {
+			return err
+		}
+		sealed = aead.Seal(nil, derived[16:], plaintext, nil)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCMWithNonceSize(block, 16)
-	if err != nil {
-		return nil, err
-	}
-	sealed := aead.Seal(nil, derived[16:], plaintext, nil)
 	result := append(bytes.Clone(point), sealed...)
 	if len(result) != AgentNostrCiphertextSize {
 		clear(result)
 		return nil, errors.New("agent Nostr ciphertext size mismatch")
 	}
 	return result, nil
+}
+
+func agentNostrWithDerived(shared, point []byte, hash func([]byte) [32]byte, use func([]byte) error) error {
+	transcript := make([]byte, len(shared)+4+len(point))
+	defer clear(transcript)
+	copy(transcript, shared)
+	copy(transcript[len(shared):], []byte{0, 0, 0, 1})
+	copy(transcript[len(shared)+4:], point)
+	derived := hash(transcript)
+	defer clear(derived[:])
+	return use(derived[:])
 }
 
 func decodeAgentNostrBase64(value string) ([]byte, error) {

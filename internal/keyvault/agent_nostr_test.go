@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -29,6 +30,17 @@ type agentNostrFixtureDocument struct {
 	PlaintextHex      string `json:"plaintext_hex"`
 }
 
+type agentNostrFrozenMutantDocument struct {
+	Name                 string `json:"name"`
+	ExpectedFirstFailure string `json:"expected_first_failure"`
+	MetadataJSON         string `json:"metadata_json"`
+	RecordFingerprint    string `json:"record_fingerprint"`
+	KeySHA256            string `json:"key_sha256"`
+	EnrollmentJSON       string `json:"enrollment_json"`
+	EnvelopeJSON         string `json:"envelope_json"`
+	PlaintextHex         string `json:"plaintext_hex"`
+}
+
 func readAgentNostrFixture(t *testing.T, name string) agentNostrFixtureDocument {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "agent-nostr", name))
@@ -40,6 +52,87 @@ func readAgentNostrFixture(t *testing.T, name string) agentNostrFixtureDocument 
 		t.Fatal("public agent Nostr fixture is malformed")
 	}
 	return fixture
+}
+
+func readAgentNostrFrozenMutant(t *testing.T, name string) (agentNostrFrozenMutantDocument, []byte) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "agent-nostr", name))
+	if err != nil {
+		t.Fatal("frozen agent Nostr mutant unavailable")
+	}
+	var mutant agentNostrFrozenMutantDocument
+	if json.Unmarshal(raw, &mutant) != nil || mutant.Name == "" || mutant.ExpectedFirstFailure == "" || mutant.PlaintextHex == "" {
+		t.Fatal("frozen agent Nostr mutant is malformed")
+	}
+	plaintext, err := hex.DecodeString(mutant.PlaintextHex)
+	if err != nil || len(plaintext) != AgentNostrPlaintextSize {
+		t.Fatal("frozen agent Nostr mutant plaintext is malformed")
+	}
+	return mutant, plaintext
+}
+
+type agentNostrSignFixture struct {
+	store      *agentNostrFakeStore
+	private    *agentNostrFakePrivate
+	manager    *AgentNostrManager
+	record     AgentNostrRecord
+	receipt    AgentNostrEnrollment
+	receiptRaw []byte
+	metadata   []byte
+	envelope   []byte
+	plaintext  []byte
+}
+
+func newAgentNostrSignFixture(t *testing.T, service string, version int, identity string, blobSize int) agentNostrSignFixture {
+	t.Helper()
+	a := readAgentNostrFixture(t, "fixture-a.json")
+	record, _, err := ParseAgentNostrRecord([]byte(a.MetadataJSON))
+	if err != nil {
+		t.Fatal("fixture A metadata unavailable")
+	}
+	record.Service, record.Version = service, version
+	metadata, err := MarshalAgentNostrRecord(record)
+	if err != nil {
+		t.Fatal("endpoint metadata could not be canonicalized")
+	}
+	public := AgentNostrPublicResult(record, metadata)
+	receipt := AgentNostrEnrollment{
+		Schema: AgentNostrReceiptSchema, OwnerMXID: identity, Service: service, Purpose: "nostr", Version: version,
+		PublicKey: record.PublicKey, KeySHA256: public.KeySHA256, RecordFingerprint: public.RecordFingerprint,
+	}
+	receiptRaw, err := MarshalAgentNostrEnrollment(receipt)
+	if err != nil {
+		t.Fatal("endpoint receipt could not be canonicalized")
+	}
+	if _, err := ParseAgentNostrEnrollment(receiptRaw); err != nil {
+		t.Fatal("canonical endpoint receipt did not round-trip")
+	}
+	var envelope AgentNostrEnvelope
+	if json.Unmarshal([]byte(a.EnvelopeJSON), &envelope) != nil {
+		t.Fatal("fixture A envelope unavailable")
+	}
+	if blobSize >= 0 {
+		envelope.EnclaveBlob = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, blobSize))
+	}
+	var envelopeRaw []byte
+	if blobSize < 0 || blobSize <= AgentNostrMaxBlob {
+		envelopeRaw, err = MarshalAgentNostrEnvelope(envelope, record)
+	} else {
+		envelopeRaw, err = json.Marshal(envelope)
+	}
+	if err != nil {
+		t.Fatal("endpoint envelope could not be encoded")
+	}
+	plaintext := mustAgentNostrFixturePlaintext(t, a)
+	metadataHash := sha256.Sum256(metadata)
+	copy(plaintext[5:37], metadataHash[:])
+	store := newAgentNostrFakeStore()
+	store.items[AgentNostrAccount(service, version)] = agentNostrFakeItem{metadata: metadata, envelope: envelopeRaw}
+	private := &agentNostrFakePrivate{plaintext: [][]byte{bytes.Clone(plaintext)}}
+	return agentNostrSignFixture{
+		store: store, private: private, manager: newAgentNostrTestManager(store, private), record: record,
+		receipt: receipt, receiptRaw: receiptRaw, metadata: metadata, envelope: envelopeRaw, plaintext: plaintext,
+	}
 }
 
 // Claim: only the exact contract-derived service/version forms are admitted;
@@ -139,6 +232,45 @@ func TestAgentNostrPublicFixturesAndStrictCanonicalDocuments(t *testing.T) {
 	}
 }
 
+// Claim: ECDH transcript construction allocates its full secret-bearing buffer
+// once and clears that buffer and the derived key after use; limit: Go cannot
+// promise erasure of compiler, register, or library-owned copies.
+func TestAgentNostrDerivedTranscriptAndKeyAreCleared(t *testing.T) {
+	shared := []byte("fixture-shared-secret")
+	point := []byte("fixture-public-point")
+	expected := make([]byte, len(shared)+4+len(point))
+	copy(expected, shared)
+	copy(expected[len(shared):], []byte{0, 0, 0, 1})
+	copy(expected[len(shared)+4:], point)
+	var transcript, derived []byte
+	expectedDerived := sha256.Sum256(expected)
+	err := agentNostrWithDerived(shared, point, func(input []byte) [32]byte {
+		transcript = input
+		if len(input) != len(expected) || cap(input) != len(input) || !bytes.Equal(input, expected) {
+			t.Fatal("ECDH transcript was not one complete preallocated buffer")
+		}
+		return sha256.Sum256(input)
+	}, func(input []byte) error {
+		derived = input
+		if !bytes.Equal(input, expectedDerived[:]) {
+			t.Fatal("derived key did not match the frozen transcript")
+		}
+		return nil
+	})
+	if err != nil || !allZeroAgentNostrBytes(transcript) || !allZeroAgentNostrBytes(derived) {
+		t.Fatal("owned ECDH transcript or derived key remained after use")
+	}
+}
+
+func allZeroAgentNostrBytes(value []byte) bool {
+	for _, b := range value {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Claim: A/E_A is a valid full-path signing sibling, while a valid B at the
 // same selector cannot be substituted under E_A; limit: the fake private
 // helper does not prove reciprocal native process admission.
@@ -166,6 +298,170 @@ func TestAgentNostrSignRequiresExternalReceiptBeforeEnvelopeLoad(t *testing.T) {
 	result, err := manager.Sign(receiptB.OwnerMXID, receiptB, receiptB.Service, receiptB.Version, bytes.Repeat([]byte{0}, 32))
 	if err != nil || len(result.Signature) != 128 || result.RecordFingerprint != b.RecordFingerprint || result.KeySHA256 != b.KeySHA256 || store.loads != 1 || private.unwraps != 1 {
 		t.Fatal("B/E_B positive signing control failed")
+	}
+}
+
+// Claim: a retained A selection cannot release a replacement B envelope after
+// selection; limit: the fake demonstrates the Go metadata recheck, not native
+// Keychain item identity or ACL behavior.
+func TestAgentNostrSelectedItemReplacementIsRefused(t *testing.T) {
+	a := readAgentNostrFixture(t, "fixture-a.json")
+	b := readAgentNostrFixture(t, "fixture-b.json")
+	receipt, err := ParseAgentNostrEnrollment([]byte(a.EnrollmentJSON))
+	if err != nil {
+		t.Fatal("receipt A unavailable")
+	}
+	store := newAgentNostrFakeStore()
+	store.putFixture(t, a)
+	account := AgentNostrAccount(receipt.Service, receipt.Version)
+	_, bFingerprint, err := ParseAgentNostrRecord([]byte(b.MetadataJSON))
+	if err != nil || bFingerprint == receipt.RecordFingerprint {
+		t.Fatal("replacement B is not a distinct canonical item")
+	}
+	private := &agentNostrFakePrivate{plaintext: [][]byte{mustAgentNostrFixturePlaintext(t, a)}}
+	manager := newAgentNostrTestManager(store, private)
+	store.onSelect = func(s *agentNostrFakeStore, selected string) {
+		if selected == account {
+			s.items[selected] = agentNostrFakeItem{metadata: []byte(b.MetadataJSON), envelope: []byte(b.EnvelopeJSON)}
+			s.onSelect = nil
+		}
+	}
+	_, err = manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, bytes.Repeat([]byte{0x3a}, 32))
+	if agentNostrFailureCode(err) != AgentNostrCodeEnrollmentMismatch || store.selects != 1 || store.loads != 1 || private.unwraps != 0 || store.adds != 0 {
+		t.Fatal("replacement item reached private release, signing, mutation, or fallback")
+	}
+	if !bytes.Equal(store.items[account].metadata, []byte(b.MetadataJSON)) || !bytes.Equal(store.items[account].envelope, []byte(b.EnvelopeJSON)) {
+		t.Fatal("replacement item was overwritten while refusing the selection race")
+	}
+
+	positiveStore := newAgentNostrFakeStore()
+	positiveStore.putFixture(t, a)
+	positivePrivate := &agentNostrFakePrivate{plaintext: [][]byte{mustAgentNostrFixturePlaintext(t, a)}}
+	positiveManager := newAgentNostrTestManager(positiveStore, positivePrivate)
+	result, err := positiveManager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, bytes.Repeat([]byte{0x3a}, 32))
+	if err != nil || len(result.Signature) != 128 || positivePrivate.unwraps != 1 || positiveStore.adds != 0 {
+		t.Fatal("unchanged selected A positive control did not sign")
+	}
+}
+
+// Claim: frozen valid-AEAD domain, binding, scalar and public-key mutants reach
+// the production Sign guard named by their fixture, with A usable on both sides;
+// limit: private unwrap is a typed test seam, while the oracle package checks
+// fixture AEAD independently and this does not qualify native custody.
+func TestAgentNostrFrozenSignMutantsPreserveAAndReachFirstGuard(t *testing.T) {
+	a := readAgentNostrFixture(t, "fixture-a.json")
+	receipt, err := ParseAgentNostrEnrollment([]byte(a.EnrollmentJSON))
+	if err != nil {
+		t.Fatal("receipt A unavailable")
+	}
+	aPlaintext := mustAgentNostrFixturePlaintext(t, a)
+	digest := bytes.Repeat([]byte{0x3a}, 32)
+	for _, tc := range []struct {
+		file, failure, guard string
+	}{
+		{"mutant-domain-kvax1.json", "domain", "domain"},
+		{"mutant-binding.json", "metadata-binding", "metadata-binding"},
+		{"mutant-scalar-zero.json", "scalar-range", "scalar-range"},
+		{"mutant-scalar-order.json", "scalar-range", "scalar-range"},
+		{"mutant-scalar-n-plus-3.json", "scalar-range-before-reduction", "scalar-range"},
+		{"mutant-scalar-key-mismatch.json", "public-key-match", "public-key-match"},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			mutant, mutantPlaintext := readAgentNostrFrozenMutant(t, tc.file)
+			if mutant.ExpectedFirstFailure != tc.failure || mutant.MetadataJSON != a.MetadataJSON ||
+				mutant.RecordFingerprint != a.RecordFingerprint || mutant.KeySHA256 != a.KeySHA256 || mutant.EnrollmentJSON != a.EnrollmentJSON {
+				t.Fatal("frozen mutant changed A/E_A instead of only its private plaintext")
+			}
+			record, _, err := ParseAgentNostrRecord([]byte(a.MetadataJSON))
+			if err != nil {
+				t.Fatal("A metadata unavailable")
+			}
+			if _, err := ParseAgentNostrEnvelope([]byte(mutant.EnvelopeJSON), record); err != nil {
+				t.Fatal("frozen mutant envelope is not a canonical A envelope")
+			}
+
+			store := newAgentNostrFakeStore()
+			store.putFixture(t, a)
+			account := AgentNostrAccount(receipt.Service, receipt.Version)
+			original := store.items[account]
+			private := &agentNostrFakePrivate{plaintext: [][]byte{aPlaintext, mutantPlaintext, aPlaintext}}
+			manager := newAgentNostrTestManager(store, private)
+			signCalls, publicCalls := 0, 0
+			lastGuard := ""
+			realPublicFromSecret := manager.publicFromSecret
+			manager.publicFromSecret = func(secret []byte) ([]byte, error) {
+				publicCalls++
+				return realPublicFromSecret(secret)
+			}
+			manager.signGuardObserved = func(guard string) { lastGuard = guard }
+			manager.sign = func(secret, digest []byte, aux [32]byte) ([]byte, error) {
+				signCalls++
+				return signNostrWithAux(secret, digest, aux)
+			}
+
+			if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); err != nil || len(result.Signature) != 128 {
+				t.Fatal("A did not sign before the frozen mutant")
+			}
+			lastGuard = ""
+			item := store.items[account]
+			item.envelope = []byte(mutant.EnvelopeJSON)
+			store.items[account] = item
+			if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); agentNostrFailureCode(err) != AgentNostrCodeCorruptRecord || result.Signature != "" || lastGuard != tc.guard {
+				t.Fatalf("mutant did not stop at its first production guard: result=%+v failure=%s guard=%q want=%q", result, agentNostrFailureCode(err), lastGuard, tc.guard)
+			}
+			wantPublicCalls := 1
+			if tc.guard == "public-key-match" {
+				wantPublicCalls = 2
+			}
+			if publicCalls != wantPublicCalls || signCalls != 1 {
+				t.Fatal("mutant reached scalar construction/signing beyond its intended first guard")
+			}
+			lastGuard = ""
+			item = store.items[account]
+			item.envelope = bytes.Clone(original.envelope)
+			store.items[account] = item
+			if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); err != nil || len(result.Signature) != 128 {
+				t.Fatal("A did not sign after the frozen mutant")
+			}
+			if store.selects != 3 || store.loads != 3 || private.unwraps != 3 || signCalls != 2 || store.adds != 0 ||
+				!bytes.Equal(store.items[account].metadata, original.metadata) || !bytes.Equal(store.items[account].envelope, original.envelope) {
+				t.Fatal("A/mutant/A changed persisted state or crossed an unintended effect")
+			}
+		})
+	}
+}
+
+// Claim: an isolated override that accepts only n+3 passes the bytes to scalar
+// construction and is visible as the wrong first guard; limit: the override is
+// test-local and the production manager retains the contract range predicate.
+func TestAgentNostrNPlusThreeGuardRemovalInstrumentIsObserved(t *testing.T) {
+	a := readAgentNostrFixture(t, "fixture-a.json")
+	mutant, mutantPlaintext := readAgentNostrFrozenMutant(t, "mutant-scalar-n-plus-3.json")
+	receipt, err := ParseAgentNostrEnrollment([]byte(a.EnrollmentJSON))
+	if err != nil || mutant.ExpectedFirstFailure != "scalar-range-before-reduction" {
+		t.Fatal("A receipt or n+3 frozen vector unavailable")
+	}
+	store := newAgentNostrFakeStore()
+	store.putFixture(t, a)
+	private := &agentNostrFakePrivate{plaintext: [][]byte{mutantPlaintext}}
+	manager := newAgentNostrTestManager(store, private)
+	constructorCalls := 0
+	manager.scalarInRange = func(secret []byte) bool {
+		if bytes.Equal(secret, mutantPlaintext[37:]) {
+			return true // isolate removal of only the frozen n+3 range rejection
+		}
+		return agentNostrScalarInRange(secret)
+	}
+	realPublicFromSecret := manager.publicFromSecret
+	manager.publicFromSecret = func(secret []byte) ([]byte, error) {
+		constructorCalls++
+		return realPublicFromSecret(secret)
+	}
+	lastGuard := ""
+	manager.signGuardObserved = func(guard string) { lastGuard = guard }
+	result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, bytes.Repeat([]byte{0x3a}, 32))
+	if agentNostrFailureCode(err) != AgentNostrCodeCorruptRecord || result.Signature != "" || constructorCalls != 1 || lastGuard != "private-scalar-construction" || store.adds != 0 {
+		t.Fatal("overflow-only removal was not detected at the later scalar-construction guard")
 	}
 }
 
@@ -457,10 +753,258 @@ func TestAgentNostrDescribeSelectsExactPublicItem(t *testing.T) {
 	}
 }
 
+// Claim: a valid retained E_A never falls back when only the exact standalone
+// row is absent, and A works again when restored; limit: legacy/recovery rows
+// are inert fixture neighbors, not real namespace or native-store probes.
+func TestAgentNostrSignExactAbsenceDoesNotFallbackAndPreservesReceipt(t *testing.T) {
+	a := readAgentNostrFixture(t, "fixture-a.json")
+	receipt, err := ParseAgentNostrEnrollment([]byte(a.EnrollmentJSON))
+	if err != nil {
+		t.Fatal("receipt A unavailable")
+	}
+	store := newAgentNostrFakeStore()
+	store.putFixture(t, a)
+	store.otherRows = map[string][]byte{
+		"legacy/agent-fixture/nostr@1":   []byte("legacy-fixture-row"),
+		"recovery/agent-fixture/nostr@1": []byte("recovery-fixture-row"),
+	}
+	neighbors := map[string][]byte{
+		"legacy/agent-fixture/nostr@1":   bytes.Clone(store.otherRows["legacy/agent-fixture/nostr@1"]),
+		"recovery/agent-fixture/nostr@1": bytes.Clone(store.otherRows["recovery/agent-fixture/nostr@1"]),
+	}
+	private := &agentNostrFakePrivate{plaintext: [][]byte{mustAgentNostrFixturePlaintext(t, a), mustAgentNostrFixturePlaintext(t, a)}}
+	manager := newAgentNostrTestManager(store, private)
+	signCalls := 0
+	manager.sign = func(secret, digest []byte, aux [32]byte) ([]byte, error) {
+		signCalls++
+		return signNostrWithAux(secret, digest, aux)
+	}
+	digest := bytes.Repeat([]byte{0x3a}, 32)
+	if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); err != nil || len(result.Signature) != 128 {
+		t.Fatal("present A/E_A was not usable before the absence control")
+	}
+	account := AgentNostrAccount(receipt.Service, receipt.Version)
+	original := store.items[account]
+	delete(store.items, account)
+	privateBefore, signBefore := private.unwraps, signCalls
+	if _, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); agentNostrFailureCode(err) != AgentNostrCodeNotFound {
+		t.Fatal("absent exact standalone generation did not return not_found")
+	}
+	if _, err := manager.Describe(receipt.Service, receipt.Version); agentNostrFailureCode(err) != AgentNostrCodeNotFound {
+		t.Fatal("absent exact describe did not return not_found")
+	}
+	if rows, err := manager.List(); err != nil || len(rows) != 0 {
+		t.Fatal("an empty standalone namespace was not a valid empty list")
+	}
+	if private.unwraps != privateBefore || signCalls != signBefore || store.adds != 0 || private.wraps != 0 ||
+		!bytes.Equal(store.otherRows["legacy/agent-fixture/nostr@1"], neighbors["legacy/agent-fixture/nostr@1"]) ||
+		!bytes.Equal(store.otherRows["recovery/agent-fixture/nostr@1"], neighbors["recovery/agent-fixture/nostr@1"]) {
+		t.Fatal("absence caused private work, mutation, receipt rewriting, or neighboring-row change")
+	}
+	store.items[account] = original
+	if result, err := manager.Sign(receipt.OwnerMXID, receipt, receipt.Service, receipt.Version, digest); err != nil || len(result.Signature) != 128 || private.unwraps != privateBefore+1 || signCalls != signBefore+1 {
+		t.Fatal("restored A/E_A positive control did not sign")
+	}
+}
+
+// Claim: maximum legitimate service, version, identity, receipt, metadata and
+// decoded-blob forms still sign through the full manager path; limit: the fake
+// unwrap does not establish a real Secure Enclave blob or native load.
+func TestAgentNostrLargestLegitimateEndpointAndBlobSign(t *testing.T) {
+	identity := "@" + strings.Repeat("a", 1024-len("@:example.invalid")) + ":example.invalid"
+	service := "agent-" + strings.Repeat("a", 34)
+	fixture := newAgentNostrSignFixture(t, service, 2147483647, identity, 16384)
+	if len(service) != 40 || len(identity) != 1024 || len(fixture.metadata) > 8192 || len(fixture.receiptRaw) > 8192 || len(fixture.envelope) >= 32768 {
+		t.Fatal("largest legitimate semantic sibling exceeded its enclosing raw bound")
+	}
+	t.Logf("largest legitimate fixture sizes: metadata=%d/8192 bytes (service/version fields), receipt=%d/8192 bytes (owner identity 1024), envelope=%d/32768 bytes (decoded blob 16384)",
+		len(fixture.metadata), len(fixture.receiptRaw), len(fixture.envelope))
+	if _, err := ParseAgentNostrRecord(fixture.metadata); err != nil {
+		t.Fatal("largest legitimate metadata sibling was not canonical")
+	}
+	if _, err := ParseAgentNostrEnrollment(fixture.receiptRaw); err != nil {
+		t.Fatal("largest legitimate receipt sibling was not canonical")
+	}
+	envelope, err := ParseAgentNostrEnvelope(fixture.envelope, fixture.record)
+	if err != nil || len(mustDecodeAgentNostrBase64(t, envelope.EnclaveBlob)) != 16384 {
+		t.Fatal("largest legitimate decoded blob sibling was refused")
+	}
+	digest := bytes.Repeat([]byte{0x36}, 32)
+	result, err := fixture.manager.Sign(identity, fixture.receipt, service, 2147483647, digest)
+	public, _ := hex.DecodeString(fixture.record.PublicKey)
+	signature, _ := hex.DecodeString(result.Signature)
+	if err != nil || len(signature) != 64 || VerifyNostr(public, digest, signature) != nil || fixture.private.unwraps != 1 || fixture.private.wraps != 0 {
+		t.Fatal("largest legitimate endpoint/blob full-path signature failed")
+	}
+}
+
+// Claim: metadata and envelope cap+1 refuse before private release/signing,
+// with A usable before and after; limit: exact-cap raw bytes are intentionally
+// malformed component probes, not semantically valid records or envelopes.
+func TestAgentNostrMetadataAndEnvelopeRawSizeBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		sizes []int
+	}{
+		{name: "metadata", field: "metadata", sizes: []int{8192, 8193}},
+		{name: "envelope", field: "envelope", sizes: []int{32768, 32769}},
+	} {
+		for _, size := range tc.sizes {
+			t.Run(fmt.Sprintf("%s-%d", tc.name, size), func(t *testing.T) {
+				fixture := newAgentNostrSignFixture(t, "agent-fixture", 1, "@agent-fixture:example.invalid", -1)
+				fixture.private.plaintext = [][]byte{bytes.Clone(fixture.plaintext), bytes.Clone(fixture.plaintext)}
+				signCalls := 0
+				fixture.manager.sign = func(secret, digest []byte, aux [32]byte) ([]byte, error) {
+					signCalls++
+					return signNostrWithAux(secret, digest, aux)
+				}
+				digest := bytes.Repeat([]byte{0x36}, 32)
+				if result, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); err != nil || len(result.Signature) != 128 {
+					t.Fatal("A did not sign before raw-size boundary probe")
+				}
+				account := AgentNostrAccount(fixture.receipt.Service, fixture.receipt.Version)
+				original := agentNostrFakeItem{metadata: bytes.Clone(fixture.store.items[account].metadata), envelope: bytes.Clone(fixture.store.items[account].envelope)}
+				item := fixture.store.items[account]
+				if tc.field == "metadata" {
+					item.metadata = bytes.Repeat([]byte{'x'}, size)
+				} else {
+					item.envelope = bytes.Repeat([]byte{'x'}, size)
+				}
+				fixture.store.items[account] = item
+				if _, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); agentNostrFailureCode(err) != AgentNostrCodeCorruptRecord {
+					t.Fatal("raw-size boundary did not return corrupt_record")
+				}
+				if fixture.private.unwraps != 1 || signCalls != 1 || fixture.store.adds != 0 {
+					t.Fatal("oversized stored data crossed private release, signing or mutation")
+				}
+				fixture.store.items[account] = original
+				if result, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); err != nil || len(result.Signature) != 128 || fixture.private.unwraps != 2 || signCalls != 2 {
+					t.Fatal("A did not sign after raw-size boundary refusal")
+				}
+			})
+		}
+	}
+}
+
+// Claim: the decoded blob accepts 16,384 bytes and refuses 16,385 before
+// private release, with the valid maximum sibling signing on both sides;
+// limit: accepted bytes are a software fixture, not a real native SE object.
+func TestAgentNostrDecodedBlobSizeBoundary(t *testing.T) {
+	identity := "@agent-fixture:example.invalid"
+	fixture := newAgentNostrSignFixture(t, "agent-fixture", 1, identity, 16384)
+	overLimit := newAgentNostrSignFixture(t, "agent-fixture", 1, identity, 16385)
+	fixture.private.plaintext = [][]byte{bytes.Clone(fixture.plaintext), bytes.Clone(fixture.plaintext)}
+	digest := bytes.Repeat([]byte{0x36}, 32)
+	signCalls := 0
+	fixture.manager.sign = func(secret, digest []byte, aux [32]byte) ([]byte, error) {
+		signCalls++
+		return signNostrWithAux(secret, digest, aux)
+	}
+	if result, err := fixture.manager.Sign(identity, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); err != nil || len(result.Signature) != 128 {
+		t.Fatal("16,384-byte decoded blob positive control failed")
+	}
+	account := AgentNostrAccount(fixture.record.Service, fixture.record.Version)
+	item := fixture.store.items[account]
+	item.envelope = bytes.Clone(overLimit.envelope)
+	fixture.store.items[account] = item
+	if _, err := fixture.manager.Sign(identity, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); agentNostrFailureCode(err) != AgentNostrCodeCorruptRecord {
+		t.Fatal("16,385-byte decoded blob did not return corrupt_record")
+	}
+	if fixture.private.unwraps != 1 || signCalls != 1 || fixture.store.adds != 0 {
+		t.Fatal("decoded blob cap+1 reached private release, signing or mutation")
+	}
+	item = fixture.store.items[account]
+	item.envelope = bytes.Clone(fixture.envelope)
+	fixture.store.items[account] = item
+	if result, err := fixture.manager.Sign(identity, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, digest); err != nil || len(result.Signature) != 128 || fixture.private.unwraps != 2 || signCalls != 2 {
+		t.Fatal("16,384-byte decoded blob positive control failed after refusal")
+	}
+}
+
+// Claim: a complete authenticated bad_request refusal maps to corrupt_record
+// without plaintext or signing, distinct from ambiguous dispatched UNKNOWN;
+// limit: the test injects the already-authenticated typed status at the boundary.
+func TestAgentNostrAuthenticatedBadRequestIsCorruptRecord(t *testing.T) {
+	fixture := newAgentNostrSignFixture(t, "agent-fixture", 1, "@agent-fixture:example.invalid", -1)
+	fixture.private.unwrapErr = &AgentNostrPrivateError{Code: "bad_request", Dispatched: true}
+	signCalls := 0
+	fixture.manager.sign = func(secret, digest []byte, aux [32]byte) ([]byte, error) {
+		signCalls++
+		return signNostrWithAux(secret, digest, aux)
+	}
+	result, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, bytes.Repeat([]byte{0x36}, 32))
+	if agentNostrFailureCode(err) != AgentNostrCodeCorruptRecord || result.Signature != "" || fixture.private.unwraps != 1 || signCalls != 0 || fixture.store.adds != 0 {
+		t.Fatal("authenticated bad_request was confused with UNKNOWN or released plaintext/signature")
+	}
+}
+
+// Claim: minimum and maximum permitted service/version endpoints carry matching
+// canonical metadata and enrollment pins and both reach real Sign; limit: actor
+// authorization and hardware key origin remain external/native evidence.
+func TestAgentNostrServiceAndVersionFullPathEndpoints(t *testing.T) {
+	maxIdentity := "@" + strings.Repeat("a", 1024-len("@:example.invalid")) + ":example.invalid"
+	for _, tc := range []struct {
+		service  string
+		version  int
+		identity string
+	}{
+		{service: "agent-a", version: 1, identity: "@agent-fixture:example.invalid"},
+		{service: "agent-" + strings.Repeat("a", 34), version: 2147483647, identity: maxIdentity},
+	} {
+		t.Run(fmt.Sprintf("service-%d-version-%d", len(tc.service), tc.version), func(t *testing.T) {
+			fixture := newAgentNostrSignFixture(t, tc.service, tc.version, tc.identity, -1)
+			if len(fixture.metadata) > 8192 || len(fixture.receiptRaw) > 8192 || fixture.record.Service != tc.service || fixture.record.Version != tc.version ||
+				fixture.receipt.Service != tc.service || fixture.receipt.Version != tc.version || fixture.receipt.RecordFingerprint != AgentNostrPublicResult(fixture.record, fixture.metadata).RecordFingerprint {
+				t.Fatal("endpoint fixture metadata and receipt pins do not match")
+			}
+			digest := bytes.Repeat([]byte{0x36}, 32)
+			result, err := fixture.manager.Sign(tc.identity, fixture.receipt, tc.service, tc.version, digest)
+			public, _ := hex.DecodeString(fixture.record.PublicKey)
+			signature, _ := hex.DecodeString(result.Signature)
+			if err != nil || VerifyNostr(public, digest, signature) != nil || fixture.private.unwraps != 1 {
+				t.Fatal("valid service/version endpoint did not produce a verified signature")
+			}
+		})
+	}
+}
+
+// Claim: lower- and uppercase hex encodings of a real a..f digest produce the
+// same correctly verified signature under equal aux input; limit: CLI parsing
+// is separately witnessed at its command boundary.
+func TestAgentNostrDigestHexCaseEquivalenceSignsSameMessage(t *testing.T) {
+	fixture := newAgentNostrSignFixture(t, "agent-fixture", 1, "@agent-fixture:example.invalid", -1)
+	fixture.private.plaintext = [][]byte{bytes.Clone(fixture.plaintext), bytes.Clone(fixture.plaintext)}
+	digestText := strings.Repeat("abcdef0123456789", 4)
+	lower, err := hex.DecodeString(digestText)
+	if err != nil {
+		t.Fatal("lowercase digest fixture invalid")
+	}
+	upper, err := hex.DecodeString(strings.ToUpper(digestText))
+	if err != nil || !bytes.Equal(lower, upper) || !strings.ContainsAny(digestText, "abcdef") {
+		t.Fatal("uppercase/lowercase digest compatibility control is not discriminating")
+	}
+	fixture.manager.random = bytes.NewReader(bytes.Repeat([]byte{0x5a}, 64))
+	first, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, lower)
+	if err != nil {
+		t.Fatal("lowercase digest signature failed")
+	}
+	second, err := fixture.manager.Sign(fixture.receipt.OwnerMXID, fixture.receipt, fixture.receipt.Service, fixture.receipt.Version, upper)
+	if err != nil || first.Signature != second.Signature {
+		t.Fatal("uppercase digest did not preserve equivalent deterministic signing behavior")
+	}
+	public, _ := hex.DecodeString(fixture.record.PublicKey)
+	signature, _ := hex.DecodeString(first.Signature)
+	if VerifyNostr(public, lower, signature) != nil || fixture.private.unwraps != 2 {
+		t.Fatal("equivalent digest signature did not verify through two full Sign calls")
+	}
+}
+
 type agentNostrFakeItem struct{ metadata, envelope []byte }
 
 type agentNostrFakeStore struct {
 	items       map[string]agentNostrFakeItem
+	otherRows   map[string][]byte
 	listCalls   int
 	selects     int
 	loads       int
@@ -469,6 +1013,7 @@ type agentNostrFakeStore struct {
 	addAttempt  bool
 	addErr      error
 	readbackErr error
+	onSelect    func(*agentNostrFakeStore, string)
 	onAdd       func(*agentNostrFakeStore, string)
 }
 
@@ -503,7 +1048,11 @@ func (s *agentNostrFakeStore) SelectAgentNostr(account string) (AgentNostrSelect
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return &agentNostrFakeSelection{store: s, account: account, item: item}, nil
+	selection := &agentNostrFakeSelection{store: s, account: account, item: item}
+	if s.onSelect != nil {
+		s.onSelect(s, account)
+	}
+	return selection, nil
 }
 
 func (s *agentNostrFakeStore) AddAgentNostr(account string, metadata, envelope []byte) (bool, error) {
@@ -540,13 +1089,14 @@ func (s *agentNostrFakeSelection) LoadEnvelope() ([]byte, []byte, error) {
 func (*agentNostrFakeSelection) Close() {}
 
 type agentNostrFakePrivate struct {
-	wrapScalar byte
-	plaintext  [][]byte
-	wraps      int
-	unwraps    int
-	signs      int
-	wrapErr    error
-	unwrapErr  error
+	wrapScalar   byte
+	plaintext    [][]byte
+	lastEnvelope AgentNostrEnvelope
+	wraps        int
+	unwraps      int
+	signs        int
+	wrapErr      error
+	unwrapErr    error
 }
 
 func (p *agentNostrFakePrivate) CreateWrap() (AgentNostrWrap, error) {
@@ -566,8 +1116,9 @@ func (p *agentNostrFakePrivate) CreateWrap() (AgentNostrWrap, error) {
 	return AgentNostrWrap{Blob: []byte("synthetic-public-blob"), Point: point, Fingerprint: sha256String(point), Policy: "none", SilentRefused: false}, nil
 }
 
-func (p *agentNostrFakePrivate) UnwrapAgentNostr(_ AgentNostrEnvelope) ([]byte, error) {
+func (p *agentNostrFakePrivate) UnwrapAgentNostr(envelope AgentNostrEnvelope) ([]byte, error) {
 	p.unwraps++
+	p.lastEnvelope = envelope
 	if p.unwrapErr != nil {
 		return nil, p.unwrapErr
 	}

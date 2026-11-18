@@ -8,6 +8,48 @@ import (
 	"io"
 )
 
+const agentNostrMaxPrivateRequest = 32768
+
+func agentNostrPrivateRequestWithinLimit(request []byte) bool {
+	return len(request) > 0 && len(request) <= agentNostrMaxPrivateRequest
+}
+
+func agentNostrCreateWrapRequest() ([]byte, error) {
+	return json.Marshal(struct {
+		Op      string `json:"op"`
+		Purpose string `json:"purpose"`
+	}{"create-wrap", "nostr"})
+}
+
+func agentNostrUnwrapRequest(envelope AgentNostrEnvelope) ([]byte, error) {
+	blob, err := decodeAgentNostrBase64(envelope.EnclaveBlob)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(blob)
+	point, err := decodeAgentNostrBase64(envelope.Point)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(point)
+	ciphertext, err := decodeAgentNostrBase64(envelope.Ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(ciphertext)
+	request, err := json.Marshal(struct {
+		Op         string `json:"op"`
+		Blob       []byte `json:"blob"`
+		Point      []byte `json:"point"`
+		Ciphertext []byte `json:"ciphertext"`
+	}{"unwrap-agent-nostr", blob, point, ciphertext})
+	if err != nil || !agentNostrPrivateRequestWithinLimit(request) {
+		clear(request)
+		return nil, errors.New("agent Nostr private request exceeds its bound")
+	}
+	return request, nil
+}
+
 func parseAgentNostrWrapResponse(response []byte) (AgentNostrWrap, error) {
 	var result struct {
 		Blob          []byte `json:"blob"`
@@ -84,13 +126,14 @@ func receiveAgentNostrResult(reader io.Reader, closeEndpoint func() error, maxSu
 	}
 	exitCode, waitErr := wait()
 	waited = true
+	deadlineElapsed := deadlineExpired != nil && deadlineExpired()
 	if cancel != nil {
 		cancel()
 	}
 	if closeEndpoint != nil {
 		_ = closeEndpoint()
 	}
-	if (deadlineExpired != nil && deadlineExpired()) || exitCode != int(status) {
+	if deadlineElapsed || exitCode != int(status) {
 		clear(payload)
 		return nil, &AgentNostrPrivateError{Code: "unknown", Dispatched: true}
 	}

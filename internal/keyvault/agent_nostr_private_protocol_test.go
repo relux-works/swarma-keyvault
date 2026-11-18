@@ -2,12 +2,15 @@ package keyvault
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Claim: create-wrap accepts the paired helper's sorted, complete wrap result
@@ -68,6 +71,65 @@ func TestAgentNostrCanonicalWrapResponse(t *testing.T) {
 	}
 }
 
+// Claim: actual create-wrap and maximum valid unwrap requests stay within the
+// request payload limit, while empty and cap+1 raw payloads refuse; limit: exact
+// raw cap bytes are an isolated framing component, not a dispatchable request.
+func TestAgentNostrPrivateRequestPayloadBounds(t *testing.T) {
+	create, err := agentNostrCreateWrapRequest()
+	if err != nil || string(create) != `{"op":"create-wrap","purpose":"nostr"}` || !agentNostrPrivateRequestWithinLimit(create) {
+		t.Fatal("contract create-wrap request was not encoded in the admitted payload form")
+	}
+	point, err := testP256Point(1)
+	if err != nil {
+		t.Fatal("fixture point unavailable")
+	}
+	envelope := AgentNostrEnvelope{
+		EnclaveBlob: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 16384)),
+		Point:       base64.StdEncoding.EncodeToString(point),
+		Ciphertext:  base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, AgentNostrCiphertextSize)),
+	}
+	request, err := agentNostrUnwrapRequest(envelope)
+	if err != nil || !agentNostrPrivateRequestWithinLimit(request) || len(request) > 32768 {
+		t.Fatal("maximum valid unwrap request exceeded the bounded payload form")
+	}
+	var parsed struct {
+		Op         string `json:"op"`
+		Blob       []byte `json:"blob"`
+		Point      []byte `json:"point"`
+		Ciphertext []byte `json:"ciphertext"`
+	}
+	if json.Unmarshal(request, &parsed) != nil || parsed.Op != "unwrap-agent-nostr" || len(parsed.Blob) != 16384 || !bytes.Equal(parsed.Point, point) || len(parsed.Ciphertext) != AgentNostrCiphertextSize {
+		t.Fatal("maximum valid unwrap request lost its operation or decoded components")
+	}
+	if !agentNostrPrivateRequestWithinLimit(bytes.Repeat([]byte{'x'}, 32768)) ||
+		agentNostrPrivateRequestWithinLimit(bytes.Repeat([]byte{'x'}, 32769)) || agentNostrPrivateRequestWithinLimit(nil) {
+		t.Fatal("private request component accepted zero or cap+1 or rejected the exact raw cap")
+	}
+}
+
+// Claim: response payload lengths at 69 and 24,576 pass the op bound, while
+// 70 and 24,577 become dispatched UNKNOWN; limit: exact raw wrap payload bytes
+// are frame-boundary controls, and canonical wrap content is tested separately.
+func TestAgentNostrPrivateResponseOperationBounds(t *testing.T) {
+	for _, max := range []int{69, 24576} {
+		for _, size := range []int{max, max + 1} {
+			payload := bytes.Repeat([]byte{'x'}, size)
+			got, err := receiveAgentNostrResult(bytes.NewReader(agentNostrTestResponse(0, payload)), nil, max,
+				func() (int, error) { return 0, nil }, func() {}, func() bool { return false })
+			if size == max {
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("exact %d-byte operation response was rejected", max)
+				}
+				continue
+			}
+			var privateErr *AgentNostrPrivateError
+			if got != nil || !errors.As(err, &privateErr) || privateErr.Code != "unknown" || !privateErr.Dispatched {
+				t.Fatalf("%d-byte operation response did not become dispatched UNKNOWN", size)
+			}
+		}
+	}
+}
+
 type agentNostrNoEOFReader struct{ *bytes.Reader }
 
 func (r agentNostrNoEOFReader) Read(p []byte) (int, error) {
@@ -103,6 +165,80 @@ func TestAgentNostrPrivateProtocolExactStatuses(t *testing.T) {
 		func() (int, error) { return 0, nil }, func() {}, func() bool { return false })
 	if err != nil || string(payload) != "public-payload" {
 		t.Fatal("complete status-0 response did not return its payload")
+	}
+}
+
+// Claim: a shared caller context that is cancelled only by helper cleanup does
+// not erase a complete success or any authenticated refusal; limit: this does
+// not prove native child identity, socket admission, or Secure Enclave behavior.
+func TestAgentNostrPrivateProtocolSharedContextCompletion(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status byte
+		code   string
+	}{
+		{name: "success", status: 0},
+		{name: "bad-request", status: 1, code: "bad_request"},
+		{name: "invalid-blob", status: 1, code: "invalid_blob"},
+		{name: "policy-refused", status: 1, code: "policy_refused"},
+		{name: "presence-required", status: 1, code: "presence_required"},
+		{name: "auth-refused", status: 1, code: "auth_refused"},
+		{name: "enclave-unavailable", status: 1, code: "enclave_unavailable"},
+		{name: "parent-not-admitted", status: 1, code: "parent_not_admitted"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			payload := []byte("public-payload")
+			if tc.status == 1 {
+				payload = []byte(tc.code)
+			}
+			waitErr := error(nil)
+			if tc.status == 1 {
+				waitErr = errors.New("exit status 1")
+			}
+			got, err := receiveAgentNostrResult(bytes.NewReader(agentNostrTestResponse(tc.status, payload)), nil, 128,
+				func() (int, error) { return int(tc.status), waitErr }, cancel, func() bool { return ctx.Err() != nil })
+			if tc.status == 0 {
+				if err != nil || !bytes.Equal(got, payload) || ctx.Err() != context.Canceled {
+					t.Fatal("helper cleanup cancellation changed a complete success")
+				}
+				return
+			}
+			var privateErr *AgentNostrPrivateError
+			if got != nil || !errors.As(err, &privateErr) || privateErr.Code != tc.code || !privateErr.Dispatched || ctx.Err() != context.Canceled {
+				t.Fatal("helper cleanup cancellation changed a complete authenticated refusal")
+			}
+		})
+	}
+}
+
+// Claim: genuine caller cancellation and deadline expiry remain UNKNOWN even
+// when the response frame is complete; limit: this does not time a native child.
+func TestAgentNostrPrivateProtocolPriorCallerCancellationAndExpiry(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+	}{
+		{name: "caller-cancelled", ctx: func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx, cancel
+		}},
+		{name: "deadline-expired", ctx: func() (context.Context, context.CancelFunc) {
+			return context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			payload, err := receiveAgentNostrResult(bytes.NewReader(agentNostrTestResponse(0, []byte("public-payload"))), nil, 128,
+				func() (int, error) { return 0, nil }, cancel, func() bool { return ctx.Err() != nil })
+			var privateErr *AgentNostrPrivateError
+			if payload != nil || !errors.As(err, &privateErr) || privateErr.Code != "unknown" || !privateErr.Dispatched {
+				t.Fatal("completed response overrode genuine cancellation or expiry")
+			}
+		})
 	}
 }
 
