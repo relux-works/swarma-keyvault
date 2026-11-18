@@ -70,7 +70,7 @@ func Environment(input string) []string {
 			env = append(env, key+"="+value)
 		}
 	}
-	env = append(env, "GOOS=darwin", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=1", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "MACOSX_DEPLOYMENT_TARGET="+macOSDeploymentTarget)
+	env = append(env, "GOOS=darwin", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=1", "CGO_CFLAGS=-mmacosx-version-min="+macOSDeploymentTarget, "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "MACOSX_DEPLOYMENT_TARGET="+macOSDeploymentTarget)
 	if input != "" {
 		env = append(env, InputVariable+"="+input)
 	}

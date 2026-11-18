@@ -418,16 +418,21 @@ func TestPreflightAndCopyRefusalsDoNotInvokeOrOverwrite(t *testing.T) {
 // Parent environment values are never dumped. Positive required variables and
 // poisoned selector/flag/target controls test the actual allowlist, not two validators.
 func TestCommandEnvironmentIsAllowlisted(t *testing.T) {
+	t.Setenv("CGO_CFLAGS", "PUBLIC poisoned flags")
 	t.Setenv("CGO_LDFLAGS", "PUBLIC poisoned flags")
 	t.Setenv("GOFLAGS", "PUBLIC flags")
 	t.Setenv("MACOSX_DEPLOYMENT_TARGET", "26.0")
 	t.Setenv(InputVariable, ".temp/other")
 	env := Environment(".temp/native-archive-" + strings.Repeat("a", 32))
 	seen := map[string]string{}
+	var cgoTargetEntries []string
 	var targetEntries []string
 	for _, entry := range env {
 		k, v, _ := strings.Cut(entry, "=")
 		seen[k] = v
+		if k == "CGO_CFLAGS" {
+			cgoTargetEntries = append(cgoTargetEntries, entry)
+		}
 		if k == "MACOSX_DEPLOYMENT_TARGET" {
 			targetEntries = append(targetEntries, entry)
 		}
@@ -443,6 +448,9 @@ func TestCommandEnvironmentIsAllowlisted(t *testing.T) {
 	}
 	if !reflect.DeepEqual(targetEntries, []string{"MACOSX_DEPLOYMENT_TARGET=14.0"}) {
 		t.Fatalf("deployment target is not pinned: %q", targetEntries)
+	}
+	if !reflect.DeepEqual(cgoTargetEntries, []string{"CGO_CFLAGS=-mmacosx-version-min=14.0"}) {
+		t.Fatalf("cgo deployment target is not pinned: %q", cgoTargetEntries)
 	}
 }
 
