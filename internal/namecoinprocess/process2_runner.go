@@ -385,14 +385,16 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	command.Stderr = stderr.write.file
 	command.ExtraFiles = []*os.File{outputFile, status.write.file, custody.read.file}
 	startErr := command.Start()
-	reportSetupError("command.Start", startErr)
-	if startErr != nil && command.Process == nil {
-		closeProcess2FDs(allFDs...)
-		for i := 0; i < 3; i++ {
-			<-readerChannel
+	if startErr != nil {
+		reportSetupError("command.Start", startErr)
+		if command.Process == nil {
+			closeProcess2FDs(allFDs...)
+			for i := 0; i < 3; i++ {
+				<-readerChannel
+			}
+			evidence.outputCloseOK = output.Close() == nil
+			return unknown, evidence
 		}
-		evidence.outputCloseOK = output.Close() == nil
-		return unknown, evidence
 	}
 	if command.Process == nil {
 		closeProcess2FDs(allFDs...)

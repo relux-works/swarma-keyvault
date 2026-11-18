@@ -190,6 +190,32 @@ func TestExclusiveOutputAndExactReadback(t *testing.T) {
 	}
 }
 
+func TestOutputRefusalKeepsSyscallCauseBehindSentinel(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "existing-result.json")
+	sentinel := []byte("existing output remains untouched")
+	if err := os.WriteFile(path, sentinel, 0o600); err != nil {
+		t.Fatal("fixture output creation failed")
+	}
+	if _, err := CreateOutput(path); err == nil {
+		t.Fatal("existing output was admitted")
+	} else {
+		if !errors.Is(err, ErrUnsafe) {
+			t.Fatal("existing output did not retain the refusal sentinel")
+		}
+		if got, want := err.Error(), "namecoin_file_unavailable"; got != want || got != ErrUnsafe.Error() {
+			t.Fatal("refusal text changed")
+		}
+		var errno unix.Errno
+		if !errors.As(err, &errno) || errno != unix.EEXIST || !errors.Is(err, unix.EEXIST) {
+			t.Fatal("refusal did not preserve the underlying EEXIST cause")
+		}
+	}
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, sentinel) {
+		t.Fatal("existing output was modified")
+	}
+}
+
 // Directory replacement, final-path substitution and new hardlinks cannot
 // promote bytes through a stale held descriptor; a nonreplaced positive result
 // is exercised above. Failure preserves files for explicit reconciliation.

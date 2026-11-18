@@ -19,6 +19,22 @@ import (
 
 var ErrUnsafe = errors.New("namecoin_file_unavailable")
 
+// refusalWithCause keeps the refusal text stable while retaining a syscall cause.
+type refusalWithCause struct {
+	cause error
+}
+
+func (e refusalWithCause) Error() string        { return ErrUnsafe.Error() }
+func (e refusalWithCause) Unwrap() error        { return e.cause }
+func (e refusalWithCause) Is(target error) bool { return target == ErrUnsafe }
+
+func unsafeWithCause(cause error) error {
+	if cause == nil {
+		return ErrUnsafe
+	}
+	return refusalWithCause{cause: cause}
+}
+
 type directory struct {
 	parent, fd int
 	name       string
@@ -46,7 +62,7 @@ func walkParent(path string) (*heldPath, error) {
 	}()
 	root, err := unix.Open("/", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, ErrUnsafe
+		return nil, unsafeWithCause(err)
 	}
 	h.dirs = append(h.dirs, directory{parent: -1, fd: root})
 	if !safeDirectory(root, h.uid) {
@@ -59,7 +75,7 @@ func walkParent(path string) (*heldPath, error) {
 		}
 		fd, err := unix.Openat(current, component, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
-			return nil, ErrUnsafe
+			return nil, unsafeWithCause(err)
 		}
 		h.dirs = append(h.dirs, directory{parent: current, fd: fd, name: component})
 		if !safeDirectory(fd, h.uid) {
@@ -171,7 +187,7 @@ func CreateOutput(path string) (*Output, error) {
 	fd, err := unix.Openat(h.parent(), h.name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		h.close()
-		return nil, ErrUnsafe
+		return nil, unsafeWithCause(err)
 	}
 	f := os.NewFile(uintptr(fd), "namecoin public result")
 	stat, ok := h.check(f)
@@ -180,10 +196,10 @@ func CreateOutput(path string) (*Output, error) {
 		h.close()
 		return nil, ErrUnsafe
 	}
-	if unix.Fsync(h.parent()) != nil {
+	if err := unix.Fsync(h.parent()); err != nil {
 		f.Close()
 		h.close()
-		return nil, ErrUnsafe
+		return nil, unsafeWithCause(err)
 	}
 	return &Output{path: h, file: f}, nil
 }

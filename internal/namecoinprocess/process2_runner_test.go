@@ -6,9 +6,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -99,16 +105,104 @@ func runProcess2WithSetupFailureEvidence(ctx context.Context, command *exec.Cmd,
 func assertNoProcess2SetupFailure(t *testing.T, failure process2SetupFailure) {
 	t.Helper()
 	if failure.err != nil {
-		t.Fatalf("unexpected Process2 setup failure at %s: %v", failure.stage, failure.err)
+		t.Fatalf("unexpected Process2 setup failure at %s: %s", failure.stage, process2SetupErrorText(failure.err))
 	}
 }
 
 func requireProcess2SetupFailure(t *testing.T, failure process2SetupFailure, wantStage string) error {
 	t.Helper()
 	if failure.stage != wantStage || failure.err == nil {
-		t.Fatalf("Process2 setup failure = stage %q error %v; want stage %q and an error", failure.stage, failure.err, wantStage)
+		t.Fatalf("Process2 setup failure = stage %q error %q; want stage %q and an error", failure.stage, process2SetupErrorText(failure.err), wantStage)
 	}
 	return failure.err
+}
+
+// process2SetupErrorText exposes the OS cause to test logs without a PathError path.
+func process2SetupErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return process2SetupErrorText(pathErr.Err)
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return process2SetupErrorText(execErr.Err)
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return process2SetupErrorText(cause)
+	}
+	return err.Error()
+}
+
+// isProcess2TestHookField names only the private fields whose values must stay test-installed.
+func isProcess2TestHookField(name string) bool {
+	switch name {
+	case "testHooks", "onSetupError", "createPipe":
+		return true
+	default:
+		return false
+	}
+}
+
+func TestProcess2TestHooksAreAssignedOnlyInTestFiles(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal("read Process2 source directory")
+	}
+	fset := token.NewFileSet()
+	var violations []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse non-test Go source %q", name)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					selector, ok := lhs.(*ast.SelectorExpr)
+					if ok && isProcess2TestHookField(selector.Sel.Name) {
+						violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(selector.Pos()).Line))
+					}
+				}
+			case *ast.KeyValueExpr:
+				if field, ok := node.Key.(*ast.Ident); ok && isProcess2TestHookField(field.Name) {
+					violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(field.Pos()).Line))
+				}
+			case *ast.CompositeLit:
+				typ, ok := node.Type.(*ast.Ident)
+				if !ok || (typ.Name != "Process2RunOptions" && typ.Name != "process2RunTestHooks") {
+					break
+				}
+				for _, element := range node.Elts {
+					if _, keyed := element.(*ast.KeyValueExpr); !keyed {
+						violations = append(violations, fmt.Sprintf("%s:%d", name, fset.Position(node.Pos()).Line))
+						break
+					}
+				}
+			}
+			return true
+		})
+	}
+	if len(violations) != 0 {
+		t.Fatalf("non-test source assigns Process2 test hook or pipe factory: %s", strings.Join(violations, ", "))
+	}
+}
+
+func TestProcess2DiagnosticTextRedactsPathErrors(t *testing.T) {
+	pathErr := &os.PathError{Op: "fork/exec", Path: "/private/test/missing-helper", Err: syscall.ENOENT}
+	for _, err := range []error{pathErr, &exec.Error{Name: "/private/test/missing-helper", Err: pathErr}} {
+		got := process2SetupErrorText(err)
+		if got != syscall.ENOENT.Error() || strings.Contains(got, "/private/test") {
+			t.Fatal("diagnostic text did not retain only the path-free OS cause")
+		}
+	}
 }
 
 func assertInvalidProcess2Request(t *testing.T, outcome Outcome) {
@@ -334,9 +428,11 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
 		startErr := requireProcess2SetupFailure(t, setupFailure, "command.Start")
-		if !errors.Is(startErr, os.ErrNotExist) || !bytes.Contains([]byte(startErr.Error()), []byte(command.Path)) {
-			t.Fatalf("command.Start error = %q; want not-exist error naming %q", startErr, command.Path)
+		var pathErr *os.PathError
+		if !errors.Is(startErr, os.ErrNotExist) || !errors.As(startErr, &pathErr) || pathErr.Path != command.Path {
+			t.Fatal("command.Start did not retain the missing-helper not-exist cause")
 		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(startErr))
 		if command.Process != nil {
 			t.Fatal("failed generic spawn unexpectedly started a child")
 		}
@@ -361,19 +457,31 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		sentinel := []byte("existing output must remain untouched")
 		if err := os.WriteFile(outputPath, sentinel, 0o600); err != nil {
-			t.Fatal(err)
+			t.Fatal("could not create existing-output fixture")
 		}
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
 		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
-		if err := requireProcess2SetupFailure(t, setupFailure, "output-create"); !errors.Is(err, namecoinfiles.ErrUnsafe) {
-			t.Fatalf("output-create error = %q; want %q", err, namecoinfiles.ErrUnsafe)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-create")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != "namecoin_file_unavailable" ||
+			!errors.As(outputErr, &errno) || errno != syscall.EEXIST {
+			t.Fatal("existing-output refusal did not preserve its sentinel and EEXIST cause")
 		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
 		if command.Process != nil {
 			t.Fatal("existing path was replaced after helper start")
 		}
 		if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, sentinel) {
-			t.Fatal("existing output was truncated or replaced", err)
+			t.Fatal("existing output was truncated or replaced")
+		}
+
+		publicCommand, publicOptions, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		publicOutcome := RunProcess2(context.Background(), publicCommand, publicOptions)
+		assertUnknown(t, publicOutcome)
+		if !bytes.Equal(publicOutcome.Line(), unknownProcess2Outcome().Line()) ||
+			bytes.Contains(publicOutcome.Line(), []byte(outputPath)) || bytes.Contains(publicOutcome.Line(), []byte("EEXIST")) {
+			t.Fatal("public Process2 outcome exposed the internal output-creation cause")
 		}
 	})
 
@@ -396,6 +504,7 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			if err.Error() != wantErr.Error() {
 				t.Fatalf("pipe setup error = %q; want %q", err, wantErr)
 			}
+			t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(err))
 			if command.Process != nil || evidence.frameBytes != 0 {
 				t.Fatal("pipe setup failure started a child or wrote custody bytes")
 			}
