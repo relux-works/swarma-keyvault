@@ -97,7 +97,8 @@ struct RootGrantsTrustContractV2 {
             root = try NativeArchiveJSON.decode(owned, maximum: Self.maximumBytes, canonical: true, escapeHTML: false,
                                                maximumArrayMembers: Self.maximumBytes,
                                                maximumObjectMembers: Self.maximumBytes, maximumDepth: owned.count,
-                                               allowDuplicateObjectKeys: true, allowBooleanLiterals: true)
+                                               allowDuplicateObjectKeys: true, allowBooleanLiterals: true,
+                                               retainInvalidNumberTokens: true)
         } catch {
             throw fail(.contractEncoding)
         }

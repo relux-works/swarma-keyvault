@@ -156,7 +156,7 @@ indirect enum NativeArchiveJSON {
     static func decode(_ raw: Data, maximum: Int, canonical: Bool, escapeHTML: Bool = true,
                        maximumArrayMembers: Int = 2048, maximumObjectMembers: Int = 64,
                        maximumDepth: Int = 16, allowDuplicateObjectKeys: Bool = false,
-                       allowBooleanLiterals: Bool = false) throws -> Self {
+                       allowBooleanLiterals: Bool = false, retainInvalidNumberTokens: Bool = false) throws -> Self {
         guard !raw.isEmpty, raw.count <= maximum else { throw NativeNamecoinArchiveFailure("display_refused") }
         guard maximumArrayMembers >= 0, maximumObjectMembers >= 0, maximumDepth > 0 else {
             throw NativeNamecoinArchiveFailure("display_refused")
@@ -164,7 +164,8 @@ indirect enum NativeArchiveJSON {
         var parser = NativeArchiveJSONReader(bytes: Array(raw), maximumArrayMembers: maximumArrayMembers,
                                              maximumObjectMembers: maximumObjectMembers, maximumDepth: maximumDepth,
                                              allowDuplicateObjectKeys: allowDuplicateObjectKeys,
-                                             allowBooleanLiterals: allowBooleanLiterals)
+                                             allowBooleanLiterals: allowBooleanLiterals,
+                                             retainInvalidNumberTokens: retainInvalidNumberTokens)
         let value = try parser.value(depth: 0)
         parser.space()
         guard parser.offset == parser.bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
@@ -180,6 +181,7 @@ private struct NativeArchiveJSONReader {
     let maximumDepth: Int
     let allowDuplicateObjectKeys: Bool
     let allowBooleanLiterals: Bool
+    let retainInvalidNumberTokens: Bool
     var offset = 0
     mutating func space() { while offset < bytes.count && [UInt8(9), 10, 13, 32].contains(bytes[offset]) { offset += 1 } }
     mutating func take(_ byte: UInt8) throws {
@@ -293,6 +295,7 @@ private struct NativeArchiveJSONReader {
         if unsignedInteger, let value = UInt64(token), String(value) == token {
             return .number(value)
         }
+        guard retainInvalidNumberTokens else { throw NativeNamecoinArchiveFailure("display_refused") }
         return .invalidNumber(token)
     }
 }

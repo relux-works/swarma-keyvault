@@ -80,7 +80,8 @@ struct RootGrantsTrustContractCountersignRequest {
         do {
             outer = try NativeArchiveJSON.decode(owned, maximum: Self.maximumBytes, canonical: true,
                                                 maximumArrayMembers: Self.maximumBytes,
-                                                maximumObjectMembers: Self.maximumBytes, maximumDepth: 64)
+                                                maximumObjectMembers: Self.maximumBytes, maximumDepth: 64,
+                                                retainInvalidNumberTokens: true)
         }
         catch { throw RootGrantsReviewError(status: .privateProtocolError) }
         let outerFields = try Self.fields(outer, ["schema", "operation", "review", "envelope", "pair_metadata"], .privateProtocolError)
