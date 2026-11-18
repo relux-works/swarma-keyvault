@@ -100,6 +100,13 @@ func rootGrantsTrustContractCountersignParseHelperRequest(raw []byte) (rootGrant
 		return fail("private_protocol_error", "preflight")
 	}
 	clear(canonical)
+	// The outer closed wire admits only review/envelope objects and a string
+	// pair-metadata field before either public literal is interpreted. Review
+	// member admission follows the outer schema and operation checks.
+	if !rootGrantsTrustCountersignRawJSONObject(wire.Review) ||
+		!rootGrantsTrustCountersignRawJSONObject(wire.Envelope) {
+		return fail("private_protocol_error", "preflight")
+	}
 	if wire.Schema != rootGrantsTrustContractCountersignHelperSchema {
 		return fail("unsupported_version", "preflight")
 	}
@@ -122,6 +129,16 @@ func rootGrantsTrustContractCountersignParseHelperRequest(raw []byte) (rootGrant
 		return fail("private_protocol_error", "review")
 	}
 	clear(canonicalCarrier)
+	// Review primitive types and count widths precede review operation/profile
+	// literals, so a negative count cannot be hidden by an unsupported operation.
+	if review.ContractBytes < 0 || review.ScopeTextBytes < 0 {
+		return fail("private_protocol_error", "review")
+	}
+	if !rootGrantsTrustCountersignRawJSONObject(review.IssuanceContextJSON) ||
+		!rootGrantsTrustCountersignRawJSONObject(review.AuthorityJSON) ||
+		!rootGrantsTrustCountersignRawJSONObject(review.RecordJSON) {
+		return fail("private_protocol_error", "review")
+	}
 	if review.Operation != rootGrantsTrustContractCountersignOperation {
 		return fail("unsupported_operation", "review")
 	}
@@ -138,6 +155,9 @@ func rootGrantsTrustContractCountersignParseHelperRequest(raw []byte) (rootGrant
 	}
 	var authorityShape rootGrantsTrustAuthorityV2
 	if DecodeSingleJSON(review.AuthorityJSON, &authorityShape) != nil {
+		return fail("private_protocol_error", "review")
+	}
+	if authorityShape.Operations == nil || authorityShape.Scope == nil {
 		return fail("private_protocol_error", "review")
 	}
 	canonicalAuthority, err := json.Marshal(authorityShape)
@@ -169,20 +189,26 @@ func rootGrantsTrustContractCountersignParseHelperRequest(raw []byte) (rootGrant
 	if DecodeSingleJSON(review.RecordJSON, &record) != nil {
 		return fail("private_protocol_error", "review")
 	}
+	if record.WrappingPoint == nil {
+		return fail("private_protocol_error", "review")
+	}
 	canonicalRecord, err := json.Marshal(record)
 	if err != nil || !bytes.Equal(canonicalRecord, review.RecordJSON) {
 		clear(canonicalRecord)
 		return fail("private_protocol_error", "review")
 	}
 	clear(canonicalRecord)
+	// All signed carrier fields are nonnegative signed-int64 values on the
+	// supported 64-bit targets. uint32 vout overflow and noncanonical Base64
+	// have already failed typed decode/canonical re-encoding above.
+	if !rootGrantsTrustContractCountersignCarrierNumbersWithinBounds(issuance, authorityShape, record) {
+		return fail("private_protocol_error", "review")
+	}
 	if !rootGrantsTrustContractCountersignJSONSizesWithinBound(rootGrantsTrustContractCountersignJSONSizes{
 		issuance: len(review.IssuanceContextJSON), authority: len(review.AuthorityJSON), record: len(review.RecordJSON),
 		review: len(wire.Review), payload: len(raw),
 	}) {
 		return fail("limit_exceeded", "preflight")
-	}
-	if review.ContractBytes < 0 || review.ScopeTextBytes < 0 {
-		return fail("private_protocol_error", "review")
 	}
 	if !lowerHex(review.ContractSHA256, 32) || !lowerHex(review.AuthoritySHA256, 32) || !lowerHex(review.RecordSHA256, 32) {
 		return fail("private_protocol_error", "review")
@@ -282,6 +308,25 @@ func rootGrantsTrustContractCountersignParseHelperRequest(raw []byte) (rootGrant
 		ScopeTextAvailable: binding.ScopeTextState == RootGrantsTrustScopeTextPresent,
 		Envelope:           envelope, PairMetadata: pairMetadata,
 	}, nil
+}
+
+func rootGrantsTrustCountersignRawJSONObject(raw []byte) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
+func rootGrantsTrustContractCountersignCarrierNumbersWithinBounds(
+	issuance RootGrantsTrustContractCountersignIssuanceContext,
+	authority rootGrantsTrustAuthorityV2,
+	record RootGrantsRecord,
+) bool {
+	return issuance.RootRecord.Version >= 0 && issuance.RootGeneration >= 0 &&
+		issuance.NotBefore >= 0 && issuance.NotAfter >= 0 && issuance.MaxGrantSeconds >= 0 &&
+		issuance.MaxBudgetSat >= 0 && issuance.SpendBudget >= 0 &&
+		authority.Record.Version >= 0 && authority.RootGeneration >= 0 && authority.NotBefore >= 0 &&
+		authority.NotAfter >= 0 && authority.MaxGrantSeconds >= 0 && authority.MaxBudgetSat >= 0 &&
+		record.Version >= 0 && record.Pair.Version >= 0 && record.Pair.NostrVersion >= 0 &&
+		record.Pair.NamecoinVersion >= 0
 }
 
 // RootGrantsTrustContractCountersignCheckInstalledAuthorityFromHelper is the

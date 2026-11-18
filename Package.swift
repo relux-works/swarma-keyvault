@@ -98,6 +98,7 @@ let package = Package(
                 .copy("testdata/RootGrantsTrustContractVectors-19.json"),
                 .copy("testdata/RootGrantsF7GoSealedNonce16-19.json"),
                 .copy("testdata/SHARED-CARRIER-VECTORS-22.json"),
+                .copy("testdata/CONTRACT-27-CONTROLS.json"),
             ],
             linkerSettings: [.linkedLibrary("util")]
         ),

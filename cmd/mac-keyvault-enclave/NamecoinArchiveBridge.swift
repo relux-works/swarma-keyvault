@@ -75,6 +75,9 @@ indirect enum NativeArchiveJSON {
     case array([NativeArchiveJSON])
     case string(String)
     case number(UInt64)
+    // Retain valid JSON number tokens that are outside this carrier's
+    // unsigned-integer model until the owning field-admission phase.
+    case invalidNumber(String)
     case boolean(Bool)
     case null
 
@@ -140,6 +143,7 @@ indirect enum NativeArchiveJSON {
         case .null: value = "null"
         case .boolean(let boolean): value = boolean ? "true" : "false"
         case .number(let number): value = String(number)
+        case .invalidNumber(let token): value = token
         case .string(let text): value = try quote(text)
         case .array(let values):
             value = "[" + (try values.map { String(decoding: try $0.canonical(escapeHTML: escapeHTML), as: UTF8.self) }).joined(separator: ",") + "]"
@@ -250,14 +254,46 @@ private struct NativeArchiveJSONReader {
         case 116:
             guard allowBooleanLiterals else { throw NativeNamecoinArchiveFailure("display_refused") }
             try literal("true"); return .boolean(true)
-        case 48...57:
-            let start = offset
-            while offset < bytes.count && (48...57).contains(bytes[offset]) { offset += 1 }
-            let digits = String(decoding: bytes[start..<offset], as: UTF8.self)
-            guard let number = UInt64(digits), String(number) == digits else { throw NativeNamecoinArchiveFailure("display_refused") }
-            return .number(number)
+        case 45, 48...57:
+            return try number()
         default: throw NativeNamecoinArchiveFailure("display_refused")
         }
+    }
+
+    private mutating func number() throws -> NativeArchiveJSON {
+        let start = offset
+        if bytes[offset] == 45 { offset += 1 }
+        guard offset < bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
+        if bytes[offset] == 48 {
+            offset += 1
+            if offset < bytes.count && (48...57).contains(bytes[offset]) {
+                throw NativeNamecoinArchiveFailure("display_refused")
+            }
+        } else {
+            guard (49...57).contains(bytes[offset]) else { throw NativeNamecoinArchiveFailure("display_refused") }
+            while offset < bytes.count && (48...57).contains(bytes[offset]) { offset += 1 }
+        }
+        var unsignedInteger = bytes[start] != 45
+        if offset < bytes.count && bytes[offset] == 46 {
+            unsignedInteger = false
+            offset += 1
+            let fractionStart = offset
+            while offset < bytes.count && (48...57).contains(bytes[offset]) { offset += 1 }
+            guard offset > fractionStart else { throw NativeNamecoinArchiveFailure("display_refused") }
+        }
+        if offset < bytes.count && (bytes[offset] == 69 || bytes[offset] == 101) {
+            unsignedInteger = false
+            offset += 1
+            if offset < bytes.count && (bytes[offset] == 43 || bytes[offset] == 45) { offset += 1 }
+            let exponentStart = offset
+            while offset < bytes.count && (48...57).contains(bytes[offset]) { offset += 1 }
+            guard offset > exponentStart else { throw NativeNamecoinArchiveFailure("display_refused") }
+        }
+        let token = String(decoding: bytes[start..<offset], as: UTF8.self)
+        if unsignedInteger, let value = UInt64(token), String(value) == token {
+            return .number(value)
+        }
+        return .invalidNumber(token)
     }
 }
 

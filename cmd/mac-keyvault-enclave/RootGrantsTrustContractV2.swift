@@ -96,7 +96,7 @@ struct RootGrantsTrustContractV2 {
             // generic decoder caps from stealing rule-4 or rule-9 findings.
             root = try NativeArchiveJSON.decode(owned, maximum: Self.maximumBytes, canonical: true, escapeHTML: false,
                                                maximumArrayMembers: Self.maximumBytes,
-                                               maximumObjectMembers: Self.maximumBytes, maximumDepth: 64,
+                                               maximumObjectMembers: Self.maximumBytes, maximumDepth: owned.count,
                                                allowDuplicateObjectKeys: true, allowBooleanLiterals: true)
         } catch {
             throw fail(.contractEncoding)
@@ -322,6 +322,8 @@ struct RootGrantsTrustContractV2 {
             return inDelegate
         case .number(let number):
             return number <= UInt64(Int64.max)
+        case .invalidNumber:
+            return false
         case .string(let text):
             return text.utf8.allSatisfy { (0x20...0x7e).contains($0) }
         case .array(let values):
@@ -353,7 +355,7 @@ struct RootGrantsTrustContractV2 {
             }
         case .array(let values):
             return values.allSatisfy { objectKeysAreUniqueOutsideDelegate($0, inDelegate: inDelegate) }
-        case .string, .number, .boolean, .null:
+        case .string, .number, .invalidNumber, .boolean, .null:
             return true
         }
     }

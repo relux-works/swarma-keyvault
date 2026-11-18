@@ -63,6 +63,58 @@ struct RootGrantsTrustContractCountersignTests {
         }
     }
 
+    private struct C27ControlFile: Decodable {
+        let schema: String
+        let contractSHA256: String
+        let baseRequestSHA256: String
+        let baseRequestBytes: Int
+        let requests: [C27Request]
+        let contracts: [C27Contract]
+
+        enum CodingKeys: String, CodingKey {
+            case schema, requests, contracts
+            case contractSHA256 = "contract_sha256"
+            case baseRequestSHA256 = "base_request_sha256"
+            case baseRequestBytes = "base_request_bytes"
+        }
+    }
+
+    private struct C27Request: Decodable {
+        let id: String
+        let claim: String
+        let expectedStatus: Int32
+        let requestBase64: String
+        let requestBytes: Int
+        let requestSHA256: String
+        let source: String?
+        let sourceSHA256: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, claim, source
+            case expectedStatus = "expected_status"
+            case requestBase64 = "request_base64"
+            case requestBytes = "request_bytes"
+            case requestSHA256 = "request_sha256"
+            case sourceSHA256 = "source_sha256"
+        }
+    }
+
+    private struct C27Contract: Decodable {
+        let id: String
+        let claim: String
+        let expected: String
+        let expectedRule: Int
+        let bytesBase64: String
+        let bytes: Int
+        let sha256: String
+
+        enum CodingKeys: String, CodingKey {
+            case id, claim, expected, bytes, sha256
+            case expectedRule = "expected_rule"
+            case bytesBase64 = "bytes_base64"
+        }
+    }
+
     @Test func everySharedCrossLanguageVectorReturnsItsExpectedCode() throws {
         let url = try #require(Bundle.module.url(forResource: "RootGrantsTrustContractVectors-19",
                                                  withExtension: "json"))
@@ -123,6 +175,60 @@ struct RootGrantsTrustContractCountersignTests {
             #expect(observed == vector.expectedStatus, "\(vector.id): got status \(observed), want \(vector.expectedStatus)")
         }
         print(rows.joined(separator: "\n"))
+    }
+
+    // Claim: both implementations consume the shared exact request bytes for all row-1 through row-7 C27 cases, including the four source-pinned requests, the paired 16/17 mixed fault, and approved-Base64/LIP precedence. This does not exercise signing or Keychain.
+    @Test func contract27ExactRequestsMatchNativeParserStatuses() throws {
+        let url = try #require(Bundle.module.url(forResource: "CONTRACT-27-CONTROLS", withExtension: "json"))
+        let source = try Data(contentsOf: url)
+        #expect(Self.sha256(source) == "34491b440d32838f8a25c30cf64513e5871a6aec7edf39c5fe07b433bb0c2870")
+        let file = try JSONDecoder().decode(C27ControlFile.self, from: source)
+        #expect(file.schema == "keyvault-root-grants-contract-27-controls/1")
+        #expect(file.contractSHA256 == "d3efe6fad933ee7077c3209b13e3a166ae243fa2cba6a33213be17c1306e7086")
+        #expect(file.baseRequestSHA256 == "b68391d1790c4f019b73b6339e88d42c09d2f53a77694f08e366663a2da5baea")
+        #expect(file.baseRequestBytes == 8465)
+        #expect(file.requests.count == 64)
+
+        var seen = Set<String>()
+        for vector in file.requests {
+            #expect(!vector.id.isEmpty && !vector.claim.isEmpty, "missing C27 request id/claim")
+            #expect(seen.insert(vector.id).inserted, "duplicate C27 request id \(vector.id)")
+            let bytes = try #require(Data(base64Encoded: vector.requestBase64), "bad Base64 for \(vector.id)")
+            #expect(bytes.base64EncodedString() == vector.requestBase64, "noncanonical request Base64 for \(vector.id)")
+            #expect(bytes.count == vector.requestBytes, "request byte count changed for \(vector.id)")
+            #expect(Self.sha256(bytes) == vector.requestSHA256, "request digest changed for \(vector.id)")
+            if let source = vector.source {
+                #expect(vector.sourceSHA256 == vector.requestSHA256, "source witness hash changed for \(source)")
+            }
+            let observed = Self.status(bytes)?.rawValue ?? -1
+            #expect(observed == vector.expectedStatus,
+                    "\(vector.id): got \(observed), want \(vector.expectedStatus); claim: \(vector.claim)")
+        }
+    }
+
+    // Claim: the exact depth-65 trust/2 source witness is owned by delegate rule 9 / CONTRACT_DELEGATE and coarsens to status 13, while its valid-depth neighbor parses successfully. This tests the local LIP parser, not signing.
+    @Test func contract27DepthWitnessAndValidNeighbor() throws {
+        let url = try #require(Bundle.module.url(forResource: "CONTRACT-27-CONTROLS", withExtension: "json"))
+        let file = try JSONDecoder().decode(C27ControlFile.self, from: Data(contentsOf: url))
+        #expect(file.contracts.count == 2)
+        for vector in file.contracts {
+            #expect(!vector.id.isEmpty && !vector.claim.isEmpty, "missing C27 contract id/claim")
+            let bytes = try #require(Data(base64Encoded: vector.bytesBase64), "bad contract Base64 for \(vector.id)")
+            #expect(bytes.base64EncodedString() == vector.bytesBase64)
+            #expect(bytes.count == vector.bytes)
+            #expect(Self.sha256(bytes) == vector.sha256)
+            let failure = Self.contractFailure(bytes)
+            if vector.expected == "ACCEPT" {
+                #expect(failure == nil, "\(vector.id): expected acceptance; claim: \(vector.claim)")
+                #expect(vector.expectedRule == 0)
+            } else {
+                #expect(failure?.code.rawValue == vector.expected,
+                        "\(vector.id): got \(String(describing: failure?.code.rawValue)), want \(vector.expected)")
+                #expect(vector.expectedRule == 9)
+                #expect(failure?.nativeStatus == .bindingMismatch,
+                        "\(vector.id): local delegate error did not coarsen to native status 13")
+            }
+        }
     }
 
     private static func apply(_ mutation: SharedVectorMutation, to node: NativeArchiveJSON) throws -> NativeArchiveJSON {

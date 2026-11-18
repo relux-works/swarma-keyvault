@@ -86,6 +86,10 @@ struct RootGrantsTrustContractCountersignRequest {
         let outerFields = try Self.fields(outer, ["schema", "operation", "review", "envelope", "pair_metadata"], .privateProtocolError)
         let schema = try Self.text(outerFields[0], .privateProtocolError)
         let operation = try Self.text(outerFields[1], .privateProtocolError)
+        guard case .object = outerFields[2], case .object = outerFields[3] else {
+            throw RootGrantsReviewError(status: .privateProtocolError)
+        }
+        let pairMetadataText = try Self.text(outerFields[4], .privateProtocolError)
         try trustCountersignRequire(schema == Self.schema, .unsupportedVersion)
         try trustCountersignRequire(operation == Self.operation, .unsupportedOperation)
 
@@ -95,15 +99,16 @@ struct RootGrantsTrustContractCountersignRequest {
             "scope_text_bytes_base64", "scope_text_bytes", "scope_text_sha256", "issuance_context", "authority",
             "record", "authority_sha256", "record_sha256",
         ], .privateProtocolError)
+        try Self.validateReviewCarrierTypes(reviewNode)
         try trustCountersignRequire(try Self.text(review[0], .privateProtocolError) == Self.operation, .unsupportedOperation)
         try trustCountersignRequire(try Self.text(review[1], .privateProtocolError) == Self.reviewProfile, .unsupportedVersion)
         try trustCountersignRequire(try Self.text(review[2], .privateProtocolError) == Self.contractProfile, .unsupportedVersion)
 
         let contractBase64 = try Self.text(review[3], .privateProtocolError)
-        let contractByteCount = try Self.number(review[4], .privateProtocolError)
+        let contractByteCount = try Self.nonnegativeInt64(review[4], .privateProtocolError)
         let contractHashText = try Self.text(review[5], .privateProtocolError)
         let scopeBase64 = try Self.text(review[6], .privateProtocolError)
-        let scopeTextByteCount = try Self.number(review[7], .privateProtocolError)
+        let scopeTextByteCount = try Self.nonnegativeInt64(review[7], .privateProtocolError)
         let scopeHash = try Self.text(review[8], .privateProtocolError)
         _ = try Self.fields(review[9], [
             "root_record", "root_generation", "landlord_name", "network", "genesis", "issuer_key", "agent_name",
@@ -122,8 +127,6 @@ struct RootGrantsTrustContractCountersignRequest {
         let authorityHashText = try Self.text(review[12], .privateProtocolError)
         let recordHashText = try Self.text(review[13], .privateProtocolError)
         try Self.validateContextCarrierTypes(contextNode: review[9], authorityNode: review[10], recordNode: review[11])
-        let pairMetadataText = try Self.text(outerFields[4], .privateProtocolError)
-        guard case .object = outerFields[3] else { throw RootGrantsReviewError(status: .privateProtocolError) }
 
         let contextBytes = try Self.canonical(review[9], status: .privateProtocolError)
         let authorityBytes = try Self.canonical(review[10], status: .privateProtocolError)
@@ -372,7 +375,9 @@ struct RootGrantsTrustContractCountersignRequest {
                                     sealVout <= UInt64(UInt32.max), .bindingMismatch)
 
         let approvedProfile = try text(approved[0], .privateProtocolError)
-        let approvedBytes = try base64(text(approved[1], .privateProtocolError), maximum: 8192, status: .privateProtocolError)
+        let approvedBytes = try base64(text(approved[1], .privateProtocolError),
+                                       maximum: Self.maximumNestedObjectBytes,
+                                       status: .privateProtocolError, allowEmpty: true)
         let approvedHash = try text(approved[2], .privateProtocolError)
         try trustCountersignRequire(approvedProfile == contract.profile && approvedBytes == contract.bytes &&
                                     approvedHash == trustCountersignHex(trustCountersignHash(contract.bytes)) &&
@@ -436,7 +441,7 @@ struct RootGrantsTrustContractCountersignRequest {
             let fields = try Self.fields(node, ["service", "version", "metadata_sha256", "public_key", "seal_script"],
                                          .privateProtocolError)
             _ = try Self.text(fields[0], .privateProtocolError)
-            _ = try Self.number(fields[1], .privateProtocolError)
+            _ = try Self.nonnegativeInt64(fields[1], .privateProtocolError)
             _ = try Self.text(fields[2], .privateProtocolError)
             _ = try Self.text(fields[3], .privateProtocolError)
             _ = try Self.text(fields[4], .privateProtocolError)
@@ -444,26 +449,26 @@ struct RootGrantsTrustContractCountersignRequest {
         func checkSeal(_ node: NativeArchiveJSON) throws {
             let fields = try Self.fields(node, ["txid", "vout"], .privateProtocolError)
             _ = try Self.text(fields[0], .privateProtocolError)
-            _ = try Self.number(fields[1], .privateProtocolError)
+            _ = try Self.uint32(fields[1], .privateProtocolError)
         }
 
         try checkRecord(context[0])
-        _ = try number(context[1], .privateProtocolError)
+        _ = try nonnegativeInt64(context[1], .privateProtocolError)
         for index in [2, 3, 4, 5, 6, 7, 8, 9] { _ = try text(context[index], .privateProtocolError) }
-        for index in [10, 11, 12, 13] { _ = try number(context[index], .privateProtocolError) }
+        for index in [10, 11, 12, 13] { _ = try nonnegativeInt64(context[index], .privateProtocolError) }
         try checkSeal(context[14])
         _ = try strings(context[15], .privateProtocolError)
         _ = try strings(context[16], .privateProtocolError)
-        _ = try number(context[17], .privateProtocolError)
+        _ = try nonnegativeInt64(context[17], .privateProtocolError)
         _ = try strings(context[18], .privateProtocolError)
 
         for index in [0, 1, 2, 3, 4] { _ = try text(authority[index], .privateProtocolError) }
         try checkRecord(authority[5])
-        _ = try number(authority[6], .privateProtocolError)
+        _ = try nonnegativeInt64(authority[6], .privateProtocolError)
         _ = try strings(authority[7], .privateProtocolError)
         for index in [8, 9, 10, 11] { _ = try text(authority[index], .privateProtocolError) }
         _ = try strings(authority[12], .privateProtocolError)
-        for index in [13, 14, 15, 16] { _ = try number(authority[index], .privateProtocolError) }
+        for index in [13, 14, 15, 16] { _ = try nonnegativeInt64(authority[index], .privateProtocolError) }
         try checkSeal(authority[17])
         let approved = try fields(authority[18], ["profile", "contract_bytes_base64", "contract_sha256"],
                                   .privateProtocolError)
@@ -473,7 +478,7 @@ struct RootGrantsTrustContractCountersignRequest {
         for index in [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15] {
             _ = try text(record[index], .privateProtocolError)
         }
-        _ = try number(record[3], .privateProtocolError)
+        _ = try nonnegativeInt64(record[3], .privateProtocolError)
         _ = try base64(text(record[14], .privateProtocolError), maximum: Self.maximumBytes,
                        status: .privateProtocolError, allowEmpty: true)
         let pair = try fields(record[13], [
@@ -481,7 +486,24 @@ struct RootGrantsTrustContractCountersignRequest {
             "nostr_public_key", "nostr_npub", "namecoin_identity", "namecoin_version", "namecoin_xpub", "namecoin_origin",
         ], .privateProtocolError)
         for index in [0, 1, 3, 4, 5, 7, 8, 9, 11, 12] { _ = try text(pair[index], .privateProtocolError) }
-        for index in [2, 6, 10] { _ = try number(pair[index], .privateProtocolError) }
+        for index in [2, 6, 10] { _ = try nonnegativeInt64(pair[index], .privateProtocolError) }
+    }
+
+    // Claim: row-1 admits every review primitive and signed-int64 count width
+    // before review operation/profile literals. Nested member sets are handled
+    // at row 2; this does not grant semantic validity to any admitted value.
+    private static func validateReviewCarrierTypes(_ reviewNode: NativeArchiveJSON) throws {
+        let review = try fields(reviewNode, [
+            "operation", "profile", "contract_profile", "contract_bytes_base64", "contract_bytes", "contract_sha256",
+            "scope_text_bytes_base64", "scope_text_bytes", "scope_text_sha256", "issuance_context", "authority",
+            "record", "authority_sha256", "record_sha256",
+        ], .privateProtocolError)
+        for index in [0, 1, 2, 3, 5, 6, 8, 12, 13] { _ = try text(review[index], .privateProtocolError) }
+        _ = try nonnegativeInt64(review[4], .privateProtocolError)
+        _ = try nonnegativeInt64(review[7], .privateProtocolError)
+        for index in [9, 10, 11] {
+            guard case .object = review[index] else { throw RootGrantsReviewError(status: .privateProtocolError) }
+        }
     }
 
     private static func canonical(_ node: NativeArchiveJSON, status: RootGrantsStatus) throws -> Data {
@@ -496,6 +518,18 @@ struct RootGrantsTrustContractCountersignRequest {
 
     private static func number(_ node: NativeArchiveJSON, _ status: RootGrantsStatus) throws -> UInt64 {
         guard case .number(let value) = node else { throw RootGrantsReviewError(status: status) }
+        return value
+    }
+
+    private static func nonnegativeInt64(_ node: NativeArchiveJSON, _ status: RootGrantsStatus) throws -> UInt64 {
+        let value = try number(node, status)
+        guard value <= UInt64(Int64.max) else { throw RootGrantsReviewError(status: status) }
+        return value
+    }
+
+    private static func uint32(_ node: NativeArchiveJSON, _ status: RootGrantsStatus) throws -> UInt64 {
+        let value = try number(node, status)
+        guard value <= UInt64(UInt32.max) else { throw RootGrantsReviewError(status: status) }
         return value
     }
 
