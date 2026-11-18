@@ -32,6 +32,8 @@ var inputPattern = regexp.MustCompile(`^\.temp/(native-archive-[a-f0-9]{32}|name
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var ErrBuild = errors.New("native package build refused")
 
+const macOSDeploymentTarget = "14.0"
+
 // Command is public build input, never an account/owner authorization channel.
 // Executor is an orchestration seam; a fake cannot prove Go/Swift compilation.
 type Command struct {
@@ -68,7 +70,7 @@ func Environment(input string) []string {
 			env = append(env, key+"="+value)
 		}
 	}
-	env = append(env, "GOOS=darwin", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=1", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off")
+	env = append(env, "GOOS=darwin", "GOARCH="+runtime.GOARCH, "CGO_ENABLED=1", "GOTOOLCHAIN=local", "GOWORK=off", "GOENV=off", "GOPROXY=off", "GOSUMDB=off", "MACOSX_DEPLOYMENT_TARGET="+macOSDeploymentTarget)
 	if input != "" {
 		env = append(env, InputVariable+"="+input)
 	}
