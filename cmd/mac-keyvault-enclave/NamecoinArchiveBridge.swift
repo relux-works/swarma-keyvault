@@ -75,6 +75,7 @@ indirect enum NativeArchiveJSON {
     case array([NativeArchiveJSON])
     case string(String)
     case number(UInt64)
+    case boolean(Bool)
     case null
 
     func fields(_ names: [String], ordered: Bool = true) throws -> [NativeArchiveJSON] {
@@ -137,6 +138,7 @@ indirect enum NativeArchiveJSON {
         let value: String
         switch self {
         case .null: value = "null"
+        case .boolean(let boolean): value = boolean ? "true" : "false"
         case .number(let number): value = String(number)
         case .string(let text): value = try quote(text)
         case .array(let values):
@@ -147,9 +149,18 @@ indirect enum NativeArchiveJSON {
         return Data(value.utf8)
     }
 
-    static func decode(_ raw: Data, maximum: Int, canonical: Bool, escapeHTML: Bool = true) throws -> Self {
+    static func decode(_ raw: Data, maximum: Int, canonical: Bool, escapeHTML: Bool = true,
+                       maximumArrayMembers: Int = 2048, maximumObjectMembers: Int = 64,
+                       maximumDepth: Int = 16, allowDuplicateObjectKeys: Bool = false,
+                       allowBooleanLiterals: Bool = false) throws -> Self {
         guard !raw.isEmpty, raw.count <= maximum else { throw NativeNamecoinArchiveFailure("display_refused") }
-        var parser = NativeArchiveJSONReader(bytes: Array(raw))
+        guard maximumArrayMembers >= 0, maximumObjectMembers >= 0, maximumDepth > 0 else {
+            throw NativeNamecoinArchiveFailure("display_refused")
+        }
+        var parser = NativeArchiveJSONReader(bytes: Array(raw), maximumArrayMembers: maximumArrayMembers,
+                                             maximumObjectMembers: maximumObjectMembers, maximumDepth: maximumDepth,
+                                             allowDuplicateObjectKeys: allowDuplicateObjectKeys,
+                                             allowBooleanLiterals: allowBooleanLiterals)
         let value = try parser.value(depth: 0)
         parser.space()
         guard parser.offset == parser.bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
@@ -160,12 +171,25 @@ indirect enum NativeArchiveJSON {
 
 private struct NativeArchiveJSONReader {
     let bytes: [UInt8]
+    let maximumArrayMembers: Int
+    let maximumObjectMembers: Int
+    let maximumDepth: Int
+    let allowDuplicateObjectKeys: Bool
+    let allowBooleanLiterals: Bool
     var offset = 0
     mutating func space() { while offset < bytes.count && [UInt8(9), 10, 13, 32].contains(bytes[offset]) { offset += 1 } }
     mutating func take(_ byte: UInt8) throws {
         space()
         guard offset < bytes.count, bytes[offset] == byte else { throw NativeNamecoinArchiveFailure("display_refused") }
         offset += 1
+    }
+    mutating func literal(_ value: String) throws {
+        let expected = Array(value.utf8)
+        guard bytes.count - offset >= expected.count,
+              bytes[offset..<offset + expected.count].elementsEqual(expected) else {
+            throw NativeNamecoinArchiveFailure("display_refused")
+        }
+        offset += expected.count
     }
     mutating func string() throws -> String {
         space()
@@ -185,7 +209,7 @@ private struct NativeArchiveJSONReader {
     }
     mutating func value(depth: Int) throws -> NativeArchiveJSON {
         space()
-        guard depth < 16, offset < bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
+        guard depth < maximumDepth, offset < bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
         switch bytes[offset] {
         case 34: return .string(try string())
         case 123:
@@ -194,9 +218,11 @@ private struct NativeArchiveJSONReader {
             var keys = Set<String>()
             if offset < bytes.count && bytes[offset] == 125 { offset += 1; return .object(pairs) }
             while true {
-                guard pairs.count < 64 else { throw NativeNamecoinArchiveFailure("display_refused") }
+                guard pairs.count < maximumObjectMembers else { throw NativeNamecoinArchiveFailure("display_refused") }
                 let key = try string()
-                guard keys.insert(key).inserted else { throw NativeNamecoinArchiveFailure("display_refused") }
+                if !allowDuplicateObjectKeys, !keys.insert(key).inserted {
+                    throw NativeNamecoinArchiveFailure("display_refused")
+                }
                 try take(58)
                 pairs.append((key, try value(depth: depth + 1)))
                 space()
@@ -209,7 +235,7 @@ private struct NativeArchiveJSONReader {
             var values: [NativeArchiveJSON] = []
             if offset < bytes.count && bytes[offset] == 93 { offset += 1; return .array(values) }
             while true {
-                guard values.count < 2048 else { throw NativeNamecoinArchiveFailure("display_refused") }
+                guard values.count < maximumArrayMembers else { throw NativeNamecoinArchiveFailure("display_refused") }
                 values.append(try value(depth: depth + 1)); space()
                 guard offset < bytes.count else { throw NativeNamecoinArchiveFailure("display_refused") }
                 if bytes[offset] == 93 { offset += 1; return .array(values) }
@@ -218,6 +244,12 @@ private struct NativeArchiveJSONReader {
         case 110:
             guard bytes.count - offset >= 4, Array(bytes[offset..<offset + 4]) == Array("null".utf8) else { throw NativeNamecoinArchiveFailure("display_refused") }
             offset += 4; return .null
+        case 102:
+            guard allowBooleanLiterals else { throw NativeNamecoinArchiveFailure("display_refused") }
+            try literal("false"); return .boolean(false)
+        case 116:
+            guard allowBooleanLiterals else { throw NativeNamecoinArchiveFailure("display_refused") }
+            try literal("true"); return .boolean(true)
         case 48...57:
             let start = offset
             while offset < bytes.count && (48...57).contains(bytes[offset]) { offset += 1 }

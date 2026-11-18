@@ -30,7 +30,7 @@ private func signV3DecodeHex(_ value: String, maximum: Int) throws -> Data {
 
 private func signV3Hash(_ bytes: Data) -> Data { Data(SHA256.hash(data: bytes)) }
 
-private func signV3ValidateRetainedPairMetadata(_ raw: Data, binding: NativeArchiveJSON) throws {
+func signV3ValidateRetainedPairMetadata(_ raw: Data, binding: NativeArchiveJSON) throws {
 	let bound = try binding.fields([
 		"schema", "service", "version", "group_id", "metadata_sha256", "nostr_identity", "nostr_version",
 		"nostr_public_key", "nostr_npub", "namecoin_identity", "namecoin_version", "namecoin_xpub", "namecoin_origin"
@@ -343,19 +343,11 @@ private func signV3Decrypt(_ request: RootGrantsSignV3Request, context: LAContex
         sharedInfo: request.envelope.ciphertext.prefix(65), outputByteCount: 32)
     var material = derived.withUnsafeBytes { Data($0) }
     defer { material.resetBytes(in: 0..<material.count) }
-    let symmetric = SymmetricKey(data: material.prefix(16))
-    let nonce: AES.GCM.Nonce
-    do { nonce = try AES.GCM.Nonce(data: material.suffix(16)) }
-    catch { throw RootGrantsReviewError(status: .invalidEnvelope) }
     let cipher = request.envelope.ciphertext
-    let box: AES.GCM.SealedBox
-    do { box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: cipher.dropFirst(65).dropLast(16), tag: cipher.suffix(16)) }
-    catch { throw RootGrantsReviewError(status: .invalidEnvelope) }
     var plain: Data
-    do { plain = try AES.GCM.open(box, using: symmetric) }
+    do { plain = try rootGrantsSignV3OpenCiphertext(cipher, material: material) }
     catch { throw RootGrantsReviewError(status: .invalidEnvelope) }
     do {
-        try signV3Require(plain.count == 68 && plain.prefix(4) == Data("KVG1".utf8), .invalidEnvelope)
         let metadataBinding = signV3Hash(Data("keyvault-root-grants/plaintext/1\0".utf8) + request.record)
         try signV3Require(plain.subdata(in: 4..<36) == metadataBinding, .bindingMismatch)
         return plain

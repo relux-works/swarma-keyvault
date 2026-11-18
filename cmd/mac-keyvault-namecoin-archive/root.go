@@ -47,6 +47,36 @@ type rootSignContextEntry struct {
 	cancel context.CancelFunc
 }
 
+// rootTrustContractCountersignSeam adapts the agreed Go error-returning calls
+// to the numeric status expected by the existing C ABI.
+type rootTrustContractCountersignSeam interface {
+	PolicyCheck(context.Context, []byte) error
+	Sign(context.Context, []byte, []byte) ([]byte, error)
+}
+
+type rootTrustContractCountersignGoAdapter struct{}
+
+func (rootTrustContractCountersignGoAdapter) PolicyCheck(ctx context.Context, rawRequest []byte) error {
+	return keyvault.RootGrantsTrustContractCountersignCheckInstalledAuthorityFromHelper(ctx, rawRequest)
+}
+
+func (rootTrustContractCountersignGoAdapter) Sign(ctx context.Context, rawRequest, ownedPlaintext []byte) ([]byte, error) {
+	return keyvault.RootGrantsTrustContractCountersignSignFromHelper(ctx, rawRequest, ownedPlaintext)
+}
+
+var rootTrustContractCountersignCalls rootTrustContractCountersignSeam = rootTrustContractCountersignGoAdapter{}
+
+func rootTrustContractCountersignErrorStatus(err error) int32 {
+	if err == nil {
+		return 0
+	}
+	status := keyvault.RootGrantsTrustContractCountersignHelperStatus(err)
+	if status < 1 || status > 24 {
+		return 16
+	}
+	return status
+}
+
 type rootSignContextRegistry struct {
 	mu      sync.Mutex
 	entries map[uint64]rootSignContextEntry
@@ -595,6 +625,137 @@ func kv_rg_sign_grant_v3_v1(contextHandle C.uint64_t, request *C.uchar, requestS
 		if err != nil {
 			return C.int32_t(keyvault.RootGrantsGrantV3HelperStatus(err))
 		}
+		return 16
+	}
+	destination := unsafe.Slice(out, 64)
+	for i, value := range signature {
+		destination[i] = C.uchar(value)
+	}
+	*written = 64
+	return 0
+}
+
+//export kv_rg_sign_trust_contract_countersign_context_open_v1
+func kv_rg_sign_trust_contract_countersign_context_open_v1(budgetNanos C.uint64_t, outHandle *C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			if outHandle != nil {
+				*outHandle = 0
+			}
+			verdict = 16
+		}
+	}()
+	if outHandle == nil {
+		return 1
+	}
+	*outHandle = 0
+	handle, code := rootSignContexts.open(time.Duration(budgetNanos))
+	if code == 0 {
+		*outHandle = C.uint64_t(handle)
+	}
+	return C.int32_t(code)
+}
+
+//export kv_rg_sign_trust_contract_countersign_context_cancel_v1
+func kv_rg_sign_trust_contract_countersign_context_cancel_v1(handle C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	return C.int32_t(rootSignContexts.cancel(uint64(handle), false))
+}
+
+//export kv_rg_sign_trust_contract_countersign_context_close_v1
+func kv_rg_sign_trust_contract_countersign_context_close_v1(handle C.uint64_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	return C.int32_t(rootSignContexts.cancel(uint64(handle), true))
+}
+
+//export kv_rg_sign_trust_contract_countersign_policy_check_v1
+func kv_rg_sign_trust_contract_countersign_policy_check_v1(contextHandle C.uint64_t, request *C.uchar, requestSize C.size_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			verdict = 16
+		}
+	}()
+	ctx := rootSignContexts.context(uint64(contextHandle))
+	if ctx == nil || request == nil || requestSize == 0 {
+		return 1
+	}
+	if uint64(requestSize) > rootRequestLimit {
+		return 17
+	}
+	switch ctx.Err() {
+	case context.Canceled:
+		return 14
+	case context.DeadlineExceeded:
+		return 15
+	}
+	calls := rootTrustContractCountersignCalls
+	if calls == nil {
+		return 10
+	}
+	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
+	defer clear(publicInput)
+	if err := calls.PolicyCheck(ctx, publicInput); err != nil {
+		return C.int32_t(rootTrustContractCountersignErrorStatus(err))
+	}
+	return 0
+}
+
+//export kv_rg_sign_trust_contract_countersign_v1
+func kv_rg_sign_trust_contract_countersign_v1(contextHandle C.uint64_t, request *C.uchar, requestSize C.size_t, plaintext *C.uchar, plaintextSize C.size_t,
+	out *C.uchar, capacity C.size_t, written *C.size_t) (verdict C.int32_t) {
+	verdict = 16
+	defer func() {
+		if recover() != nil {
+			if written != nil {
+				*written = 0
+			}
+			verdict = 16
+		}
+	}()
+	if written == nil {
+		return 1
+	}
+	*written = 0
+	ctx := rootSignContexts.context(uint64(contextHandle))
+	if ctx == nil || request == nil || requestSize == 0 || plaintext == nil || plaintextSize != 68 || out == nil || capacity < 64 {
+		return 1
+	}
+	if uint64(requestSize) > rootRequestLimit {
+		return 17
+	}
+	switch ctx.Err() {
+	case context.Canceled:
+		return 14
+	case context.DeadlineExceeded:
+		return 15
+	}
+	calls := rootTrustContractCountersignCalls
+	if calls == nil {
+		return 10
+	}
+	publicInput := C.GoBytes(unsafe.Pointer(request), C.int(requestSize))
+	privateInput := C.GoBytes(unsafe.Pointer(plaintext), 68)
+	defer clear(publicInput)
+	defer clear(privateInput)
+	signature, err := calls.Sign(ctx, publicInput, privateInput)
+	if err != nil {
+		clear(signature)
+		return C.int32_t(rootTrustContractCountersignErrorStatus(err))
+	}
+	defer clear(signature)
+	if len(signature) != 64 {
 		return 16
 	}
 	destination := unsafe.Slice(out, 64)

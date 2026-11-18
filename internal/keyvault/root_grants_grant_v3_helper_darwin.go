@@ -3,14 +3,10 @@
 package keyvault
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
-	"errors"
 	"io"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 type rootGrantsGrantV3ProductionHelper struct{}
@@ -82,190 +78,23 @@ func invokeRootGrantsGrantV3Helper(parent context.Context, raw []byte) ([]byte, 
 // inherit attach's 900-second lifetime or response validator.
 func rootGrantsGrantV3HelperExchange(parent context.Context, raw, pin []byte, host rootGrantsHelperHost,
 	check func(context.Context, []byte) error) ([]byte, int, error) {
-	if parent == nil || host == nil || check == nil {
-		return nil, 0, rootGrantsGrantV3Failed("invalid_arguments", "preflight", false)
-	}
-	if len(pin) != 20 && len(pin) != 32 {
-		return nil, 0, rootGrantsGrantV3Failed("code_not_admitted", "preflight", false)
-	}
-	ctx, cancel := context.WithTimeout(parent, rootGrantsGrantV3AttemptLimit)
-	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "preflight", false)
-	}
-	if host.verify(0, nil) != nil {
-		return nil, 0, rootGrantsGrantV3Failed("code_not_admitted", "preflight", false)
-	}
-	child, err := host.start()
-	if err != nil || child == nil {
-		return nil, 0, rootGrantsGrantV3Failed("operation_unavailable", "preflight", false)
-	}
-	if child.pid <= 0 || host.verify(child.pid, pin) != nil {
-		rootGrantsStopChild(child, nil)
-		return nil, 0, rootGrantsGrantV3Failed("code_not_admitted", "preflight", false)
-	}
-	owned := bytes.Clone(raw)
-	frames := make(chan rootGrantsHelperFrame, 1)
-	go func() {
-		defer clear(owned)
-		if err := rootGrantsWriteFrame(child.input, owned); err != nil {
-			frames <- rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "sign", true)}
-			return
-		}
-		rechecks := byte(0)
-		var recheckFailure error
-		var frame rootGrantsHelperFrame
-		for {
-			var stage byte
-			var remaining time.Duration
-			frame, stage, remaining = rootGrantsReadGrantV3ExchangeFrame(child.output)
-			if frame.err != nil || frame.status != 2 {
-				break
+	return rootGrantsPrivateSigningExchange(parent, raw, pin, host, rootGrantsPrivateSigningPurpose{
+		verifySignature: func(raw, signature []byte) error {
+			plan, err := rootGrantsGrantV3PlanFromHelperRequest(raw)
+			if err != nil {
+				return err
 			}
-			clear(frame.payload)
-			if stage != rechecks+1 || rechecks >= rootGrantsGrantV3RecheckLimit {
-				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "recheck", false)}
-				break
-			}
-			rechecks++
-			if err := ctx.Err(); err != nil {
-				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)}
-				break
-			}
-			readCtx, readCancel := context.WithTimeout(ctx, remaining)
-			checkErr := check(readCtx, owned)
-			if checkErr == nil {
-				if err := readCtx.Err(); err != nil {
-					checkErr = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)
-				}
-			}
-			if checkErr == nil {
-				if err := ctx.Err(); err != nil {
-					checkErr = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "recheck", false)
-				}
-			}
-			readCancel()
-			if checkErr != nil {
-				recheckFailure = checkErr
-			}
-			control := rootGrantsGrantV3ControlResponse(checkErr)
-			if err := rootGrantsWriteRaw(child.input, control); err != nil {
-				frame = rootGrantsHelperFrame{err: rootGrantsGrantV3Failed("private_protocol_error", "recheck", false)}
-				break
-			}
-		}
-		refusalFrame := frame.err == nil && frame.status == 1
-		if frame.err == nil && frame.status == 0 {
-			if recheckFailure != nil {
-				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3RefusalCode(recheckFailure), "recheck", true)
-			} else if rechecks != rootGrantsGrantV3RecheckLimit {
-				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "recheck", true)
-			} else if len(frame.payload) != 64 {
-				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "verify", true)
-			} else if plan, planErr := rootGrantsGrantV3PlanFromHelperRequest(owned); planErr != nil || plan.VerifySignature(frame.payload) != nil {
-				frame.err = rootGrantsGrantV3Failed("signature_verification_failed", "verify", true)
-			} else if err := ctx.Err(); err != nil {
-				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "sign", true)
-			} else if host.verify(child.pid, pin) != nil {
-				frame.err = rootGrantsGrantV3Failed("code_not_admitted", "verify", true)
-			} else if err := ctx.Err(); err != nil {
-				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "verify", true)
-			} else {
-				ack := rootGrantsCompletionACK(owned, frame.payload)
-				n, writeErr := child.input.Write(ack[:])
-				if writeErr != nil || n != len(ack) {
-					frame.err = rootGrantsGrantV3Failed("private_protocol_error", "receipt", true)
-				}
-			}
-		} else if frame.err == nil && frame.status == 1 {
-			code := binary.BigEndian.Uint32(frame.payload)
-			if code == 14 || code == 15 || code == 16 {
-				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3HelperRefusalName(code), "sign", true)
-			} else {
-				frame.err = rootGrantsGrantV3HelperRefusalFailure(code)
-			}
-		}
-		if frame.err == nil {
-			if err := child.input.Close(); err != nil {
-				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "receipt", true)
-			} else if err := ctx.Err(); err != nil {
-				frame.err = rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "receipt", true)
-			} else {
-				var trailing [1]byte
-				n, readErr := child.output.Read(trailing[:])
-				if n != 0 || readErr != io.EOF {
-					frame.err = rootGrantsGrantV3Failed("private_protocol_error", "receipt", true)
-				}
-			}
-		} else if refusalFrame {
-			if err := child.input.Close(); err != nil {
-				frame.err = rootGrantsGrantV3Failed("private_protocol_error", "receipt", false)
-			} else {
-				var trailing [1]byte
-				n, readErr := child.output.Read(trailing[:])
-				if n != 0 || readErr != io.EOF {
-					frame.err = rootGrantsGrantV3Failed("private_protocol_error", "receipt", false)
-				}
-			}
-		} else {
-			_ = child.input.Close()
-		}
-		if frame.err != nil {
-			clear(frame.payload)
-			frame.payload = nil
-		}
-		frames <- frame
-	}()
-	var frame rootGrantsHelperFrame
-	select {
-	case frame = <-frames:
-	case <-ctx.Done():
-		rootGrantsStopChild(child, nil)
-		go func() { f := <-frames; clear(f.payload) }()
-		return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(ctx.Err()), "sign", true)
-	}
-	if err := ctx.Err(); err != nil {
-		clear(frame.payload)
-		rootGrantsStopChild(child, nil)
-		return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "receipt", true)
-	}
-	if frame.err != nil {
-		rootGrantsStopChild(child, nil)
-		var failure *RootGrantsGrantV3Failure
-		if errors.As(frame.err, &failure) && failure != nil {
-			return nil, 0, failure
-		}
-		return nil, 0, rootGrantsGrantV3Failed("private_protocol_error", "sign", true)
-	}
-	waited := rootGrantsWaitChild(child)
-	select {
-	case exitErr := <-waited:
-		_ = child.output.Close()
-		if err := ctx.Err(); err != nil {
-			clear(frame.payload)
-			return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "receipt", true)
-		}
-		if exitErr != nil {
-			clear(frame.payload)
-			return nil, 0, rootGrantsGrantV3Failed("private_protocol_error", "receipt", true)
-		}
-		return frame.payload, child.pid, nil
-	case <-ctx.Done():
-		clear(frame.payload)
-		rootGrantsStopChild(child, waited)
-		return nil, 0, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(ctx.Err()), "receipt", true)
-	}
-}
-
-func rootGrantsWriteRaw(w io.Writer, raw []byte) error {
-	n, err := w.Write(raw)
-	if err != nil {
-		return err
-	}
-	if n != len(raw) {
-		return io.ErrShortWrite
-	}
-	return nil
+			return plan.VerifySignature(signature)
+		},
+		check:            check,
+		controlResponse:  rootGrantsGrantV3ControlResponse,
+		refusalFailure:   rootGrantsGrantV3HelperRefusalFailure,
+		refusalCode:      rootGrantsGrantV3RefusalCode,
+		uncertainRefusal: rootGrantsGrantV3HelperRefusalName,
+		contextCode:      rootGrantsGrantV3ContextCode,
+		verificationCode: func(error) string { return "signature_verification_failed" },
+		failure:          rootGrantsGrantV3Failed,
+	})
 }
 
 func rootGrantsGrantV3HelperRefusalName(code uint32) string {

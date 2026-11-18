@@ -369,3 +369,197 @@ func TestRootCClosedMappingNamespaceAndMalformedWrap(t *testing.T) {
 		t.Fatal("malformed wrap did not invalidate")
 	}
 }
+
+type rootTrustCountersignABIFixtureCalls struct {
+	policyError  error
+	signError    error
+	signature    []byte
+	mutateInputs bool
+	policyCalls  int
+	signCalls    int
+	policyInput  []byte
+	signRequest  []byte
+	signPlain    []byte
+	hadDeadline  bool
+}
+
+func (f *rootTrustCountersignABIFixtureCalls) PolicyCheck(ctx context.Context, request []byte) error {
+	f.policyCalls++
+	f.policyInput = bytes.Clone(request)
+	_, f.hadDeadline = ctx.Deadline()
+	if f.mutateInputs && len(request) > 0 {
+		request[0] ^= 0xff
+	}
+	return f.policyError
+}
+
+func (f *rootTrustCountersignABIFixtureCalls) Sign(ctx context.Context, request, plaintext []byte) ([]byte, error) {
+	f.signCalls++
+	f.signRequest = bytes.Clone(request)
+	f.signPlain = bytes.Clone(plaintext)
+	_, f.hadDeadline = ctx.Deadline()
+	if f.mutateInputs {
+		if len(request) > 0 {
+			request[0] ^= 0xff
+		}
+		if len(plaintext) > 0 {
+			plaintext[0] ^= 0xff
+		}
+	}
+	return bytes.Clone(f.signature), f.signError
+}
+
+func rootTrustCountersignABIFixture(t *testing.T) *rootSignContextRegistry {
+	t.Helper()
+	previousContexts, previousCalls := rootSignContexts, rootTrustContractCountersignCalls
+	registry := &rootSignContextRegistry{entries: make(map[uint64]rootSignContextEntry)}
+	rootSignContexts = registry
+	rootTrustContractCountersignCalls = nil
+	t.Cleanup(func() {
+		registry.mu.Lock()
+		for _, entry := range registry.entries {
+			entry.cancel()
+		}
+		registry.entries = make(map[uint64]rootSignContextEntry)
+		registry.mu.Unlock()
+		rootSignContexts, rootTrustContractCountersignCalls = previousContexts, previousCalls
+	})
+	return registry
+}
+
+// Claim: the actual C exports fail closed without an adapter and preserve policy/sign statuses without writing signature bytes on refusal.
+func TestRootTrustContractCountersignCABIIsFailClosedAndPreservesRefusals(t *testing.T) {
+	rootTrustCountersignABIFixture(t)
+	handle, status := rootFixtureTrustContextOpen(time.Second)
+	if status != 0 || handle == 0 {
+		t.Fatal("synthetic countersign context did not open")
+	}
+	request := []byte("PUBLIC countersign request")
+	plaintext := bytes.Repeat([]byte{0x5a}, 68)
+	output := bytes.Repeat([]byte{0xa5}, 80)
+	outputBefore := bytes.Clone(output)
+	if code := rootFixtureTrustPolicy(handle, request); code != 10 {
+		t.Fatalf("unbound policy seam returned status %d, want 10", code)
+	}
+	if written, code := rootFixtureTrustSign(handle, request, plaintext, output, 64, false); code != 10 || written != 0 || !bytes.Equal(output, outputBefore) {
+		t.Fatal("unbound sign seam wrote bytes or did not fail closed")
+	}
+	if rootFixtureTrustContextClose(handle) != 0 || rootSignContexts.context(handle) != nil {
+		t.Fatal("countersign context close did not remove its handle")
+	}
+	if code := rootFixtureTrustPolicy(handle, request); code != 1 {
+		t.Fatalf("closed context returned status %d, want invalid arguments", code)
+	}
+}
+
+// Claim: valid synthetic calls reach the single adapter with owned buffers; exact 64-byte signatures pass and bad statuses, sizes, or lengths leave output untouched.
+func TestRootTrustContractCountersignCABIAdaptersAndBuffers(t *testing.T) {
+	rootTrustCountersignABIFixture(t)
+	fake := &rootTrustCountersignABIFixtureCalls{
+		policyError: &keyvault.RootGrantsTrustError{Code: "binding_mismatch"},
+		signError:   &keyvault.RootGrantsTrustError{Code: "binding_mismatch"},
+		signature:   bytes.Repeat([]byte{0x42}, 64), mutateInputs: true}
+	rootTrustContractCountersignCalls = fake
+	handle, status := rootFixtureTrustContextOpen(time.Second)
+	if status != 0 || handle == 0 {
+		t.Fatal("synthetic countersign context did not open")
+	}
+	request := []byte("PUBLIC countersign request")
+	requestBefore := bytes.Clone(request)
+	plaintext := bytes.Repeat([]byte{0x5a}, 68)
+	plaintextBefore := bytes.Clone(plaintext)
+	if code := rootFixtureTrustPolicy(handle, request); code != 13 || fake.policyCalls != 1 ||
+		!bytes.Equal(fake.policyInput, requestBefore) || !fake.hadDeadline || !bytes.Equal(request, requestBefore) {
+		t.Fatal("policy status, context, or caller-buffer boundary changed")
+	}
+	fake.policyError = nil
+	if code := rootFixtureTrustPolicy(handle, request); code != 0 || fake.policyCalls != 2 || !bytes.Equal(request, requestBefore) {
+		t.Fatal("valid policy check did not pass with owned input")
+	}
+
+	output := bytes.Repeat([]byte{0xa5}, 80)
+	outputBefore := bytes.Clone(output)
+	for _, tc := range []struct {
+		name string
+		err  error
+		want int32
+	}{
+		{"binding-refusal", &keyvault.RootGrantsTrustError{Code: "binding_mismatch"}, 13},
+		{"canceled", &keyvault.RootGrantsTrustError{Code: "canceled"}, 14},
+		{"timeout", &keyvault.RootGrantsTrustError{Code: "timeout"}, 15},
+		{"protocol-refusal", &keyvault.RootGrantsTrustError{Code: "private_protocol_error"}, 16},
+		{"unclassified-error", errors.New("unclassified fixture refusal"), 16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake.signError = tc.err
+			written, got := rootFixtureTrustSign(handle, request, plaintext, output, 64, false)
+			if got != tc.want || written != 0 || !bytes.Equal(output, outputBefore) {
+				t.Fatalf("sign result status=%d written=%d output-changed=%v", got, written, !bytes.Equal(output, outputBefore))
+			}
+		})
+	}
+
+	fake.signError = nil
+	written, code := rootFixtureTrustSign(handle, request, plaintext, output, len(output), false)
+	if code != 0 || written != 64 || !bytes.Equal(output[:64], fake.signature) ||
+		!bytes.Equal(output[64:], outputBefore[64:]) || !bytes.Equal(request, requestBefore) ||
+		!bytes.Equal(plaintext, plaintextBefore) || !bytes.Equal(fake.signRequest, requestBefore) ||
+		!bytes.Equal(fake.signPlain, plaintextBefore) || !fake.hadDeadline {
+		t.Fatal("valid sign did not copy exactly 64 bytes through owned inputs")
+	}
+
+	fake.signature = bytes.Repeat([]byte{0x42}, 63)
+	output = bytes.Clone(outputBefore)
+	if written, code = rootFixtureTrustSign(handle, request, plaintext, output, 64, false); code != 16 || written != 0 || !bytes.Equal(output, outputBefore) {
+		t.Fatal("short successful signature was not rejected without output")
+	}
+	fake.signature = bytes.Repeat([]byte{0x42}, 64)
+	output = bytes.Clone(outputBefore)
+	if written, code = rootFixtureTrustSign(handle, request, plaintext, output, 63, false); code != 1 || written != 0 || !bytes.Equal(output, outputBefore) {
+		t.Fatal("short output capacity was not rejected without output")
+	}
+	if _, code = rootFixtureTrustSign(handle, request, plaintext, output, 64, true); code != 1 || !bytes.Equal(output, outputBefore) {
+		t.Fatal("missing written pointer was not rejected")
+	}
+	if code = rootFixtureTrustPolicy(handle, nil); code != 1 {
+		t.Fatal("empty request was not rejected")
+	}
+	oversized := make([]byte, rootRequestLimit+1)
+	if code = rootFixtureTrustPolicy(handle, oversized); code != 17 {
+		t.Fatalf("oversized helper request returned status %d, want 17", code)
+	}
+	if written, code = rootFixtureTrustSign(handle, request, plaintext[:67], output, 64, false); code != 1 || written != 0 {
+		t.Fatal("wrong private buffer size was not rejected")
+	}
+	if rootFixtureTrustContextClose(handle) != 0 {
+		t.Fatal("countersign context close failed")
+	}
+}
+
+// Claim: context cancellation and deadline expiry remain statuses 14 and 15 at the C boundary, and invalid budgets never return handles.
+func TestRootTrustContractCountersignCABIContextControls(t *testing.T) {
+	rootTrustCountersignABIFixture(t)
+	request := []byte("PUBLIC request")
+	if handle, code := rootFixtureTrustContextOpen(0); code != 15 || handle != 0 {
+		t.Fatal("zero-budget context was admitted")
+	}
+	if handle, code := rootFixtureTrustContextOpen(rootSignContextBudgetLimit + time.Nanosecond); code != 15 || handle != 0 {
+		t.Fatal("over-budget context was admitted")
+	}
+	canceled, code := rootFixtureTrustContextOpen(time.Second)
+	if code != 0 || canceled == 0 || rootFixtureTrustContextCancel(canceled) != 0 ||
+		rootFixtureTrustPolicy(canceled, request) != 14 || rootFixtureTrustContextClose(canceled) != 0 {
+		t.Fatal("canceled context did not remain status 14 through close")
+	}
+	expired, code := rootFixtureTrustContextOpen(time.Nanosecond)
+	if code != 0 || expired == 0 {
+		t.Fatal("bounded short context did not open")
+	}
+	time.Sleep(time.Millisecond)
+	if got := rootFixtureTrustPolicy(expired, request); got != 15 {
+		t.Fatalf("expired context returned status %d, want 15", got)
+	}
+	if rootFixtureTrustContextClose(expired) != 0 || rootFixtureTrustContextClose(expired) != 1 {
+		t.Fatal("closed context status changed")
+	}
+}

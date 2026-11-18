@@ -1,0 +1,506 @@
+{
+  "schema": "keyvault-root-grants-trust-conformance-vectors/1",
+  "vectors": [
+    {
+      "id": "f1-root-off-curve-grantee",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"800000000000000000000000000000000000000000000000ffffffffffffffff\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_FIELD"
+    },
+    {
+      "id": "f1-root-generator-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f1-root-off-curve-grantee"
+    },
+    {
+      "id": "f1-slot-off-curve-grantee",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"800000000000000000000000000000000000000000000000ffffffffffffffff\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_DELEGATE"
+    },
+    {
+      "id": "f1-compressed-notary-owner-off-curve",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"02800000000000000000000000000000000000000000000000ffffffffffffffff\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_DELEGATE"
+    },
+    {
+      "id": "f1-compressed-notary-generator-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f1-compressed-notary-owner-off-curve"
+    },
+    {
+      "id": "f1-valid-delegated-generator-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f1-slot-off-curve-grantee"
+    },
+    {
+      "id": "f2-single-label-host",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"land\"],\"repos\":[\"https://one/path\"],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_REPOS",
+      "also_covers": "review18-finding-1"
+    },
+    {
+      "id": "f2-two-label-host-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"land\"],\"repos\":[\"https://git.example/project\"],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f2-single-label-host"
+    },
+    {
+      "id": "f3-delegate-null-type",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":null},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_DELEGATE"
+    },
+    {
+      "id": "f3-delegate-boolean-type",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":true},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_DELEGATE"
+    },
+    {
+      "id": "f3-valid-delegate-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f3-delegate-null-type,f3-delegate-boolean-type"
+    },
+    {
+      "id": "f3-eleven-member-trust1-profile",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/1\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_PROFILE"
+    },
+    {
+      "id": "f3-trust2-profile-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "f3-eleven-member-trust1-profile"
+    },
+    {
+      "id": "f3-lexical-noncanonical-number",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"actions\":[],\"budget\":01,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_ENCODING",
+      "control_for": "f3-valid-delegate-positive"
+    },
+    {
+      "id": "review18-finding-2-delegate-duplicate-member",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":0,\"depth\":0,\"actions\":[],\"budget\":0,\"slots\":[],\"notaries\":[],\"checkpoint\":\"\"},\"note\":\"\"}"
+      },
+      "expected": "CONTRACT_DELEGATE"
+    },
+    {
+      "id": "review18-finding-2-valid-delegate-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "review18-finding-2-delegate-duplicate-member"
+    },
+    {
+      "id": "review18-finding-3-empty-notaries-malformed-slot",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[null],\"notaries\":[],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "DELEGATE_NO_NOTARY"
+    },
+    {
+      "id": "review18-finding-3-valid-delegate-positive",
+      "input": {
+        "kind": "contract",
+        "bytes": "{\"profile\":\"swarma-trust-contract/2\",\"network\":\"main\",\"landlord_name\":\"id/example-owner\",\"agent_name\":\"id/example-agent\",\"grantee_key\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"actions\":[\"instruct\",\"review\"],\"repos\":[],\"spend_budget\":0,\"not_before\":1,\"not_after\":2,\"scope_text_sha256\":\"\",\"parent_grant_id\":\"\",\"ordinal\":0,\"delegate\":{\"depth\":1,\"actions\":[\"instruct\"],\"budget\":0,\"slots\":[{\"executor\":\"id/example-worker\",\"grantee\":\"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\",\"cap\":0,\"notary\":\"id/example-notary\"}],\"notaries\":[{\"name\":\"id/example-notary\",\"registration\":{\"txid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"vout\":0},\"owner\":\"0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\"}],\"checkpoint\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"note\":\"\"}"
+      },
+      "expected": "ACCEPT",
+      "control_for": "review18-finding-3-empty-notaries-malformed-slot"
+    },
+    {
+      "id": "f4-valid-request-positive",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": []
+      },
+      "expected": "success",
+      "expected_check": "RootGrantsTrustContractCountersignTests.swift:313-317 success return"
+    },
+    {
+      "id": "f1-authority-agent-off-curve",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "agent_key"
+            ],
+            "value": "800000000000000000000000000000000000000000000000ffffffffffffffff"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "binding_mismatch",
+      "control_for": "f4-valid-request-positive",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:314-320 authority agent_key x-only point guard"
+    },
+    {
+      "id": "f1-authority-grantee-off-curve",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "grantee_key"
+            ],
+            "value": "800000000000000000000000000000000000000000000000ffffffffffffffff"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "binding_mismatch",
+      "control_for": "f4-valid-request-positive",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:314-320 authority grantee_key x-only point guard"
+    },
+    {
+      "id": "f1-authority-agent-off-curve-stale-hash-control",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "agent_key"
+            ],
+            "value": "800000000000000000000000000000000000000000000000ffffffffffffffff"
+          }
+        ]
+      },
+      "expected": "binding_mismatch",
+      "control_for": "f4-valid-request-positive",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:156 checkedHash(review.authority_sha256)"
+    },
+    {
+      "id": "f4-authority-shape-missing-member",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "remove_member",
+            "path": [
+              "review",
+              "authority"
+            ],
+            "member": "landlord_name"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "private_protocol_error",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:116-120 authority exact field-set check"
+    },
+    {
+      "id": "f4-authority-value-mismatch",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "landlord_name"
+            ],
+            "value": "id/other-owner"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "binding_mismatch",
+      "control_for": "f4-authority-shape-missing-member",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:347-358 landlord/context/contract binding"
+    },
+    {
+      "id": "f4-record-shape-missing-member",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "remove_member",
+            "path": [
+              "review",
+              "record"
+            ],
+            "member": "public_key"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "record_sha256"
+            ],
+            "source_path": [
+              "review",
+              "record"
+            ]
+          }
+        ]
+      },
+      "expected": "private_protocol_error",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:121-124 record exact field-set check"
+    },
+    {
+      "id": "f4-record-public-key-value-mismatch",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "record",
+              "public_key"
+            ],
+            "value": ""
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "record_sha256"
+            ],
+            "source_path": [
+              "review",
+              "record"
+            ]
+          }
+        ]
+      },
+      "expected": "public_pin_mismatch",
+      "control_for": "f4-record-shape-missing-member",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:305-313 record public pin checks"
+    },
+    {
+      "id": "f4-record-wrapping-point-malformed-base64",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "record",
+              "wrapping_point"
+            ],
+            "value": "!"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "record_sha256"
+            ],
+            "source_path": [
+              "review",
+              "record"
+            ]
+          }
+        ]
+      },
+      "expected": "private_protocol_error",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:278 wrapping_point Base64 decode"
+    },
+    {
+      "id": "f4-record-wrapping-point-valid-base64-wrong-value",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "record",
+              "wrapping_point"
+            ],
+            "value": "AA=="
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "record_sha256"
+            ],
+            "source_path": [
+              "review",
+              "record"
+            ]
+          }
+        ]
+      },
+      "expected": "public_pin_mismatch",
+      "control_for": "f4-record-wrapping-point-malformed-base64",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:311-313 wrapping point fingerprint pin"
+    },
+    {
+      "id": "f4-approved-contract-malformed-base64",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "approved_contract",
+              "contract_bytes_base64"
+            ],
+            "value": "!"
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "private_protocol_error",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:360-362 approved contract Base64 decode"
+    },
+    {
+      "id": "f4-approved-contract-valid-base64-wrong-value",
+      "input": {
+        "kind": "countersign_request",
+        "fixture": "root-grants-sign-request-v2",
+        "mutations": [
+          {
+            "op": "replace_string",
+            "path": [
+              "review",
+              "authority",
+              "approved_contract",
+              "contract_bytes_base64"
+            ],
+            "value": "WA=="
+          },
+          {
+            "op": "recompute_sha256",
+            "path": [
+              "review",
+              "authority_sha256"
+            ],
+            "source_path": [
+              "review",
+              "authority"
+            ]
+          }
+        ]
+      },
+      "expected": "binding_mismatch",
+      "control_for": "f4-approved-contract-malformed-base64",
+      "expected_check": "RootGrantsTrustContractCountersign.swift:363-369 approved contract bytes/hash binding"
+    }
+  ]
+}

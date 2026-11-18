@@ -8,7 +8,10 @@ package main
 */
 import "C"
 
-import "unsafe"
+import (
+	"time"
+	"unsafe"
+)
 
 // Go test files cannot import C. This explicitly tagged fixture exercises the
 // actual exported wrappers with PUBLIC buffers; normal archives omit it.
@@ -47,4 +50,40 @@ func rootFixtureCopy(h uint64, sealed bool, dst []byte, capacity int, omitWritte
 	}
 	code := kv_rg_copy_public_v1(C.uint64_t(h), rootFixturePointer(dst), C.size_t(capacity), wp)
 	return int(w), int32(code)
+}
+
+func rootFixtureTrustContextOpen(budget time.Duration) (uint64, int32) {
+	h := C.uint64_t(999999)
+	code := kv_rg_sign_trust_contract_countersign_context_open_v1(C.uint64_t(budget), &h)
+	return uint64(h), int32(code)
+}
+
+func rootFixtureTrustContextCancel(h uint64) int32 {
+	return int32(kv_rg_sign_trust_contract_countersign_context_cancel_v1(C.uint64_t(h)))
+}
+
+func rootFixtureTrustContextClose(h uint64) int32 {
+	return int32(kv_rg_sign_trust_contract_countersign_context_close_v1(C.uint64_t(h)))
+}
+
+func rootFixtureTrustPolicy(h uint64, request []byte) int32 {
+	return int32(kv_rg_sign_trust_contract_countersign_policy_check_v1(
+		C.uint64_t(h), rootFixturePointer(request), C.size_t(len(request))))
+}
+
+func rootFixtureTrustSign(h uint64, request, plaintext, output []byte, capacity int,
+	omitWritten bool) (int, int32) {
+	if output != nil && capacity > len(output) {
+		panic("public fixture would claim unowned signature memory")
+	}
+	written := C.size_t(999999)
+	var writtenPointer *C.size_t = &written
+	if omitWritten {
+		writtenPointer = nil
+	}
+	code := kv_rg_sign_trust_contract_countersign_v1(
+		C.uint64_t(h), rootFixturePointer(request), C.size_t(len(request)),
+		rootFixturePointer(plaintext), C.size_t(len(plaintext)),
+		rootFixturePointer(output), C.size_t(capacity), writtenPointer)
+	return int(written), int32(code)
 }

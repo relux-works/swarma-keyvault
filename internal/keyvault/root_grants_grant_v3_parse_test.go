@@ -22,6 +22,39 @@ func TestRootGrantsGrantV3PinnedReference(t *testing.T) {
 	rootGrantsWantRefusal(t, err, "consent_invalid")
 }
 
+// Claim: the split parser preserves strict Grant syntax while deferring only
+// consent time validation; the public parser still refuses that invalid proof.
+func TestRootGrantsGrantV3SyntaxDefersConsentOnly(t *testing.T) {
+	f := grantV3FullFixture(t)
+	validRaw := rootGrantsRaw13(t, f.g)
+	validGrant, err := rootGrantsParseGrantV3Syntax(validRaw)
+	if err != nil || rootGrantsValidateGrantV3Consent(validGrant, time.Unix(100, 0)) != nil {
+		t.Fatal("valid syntax and consent neighbor refused", err)
+	}
+	if _, err := ParseRootGrantsGrantV3(validRaw, time.Unix(100, 0)); err != nil {
+		t.Fatal("public parser refused valid neighbor", err)
+	}
+
+	f.g.Consent.ConsentEvent.CreatedAt = 101
+	lateConsentRaw := rootGrantsRaw13(t, f.g)
+	before := bytes.Clone(lateConsentRaw)
+	parsed, err := rootGrantsParseGrantV3Syntax(lateConsentRaw)
+	if err != nil || parsed.Version != 3 {
+		t.Fatal("syntax parser rejected a well-formed Grant with a later consent time", err)
+	}
+	rootGrantsWantRefusal(t, rootGrantsValidateGrantV3Consent(parsed, time.Unix(100, 0)), "consent_invalid")
+	publicGrant, publicErr := ParseRootGrantsGrantV3(lateConsentRaw, time.Unix(100, 0))
+	rootGrantsWantRefusal(t, publicErr, "consent_invalid")
+	if publicGrant.Version != 0 || !bytes.Equal(lateConsentRaw, before) {
+		t.Fatal("public refusal returned partial data or mutated its input")
+	}
+
+	malformed := append(bytes.Clone(validRaw), '\n')
+	if syntaxGrant, syntaxErr := rootGrantsParseGrantV3Syntax(malformed); syntaxErr == nil || syntaxGrant.Version != 0 {
+		t.Fatal("syntax-only parser accepted a noncanonical wire representation")
+	}
+}
+
 // Claim: the accepted owner-principal grammar has representative valid labels
 // and rejects prefix near-misses, normalization variants and invalid edges.
 func TestRootGrantsOwnerPrincipalClosedGrammar(t *testing.T) {

@@ -114,8 +114,12 @@ func SignRootGrantsGrantV3With(ctx context.Context, q RootGrantsGrantV3SignReque
 	if err := ctx.Err(); err != nil {
 		return empty, rootGrantsGrantV3Failed(rootGrantsGrantV3ContextCode(err), "preflight", false)
 	}
-	policy, err := ParseRootGrantsAuthority(authority)
+	policy, err := rootGrantsParseGrantV3Authority(authority)
 	if err != nil {
+		var failure *rootGrantsGrantV3Failure
+		if errors.As(err, &failure) && failure != nil {
+			return empty, failure
+		}
 		return empty, rootGrantsGrantV3Failed(rootGrantsGrantV3RefusalCode(err), "preflight", false)
 	}
 	if policy.OwnerPrincipal != q.OwnerPrincipal || policy.Record.Service != q.Address.Service || policy.Record.Version != q.Address.Version {
@@ -130,6 +134,10 @@ func SignRootGrantsGrantV3With(ctx context.Context, q RootGrantsGrantV3SignReque
 	defer clear(snapshot.PairMetadata)
 	plan, err := PrepareRootGrantsGrantV3(q.Grant, q.Contract, authority, snapshot.Metadata, q.OwnerPrincipal, time.Now())
 	if err != nil {
+		var failure *rootGrantsGrantV3Failure
+		if errors.As(err, &failure) && failure != nil {
+			return empty, failure
+		}
 		return empty, rootGrantsGrantV3Failed(rootGrantsGrantV3RefusalCode(err), "review", false)
 	}
 	review, err := plan.ReviewJSON()

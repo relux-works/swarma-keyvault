@@ -125,8 +125,8 @@ func (a *rootGrantsGrantV3Attempt) signWithTestHooks(ownedPlaintext []byte, rand
 	}
 	// Revalidate the immutable plan against current host-time validity. Native
 	// policy/record reload and actual code/presence admission are separate gates.
-	var authority RootGrantsAuthority
-	if DecodeSingleJSON(a.plan.authority, &authority) != nil {
+	authority, err := rootGrantsParseGrantV3Authority(a.plan.authority)
+	if err != nil {
 		return nil, rootGrantsGrantV3Failed("review_changed", "sign", false)
 	}
 	current, err := PrepareRootGrantsGrantV3(a.plan.grant, a.plan.contract, a.plan.authority, a.plan.record, authority.OwnerPrincipal, time.Now())

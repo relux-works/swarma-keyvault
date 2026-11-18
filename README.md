@@ -680,6 +680,25 @@ under confinement; they do not qualify real owner presence or provider effects.
 Discard partial signing output on any nonzero exit. Execution output failure
 may follow an actual effect: preserve the journal and treat the use as held.
 
+## Trust-contract countersign receipts
+
+A successful trust-contract countersign receipt reports `not_before` and
+`not_after` from the signed contract. The contract window must fit within the
+authority window and respect its maximum grant duration; a wider authority
+never widens the receipt. The authority snapshot remains in the existing
+authority-bound issuance evidence. Refused countersigns return no receipt. The parent
+rechecks and the independently callable helper signing path sample current Unix
+seconds after blocking reads and immediately before signing: authority start/end
+and contract end are inclusive. Signing before the contract start remains allowed;
+expiry returns `binding_mismatch` without a signature or receipt.
+
+Run the portable expiry and fixed carrier controls with
+`go test -count=1 -run 'TestRootGrantsTrustContract(CountersignExpiry|CarrierVectors22)' ./internal/keyvault`.
+The shared canonical request bytes, per-request SHA-256 and expected carrier
+verdicts are in `internal/keyvault/testdata/vectors/SHARED-CARRIER-VECTORS-22.json`;
+the Go test passes those bytes directly through request admission and authority
+binding. Native conformance must consume the same bytes separately.
+
 ## Application-key grant preparation
 
 The separate `grants-a2a-certificate-1` profile binds a full Matrix account ID

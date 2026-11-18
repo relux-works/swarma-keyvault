@@ -132,6 +132,19 @@ func rootGrantsVerifyHash(key, hash, signature string) bool {
 // ParseRootGrantsGrantV3 admits exact complete canonical bytes. It never repairs
 // a request, accepts a caller digest, resolves a name or observes the chain.
 func ParseRootGrantsGrantV3(raw []byte, at time.Time) (RootGrantsGrantV3, error) {
+	g, err := rootGrantsParseGrantV3Syntax(raw)
+	if err != nil {
+		return RootGrantsGrantV3{}, err
+	}
+	if err := rootGrantsValidateGrantV3Consent(g, at); err != nil {
+		return RootGrantsGrantV3{}, err
+	}
+	return g, nil
+}
+
+// rootGrantsParseGrantV3Syntax enforces the strict public wire form and all
+// non-consent Grant v3 fields without evaluating the holder's consent event.
+func rootGrantsParseGrantV3Syntax(raw []byte) (RootGrantsGrantV3, error) {
 	var g RootGrantsGrantV3
 	fail := func(code string) (RootGrantsGrantV3, error) { return RootGrantsGrantV3{}, recoveryRefuse(code) }
 	if len(raw) > rootGrantsGrantV3Limit {
@@ -154,6 +167,13 @@ func ParseRootGrantsGrantV3(raw []byte, at time.Time) (RootGrantsGrantV3, error)
 		g.NotAfter > rootGrantsLastUnixSecond || g.Budget != nil && (*g.Budget < 0 || *g.Budget > rootGrantsMaxMoney) {
 		return fail("invalid_arguments")
 	}
+	return g, nil
+}
+
+// rootGrantsValidateGrantV3Consent checks the existing complete rental consent
+// proof after caller-specific immutable contract and authority bindings.
+func rootGrantsValidateGrantV3Consent(g RootGrantsGrantV3, at time.Time) error {
+	fail := func(code string) error { return recoveryRefuse(code) }
 	e := g.Consent.ConsentEvent
 	if g.Consent.ContractSHA256 != g.ContractSHA256 || e.CreatedAt < 1 || e.CreatedAt > at.Unix() || e.CreatedAt >= g.NotAfter ||
 		e.Pubkey != g.GranteeKey || e.Kind != 8181 || e.Content != "" || len(e.Tags) != 4 {
@@ -176,7 +196,7 @@ func ParseRootGrantsGrantV3(raw []byte, at time.Time) (RootGrantsGrantV3, error)
 		!rootGrantsVerifyHash(g.IssuerKey, g.ContractSHA256, g.Consent.LandlordSig) {
 		return fail("consent_invalid")
 	}
-	return g, nil
+	return nil
 }
 
 // RootGrantsContractV1 is the complete reference v1 terms object, not a hash-only

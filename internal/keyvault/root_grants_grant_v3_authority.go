@@ -120,6 +120,9 @@ func PrepareRootGrantsGrantV3(grant, contract, authority, metadata []byte, expec
 	// Clone before parsing so every binding and later display uses the same owned
 	// snapshot. Concurrent mutation by a caller is not an admitted input source.
 	grant, contract, authority, metadata = bytes.Clone(grant), bytes.Clone(contract), bytes.Clone(authority), bytes.Clone(metadata)
+	if rootGrantsGrantV3AuthorityV2Requested(authority) {
+		return rootGrantsPrepareTrustGrantV3(grant, contract, authority, metadata, expectedOwner, at)
+	}
 	p, err := ParseRootGrantsAuthority(authority)
 	if err != nil {
 		return nil, err

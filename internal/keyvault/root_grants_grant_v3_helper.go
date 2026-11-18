@@ -5,10 +5,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -27,6 +29,356 @@ type rootGrantsGrantV3HelperReview struct {
 	AuthoritySHA256   string          `json:"authority_sha256"`
 	RecordSHA256      string          `json:"record_sha256"`
 	MessageSHA256     string          `json:"message_sha256"`
+}
+
+// rootGrantsPrivateSigningPurpose supplies only operation-specific validation,
+// signature verification, and status mapping. The C1 framing, deadline,
+// ordered rechecks, ACK/EOF barrier, child close, and same-child wait stay here.
+type rootGrantsPrivateSigningPurpose struct {
+	validateRequest    func([]byte) error
+	verifySignature    func([]byte, []byte) error
+	check              func(context.Context, []byte) error
+	controlResponse    func(error) []byte
+	refusalFailure     func(uint32) error
+	refusalCode        func(error) string
+	uncertainRefusal   func(uint32) string
+	contextCode        func(error) string
+	verificationCode   func(error) string
+	failure            func(string, string, bool) error
+	requireOutputClose bool
+}
+
+type rootGrantsCloseOnceWriter struct {
+	io.WriteCloser
+	once sync.Once
+	err  error
+}
+
+func (w *rootGrantsCloseOnceWriter) Close() error {
+	w.once.Do(func() { w.err = w.WriteCloser.Close() })
+	return w.err
+}
+
+type rootGrantsCloseOnceReader struct {
+	io.ReadCloser
+	once sync.Once
+	err  error
+}
+
+func (r *rootGrantsCloseOnceReader) Close() error {
+	r.once.Do(func() { r.err = r.ReadCloser.Close() })
+	return r.err
+}
+
+func rootGrantsPrivateSigningChildComplete(child *rootGrantsHelperChild) bool {
+	return child != nil && child.input != nil && child.output != nil &&
+		child.term != nil && child.kill != nil && child.wait != nil
+}
+
+// A malformed host result still needs bounded best-effort cleanup. This path
+// never manufactures a successful wait or allows a receipt.
+func rootGrantsPrivateSigningStopIncompleteChild(child *rootGrantsHelperChild) {
+	if child == nil {
+		return
+	}
+	if child.input != nil {
+		_ = child.input.Close()
+	}
+	if child.output != nil {
+		_ = child.output.Close()
+	}
+	if child.term != nil {
+		_ = child.term()
+	}
+	if child.wait == nil {
+		if child.kill != nil {
+			_ = child.kill()
+		}
+		return
+	}
+	waited := rootGrantsWaitChild(child)
+	if rootGrantsPrivateSigningWaitBounded(waited) {
+		return
+	}
+	if child.kill != nil {
+		_ = child.kill()
+		_ = rootGrantsPrivateSigningWaitBounded(waited)
+	}
+}
+
+func rootGrantsPrivateSigningWaitBounded(waited <-chan error) bool {
+	timer := time.NewTimer(rootGrantsHelperGrace)
+	defer timer.Stop()
+	select {
+	case <-waited:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+// rootGrantsPrivateSigningExchange is the single C1 parent transport for the
+// purpose-specific Grant v3 and trust-contract countersign operations.
+func rootGrantsPrivateSigningExchange(parent context.Context, raw, pin []byte, host rootGrantsHelperHost,
+	purpose rootGrantsPrivateSigningPurpose) ([]byte, int, error) {
+	fail := func(code, phase string, attempted bool) error {
+		if purpose.failure == nil {
+			return recoveryRefuse("private_protocol_error")
+		}
+		return purpose.failure(code, phase, attempted)
+	}
+	if parent == nil || host == nil || purpose.verifySignature == nil ||
+		purpose.check == nil || purpose.controlResponse == nil ||
+		purpose.refusalFailure == nil || purpose.refusalCode == nil || purpose.contextCode == nil ||
+		purpose.uncertainRefusal == nil || purpose.verificationCode == nil || purpose.failure == nil {
+		return nil, 0, fail("invalid_arguments", "preflight", false)
+	}
+	if len(pin) != 20 && len(pin) != 32 {
+		return nil, 0, fail("code_not_admitted", "preflight", false)
+	}
+	ctx, cancel := context.WithTimeout(parent, rootGrantsGrantV3AttemptLimit)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, 0, fail(purpose.contextCode(err), "preflight", false)
+	}
+	if purpose.validateRequest != nil {
+		validationInput := bytes.Clone(raw)
+		validationErr := purpose.validateRequest(validationInput)
+		clear(validationInput)
+		if err := ctx.Err(); err != nil {
+			return nil, 0, fail(purpose.contextCode(err), "preflight", false)
+		}
+		if validationErr != nil {
+			return nil, 0, validationErr
+		}
+	}
+	verifyErr := host.verify(0, nil)
+	if err := ctx.Err(); err != nil {
+		return nil, 0, fail(purpose.contextCode(err), "preflight", false)
+	}
+	if verifyErr != nil {
+		return nil, 0, fail("code_not_admitted", "preflight", false)
+	}
+	child, err := host.start()
+	if err != nil || child == nil {
+		if child != nil {
+			if rootGrantsPrivateSigningChildComplete(child) {
+				rootGrantsStopChild(child, nil)
+			} else {
+				rootGrantsPrivateSigningStopIncompleteChild(child)
+			}
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, 0, fail(purpose.contextCode(contextErr), "preflight", false)
+		}
+		return nil, 0, fail("operation_unavailable", "preflight", false)
+	}
+	if !rootGrantsPrivateSigningChildComplete(child) {
+		rootGrantsPrivateSigningStopIncompleteChild(child)
+		return nil, 0, fail("private_protocol_error", "preflight", true)
+	}
+	child.input = &rootGrantsCloseOnceWriter{WriteCloser: child.input}
+	child.output = &rootGrantsCloseOnceReader{ReadCloser: child.output}
+	if child.pid <= 0 {
+		rootGrantsStopChild(child, nil)
+		return nil, 0, fail("code_not_admitted", "preflight", false)
+	}
+	verifyErr = host.verify(child.pid, pin)
+	if err := ctx.Err(); err != nil {
+		rootGrantsStopChild(child, nil)
+		return nil, 0, fail(purpose.contextCode(err), "preflight", false)
+	}
+	if verifyErr != nil {
+		rootGrantsStopChild(child, nil)
+		return nil, 0, fail("code_not_admitted", "preflight", false)
+	}
+	owned := bytes.Clone(raw)
+	frames := make(chan rootGrantsHelperFrame, 1)
+	go func() {
+		defer clear(owned)
+		if err := rootGrantsWriteFrame(child.input, owned); err != nil {
+			frames <- rootGrantsHelperFrame{err: fail("private_protocol_error", "sign", true)}
+			return
+		}
+		rechecks := byte(0)
+		var recheckFailure error
+		var expectedRefusal uint32
+		var frame rootGrantsHelperFrame
+		for {
+			var stage byte
+			var remaining time.Duration
+			frame, stage, remaining = rootGrantsReadGrantV3ExchangeFrame(child.output)
+			if frame.err != nil {
+				frame.err = fail("private_protocol_error", "sign", true)
+				break
+			}
+			if frame.status != 2 {
+				if expectedRefusal != 0 && (frame.status != 1 || len(frame.payload) != 4 || binary.BigEndian.Uint32(frame.payload) != expectedRefusal) {
+					clear(frame.payload)
+					frame.payload = nil
+					frame.err = fail("private_protocol_error", "recheck", true)
+				}
+				break
+			}
+			clear(frame.payload)
+			if expectedRefusal != 0 || stage != rechecks+1 || rechecks >= rootGrantsGrantV3RecheckLimit {
+				frame = rootGrantsHelperFrame{err: fail("private_protocol_error", "recheck", false)}
+				break
+			}
+			rechecks++
+			if err := ctx.Err(); err != nil {
+				frame = rootGrantsHelperFrame{err: fail(purpose.contextCode(err), "recheck", false)}
+				break
+			}
+			readCtx, readCancel := context.WithTimeout(ctx, remaining)
+			checkInput := bytes.Clone(owned)
+			checkErr := purpose.check(readCtx, checkInput)
+			clear(checkInput)
+			if checkErr == nil {
+				if err := readCtx.Err(); err != nil {
+					checkErr = fail(purpose.contextCode(err), "recheck", false)
+				}
+			}
+			if checkErr == nil {
+				if err := ctx.Err(); err != nil {
+					checkErr = fail(purpose.contextCode(err), "recheck", false)
+				}
+			}
+			readCancel()
+			if checkErr != nil {
+				recheckFailure = checkErr
+			}
+			control := purpose.controlResponse(checkErr)
+			if !rootGrantsValidPrivateSigningControl(control) {
+				frame = rootGrantsHelperFrame{err: fail("private_protocol_error", "recheck", false)}
+				break
+			}
+			if control[0] == 1 {
+				expectedRefusal = binary.BigEndian.Uint32(control[5:9])
+			}
+			if err := rootGrantsWriteRaw(child.input, control); err != nil {
+				frame = rootGrantsHelperFrame{err: fail("private_protocol_error", "recheck", false)}
+				break
+			}
+		}
+		if frame.err == nil && frame.status == 0 {
+			if recheckFailure != nil {
+				frame.err = fail(purpose.refusalCode(recheckFailure), "recheck", true)
+			} else if rechecks != rootGrantsGrantV3RecheckLimit {
+				frame.err = fail("private_protocol_error", "recheck", true)
+			} else if len(frame.payload) != 64 {
+				frame.err = fail("private_protocol_error", "verify", true)
+			} else if verifyErr := func() error {
+				requestCopy := bytes.Clone(owned)
+				signatureCopy := bytes.Clone(frame.payload)
+				defer clear(requestCopy)
+				defer clear(signatureCopy)
+				return purpose.verifySignature(requestCopy, signatureCopy)
+			}(); verifyErr != nil {
+				frame.err = fail(purpose.verificationCode(verifyErr), "verify", true)
+			} else if err := ctx.Err(); err != nil {
+				frame.err = fail(purpose.contextCode(err), "sign", true)
+			} else if host.verify(child.pid, pin) != nil {
+				frame.err = fail("code_not_admitted", "verify", true)
+			} else if err := ctx.Err(); err != nil {
+				frame.err = fail(purpose.contextCode(err), "verify", true)
+			} else {
+				ack := rootGrantsCompletionACK(owned, frame.payload)
+				n, writeErr := child.input.Write(ack[:])
+				if writeErr != nil || n != len(ack) {
+					frame.err = fail("private_protocol_error", "receipt", true)
+				}
+			}
+		}
+		if frame.err == nil {
+			if err := child.input.Close(); err != nil {
+				frame.err = fail("private_protocol_error", "receipt", true)
+			} else if err := ctx.Err(); err != nil {
+				frame.err = fail(purpose.contextCode(err), "receipt", true)
+			} else {
+				var trailing [1]byte
+				n, readErr := child.output.Read(trailing[:])
+				if n != 0 || readErr != io.EOF {
+					frame.err = fail("private_protocol_error", "receipt", true)
+				}
+			}
+		} else {
+			_ = child.input.Close()
+		}
+		if frame.err != nil {
+			clear(frame.payload)
+			frame.payload = nil
+		}
+		frames <- frame
+	}()
+	var frame rootGrantsHelperFrame
+	select {
+	case frame = <-frames:
+	case <-ctx.Done():
+		rootGrantsStopChild(child, nil)
+		go func() { f := <-frames; clear(f.payload) }()
+		return nil, 0, fail(purpose.contextCode(ctx.Err()), "sign", true)
+	}
+	if err := ctx.Err(); err != nil {
+		clear(frame.payload)
+		rootGrantsStopChild(child, nil)
+		return nil, 0, fail(purpose.contextCode(err), "receipt", true)
+	}
+	if frame.err != nil {
+		rootGrantsStopChild(child, nil)
+		return nil, 0, frame.err
+	}
+	waited := rootGrantsWaitChild(child)
+	select {
+	case exitErr := <-waited:
+		if err := child.output.Close(); err != nil && purpose.requireOutputClose {
+			clear(frame.payload)
+			return nil, 0, fail("private_protocol_error", "receipt", true)
+		}
+		if err := ctx.Err(); err != nil {
+			clear(frame.payload)
+			return nil, 0, fail(purpose.contextCode(err), "receipt", true)
+		}
+		if exitErr != nil {
+			clear(frame.payload)
+			return nil, 0, fail("private_protocol_error", "receipt", true)
+		}
+		if frame.status == 1 {
+			code := binary.BigEndian.Uint32(frame.payload)
+			clear(frame.payload)
+			if code == 14 || code == 15 || code == 16 {
+				return nil, 0, fail(purpose.uncertainRefusal(code), "sign", true)
+			}
+			return nil, 0, purpose.refusalFailure(code)
+		}
+		return frame.payload, child.pid, nil
+	case <-ctx.Done():
+		clear(frame.payload)
+		rootGrantsStopChild(child, waited)
+		return nil, 0, fail(purpose.contextCode(ctx.Err()), "receipt", true)
+	}
+}
+
+func rootGrantsWriteRaw(w io.Writer, raw []byte) error {
+	n, err := w.Write(raw)
+	if err != nil {
+		return err
+	}
+	if n != len(raw) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
+func rootGrantsValidPrivateSigningControl(raw []byte) bool {
+	if len(raw) == 5 {
+		return raw[0] == 0 && binary.BigEndian.Uint32(raw[1:5]) == 0
+	}
+	if len(raw) != 9 || raw[0] != 1 || binary.BigEndian.Uint32(raw[1:5]) != 4 {
+		return false
+	}
+	code := binary.BigEndian.Uint32(raw[5:9])
+	return code >= 1 && code <= 24
 }
 
 func RootGrantsGrantV3HelperStatus(err error) int32 {

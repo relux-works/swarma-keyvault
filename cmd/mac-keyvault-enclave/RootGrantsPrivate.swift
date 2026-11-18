@@ -821,9 +821,10 @@ final class RootGrantsPrivateTransport {
         }
         return result
     }
-    func request() throws -> Data {
+    func request(overLimit: RootGrantsStatus = .invalidArguments) throws -> Data {
         let prefix = try readBytes(4), count = try RootGrantsPrivateFrame.number(prefix)
-        guard (1...262144).contains(count) else { throw RootGrantsReviewError(status: .invalidArguments) }
+        guard count > 0 else { throw RootGrantsReviewError(status: .invalidArguments) }
+        guard count <= 262144 else { throw RootGrantsReviewError(status: overLimit) }
         // stdin intentionally remains open for the one completion message.
         return try readBytes(count)
     }

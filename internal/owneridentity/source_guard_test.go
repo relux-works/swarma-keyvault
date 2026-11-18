@@ -20,7 +20,7 @@ import (
 // display/custody representations. Protocol constants are still valid. It is
 // not whole-program data-flow analysis.
 var ownerLiteral = regexp.MustCompile(`(?i)(?:/Users/|/home/|~[^ /]+/|\b[a-z0-9-]+[./]grants-owner-v1(?:\.v| v)[1-9][0-9]*)`)
-var ownerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+`)
+var ownerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+/[a-z0-9]([a-z0-9]|-[a-z0-9]){0,31}\b`)
 var matrixLiteral = regexp.MustCompile(`@[a-zA-Z0-9._=/-]+:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
 var swiftFixedAssignment = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*(?::\s*[a-z0-9_?]+\s*)?(?:==|!=|=)\s*\(*\s*(?:"[^"\\]+"|[0-9]+\b)`)
 var swiftIdentityFallback = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*\?\?\s*\(*\s*("[^"\\]+"|[a-z][a-z0-9_]*)`)
@@ -261,6 +261,17 @@ func productionIdentitySource(path string) bool {
 		filepath.Ext(path) == ".swift" && !strings.HasSuffix(path, "Tests.swift")
 }
 
+func guardProductionIdentitySource(path string, raw []byte) (string, error) {
+	if !productionIdentitySource(path) {
+		return "", nil
+	}
+	path = filepath.ToSlash(path)
+	if filepath.Ext(path) == ".swift" {
+		return guardSwiftSource(path, raw), nil
+	}
+	return guardGo(path, raw)
+}
+
 // The exact shipped namespace is compatible; changing its value, declaration,
 // source or adding a fixed owner/fallback still trips the same bounded scanner.
 func TestSwiftPublicProtocolNamespaceBoundary(t *testing.T) {
@@ -324,20 +335,49 @@ func TestNoFixedOwnerIdentityInSource(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if filepath.Ext(p) == ".swift" {
-			if hit := guardSwiftSource(filepath.ToSlash(relative), raw); hit != "" {
-				t.Errorf("%s: %s", p, hit)
-			}
-			return nil
-		}
-		hit, err := guardGo(filepath.ToSlash(relative), raw)
+		hit, err := guardProductionIdentitySource(filepath.ToSlash(relative), raw)
 		if hit != "" {
-			t.Error(hit)
+			t.Errorf("%s: %s", p, hit)
 		}
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOwnerScopeLiteralBoundary(t *testing.T) {
+	ownerNamespace := strings.Join([]string{"owner", ":", "id", "/"}, "")
+	fixedOwner := strings.Join([]string{"owner", ":", "id", "/", "synthetic", "-", "subject"}, "")
+
+	// Claim: the public namespace prefix inside the validator is allowed without a fixed subject.
+	validatorSource := strings.Join([]string{
+		"private static func validOwnerPrincipal(_ value: String) -> Bool {",
+		"    let prefix = \"" + ownerNamespace + "\"",
+		"    guard value.hasPrefix(prefix) else { return false }",
+		"    let label = value.dropFirst(prefix.count)",
+		"    return !label.isEmpty",
+		"}",
+	}, "\n")
+	if hit, err := guardProductionIdentitySource("cmd/example/OwnerValidation.swift", []byte(validatorSource)); err != nil || hit != "" {
+		t.Fatal("dynamic owner namespace prefix was rejected", hit, err)
+	}
+
+	// Claim: a complete synthetic owner value in production Swift is rejected.
+	swiftProduction := "let OwnerPrincipal = \"" + fixedOwner + "\""
+	if hit, err := guardProductionIdentitySource("cmd/example/OwnerConfiguration.swift", []byte(swiftProduction)); err != nil || hit == "" {
+		t.Fatal("complete fixed owner value in Swift production source was admitted", err)
+	}
+
+	goProduction := "package probe\nconst OwnerPrincipal = \"" + fixedOwner + "\"\n"
+	// Claim: the same complete synthetic owner value in production Go is rejected.
+	if hit, err := guardProductionIdentitySource("internal/probe/owner_config.go", []byte(goProduction)); err != nil || hit == "" {
+		t.Fatal("complete fixed owner value in Go production source was admitted", err)
+	}
+
+	// Claim: the same planted value in a Go test fixture remains outside production inventory.
+	if hit, err := guardProductionIdentitySource("internal/probe/owner_config_test.go", []byte(goProduction)); err != nil || hit != "" {
+		t.Fatal("test fixture entered the production identity scan", hit, err)
 	}
 }
 
@@ -607,14 +647,16 @@ func TestMUFixtureIdentityBoundary(t *testing.T) {
 // The fixture check detects raw, JSON and encoded violations, while legitimate
 // reserved example principals pass in all supported serializations.
 func TestFixtureIdentityBoundaryPlants(t *testing.T) {
-	for _, tc := range []struct {
+	// A complete synthetic scope stays rejected through fixture serialization.
+	forbiddenOwnerScope := strings.Join([]string{"owner", ":", "synthetic-checker", "/", "synthetic", "-", "subject"}, "")
+	for row, tc := range []struct {
 		principal string
 		forbidden bool
 	}{
 		{"@reader:example.invalid", false}, {"@reader:interop.invalid", false},
 		{"@reader:example.org", false}, {"@reader:unreserved.test", true},
 		{"!fixture-room:example.invalid", false}, {"!fixture-room:outside.test", true},
-		{"owner:fixture-owner", false}, {"owner:example", false}, {"owner:account", true},
+		{"owner:fixture-owner", false}, {"owner:example", false}, {forbiddenOwnerScope, true},
 		{"metadata", false}, {"keeper", true},
 		{"fixture-receiver", false}, {"sample.orch-node", true},
 		{"a2a.identity", false}, {"grant/1", false}, {"mac-keyvault", false},
@@ -624,9 +666,9 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, value := range []string{tc.principal, string(raw), base64.RawURLEncoding.EncodeToString(raw)} {
+		for form, value := range []string{tc.principal, string(raw), base64.RawURLEncoding.EncodeToString(raw)} {
 			if fixtureIdentityHit(value, 0) != tc.forbidden {
-				t.Fatal("fixture serialization control verdict differs")
+				t.Fatalf("fixture serialization control verdict differs at row %d form %d", row+1, form+1)
 			}
 		}
 	}

@@ -57,7 +57,7 @@ func rootGrantsLoadAuthorityFile(path string, address RootGrantsAddress) ([]byte
 		!after.ModTime().Equal(info.ModTime()) || unix.Fstat(fd, &current) != nil || current.Uid != stat.Uid {
 		return nil, recoveryRefuse("review_changed")
 	}
-	p, err := ParseRootGrantsAuthority(raw)
+	p, err := rootGrantsParseGrantV3Authority(raw)
 	if err != nil {
 		return nil, err
 	}

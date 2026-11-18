@@ -30,6 +30,9 @@ let coreSources = [
     "RootGrantsArchiveBridge.swift",
     "RootGrantsPrivate.swift",
     "RootGrantsSignV3.swift",
+    "RootGrantsTrustContractV2.swift",
+    "RootGrantsTrustContractCountersign.swift",
+    "RootGrantsEnvelopeCrypto.swift",
     "RootGrantsQualification.swift",
 ]
 let testSources = [
@@ -45,6 +48,9 @@ let testSources = [
     "RootGrantsArchiveBridgeTests.swift",
     "RootGrantsPrivateTests.swift",
     "RootGrantsSignV3Tests.swift",
+    "RootGrantsTrustContractV2Tests.swift",
+    "RootGrantsTrustContractCountersignTests.swift",
+    "NativeHelperProtocolTests.swift",
     "RootGrantsQualificationTests.swift",
 ]
 
@@ -88,6 +94,11 @@ let package = Package(
             path: "cmd/mac-keyvault-enclave",
             exclude: ["main.swift"] + coreSources,
             sources: testSources,
+            resources: [
+                .copy("testdata/RootGrantsTrustContractVectors-19.json"),
+                .copy("testdata/RootGrantsF7GoSealedNonce16-19.json"),
+                .copy("testdata/SHARED-CARRIER-VECTORS-22.json"),
+            ],
             linkerSettings: [.linkedLibrary("util")]
         ),
     ],

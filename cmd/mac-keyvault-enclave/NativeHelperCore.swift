@@ -61,11 +61,31 @@ struct HelperError: Error {
 let maxRequestBytes = 64 * 1024
 let maxReasonLength = 200
 
+typealias GenericHelperOutputWriter = (Data) throws -> Void
+
+func writeGenericHelperOutput(_ data: Data,
+                              using writer: GenericHelperOutputWriter = { FileHandle.standardOutput.write($0) }) throws {
+    try writer(data)
+}
+
 func emit(_ object: [String: Any], exitCode: Int32) -> Never {
-    let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
-    FileHandle.standardOutput.write(data)
-    FileHandle.standardOutput.write(Data("\n".utf8))
+    let body = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
+    try? writeGenericHelperOutput(body + Data([10]))
     exit(exitCode)
+}
+
+enum GenericHelperSignalAction: Equatable {
+    case ignore
+}
+
+func installGenericHelperSIGPIPEIgnore(
+    using install: (Int32, GenericHelperSignalAction) -> Void = { number, action in
+        switch action {
+        case .ignore: _ = signal(number, SIG_IGN)
+        }
+    }
+) {
+    install(SIGPIPE, .ignore)
 }
 
 func fail(_ error: HelperError) -> Never {
@@ -175,6 +195,7 @@ func presenceEnforced(_ blob: Data) throws -> Bool {
 }
 
 func create(_ request: [String: Any]) throws -> [String: Any] {
+    try requireHelperRequestFields(request, operation: "create", required: ["presence"])
     guard SecureEnclave.isAvailable else {
         throw HelperError(code: "enclave_unavailable", status: errSecNotAvailable, message: "the Secure Enclave is not available")
     }
@@ -201,11 +222,15 @@ func create(_ request: [String: Any]) throws -> [String: Any] {
 }
 
 func publicKey(_ request: [String: Any]) throws -> [String: Any] {
+    try requireHelperRequestFields(request, operation: "public", required: ["blob"])
     let key = try loadKey(try decodeBase64(request["blob"], "blob"), context: silentContext())
     return ["point": key.publicKey.x963Representation.base64EncodedString()]
 }
 
 func sign(_ request: [String: Any]) throws -> [String: Any] {
+    try requireHelperRequestFields(request, operation: "sign",
+                                   required: ["blob", "digest", "presence", "reason"],
+                                   optional: ["interaction"])
     let blob = try decodeBase64(request["blob"], "blob")
     let digest = try sha256Digest(try decodeBase64(request["digest"], "digest"))
     let required: Bool
@@ -259,13 +284,24 @@ func readFrame() throws -> [String: Any] {
     return object
 }
 
-func writeFrame(_ object: [String: Any]) throws {
+func requireHelperRequestFields(_ request: [String: Any], operation: String,
+                                required: Set<String>, optional: Set<String> = []) throws {
+    let requiredKeys = required.union(["op"])
+    let allowedKeys = requiredKeys.union(optional)
+    let actualKeys = Set(request.keys)
+    guard request["op"] as? String == operation,
+          actualKeys.isSuperset(of: requiredKeys), actualKeys.isSubset(of: allowedKeys) else {
+        throw HelperError(code: "bad_request", status: errSecParam, message: "request fields differ from the closed operation")
+    }
+}
+
+func writeFrame(_ object: [String: Any],
+                using writer: GenericHelperOutputWriter = { FileHandle.standardOutput.write($0) }) throws {
     let raw = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     guard raw.count < maxRequestBytes else {
         throw HelperError(code: "bad_request", status: errSecParam, message: "response frame exceeds limit")
     }
-    FileHandle.standardOutput.write(raw)
-    FileHandle.standardOutput.write(Data([10]))
+    try writeGenericHelperOutput(raw + Data([10]), using: writer)
 }
 
 // Parse the canonical label for one exact supported owner key. The display
@@ -509,8 +545,8 @@ final class DocumentReviewWindow: NSObject, NSWindowDelegate {
 }
 
 func reviewDocument(_ request: [String: Any]) throws -> [String: Any] {
-    guard Set(request.keys) == Set(["op", "blob", "presence", "review"]), request["presence"] as? String == "required",
-          let review = request["review"] as? [String: Any] else {
+    try requireHelperRequestFields(request, operation: "review-document", required: ["blob", "presence", "review"])
+    guard request["presence"] as? String == "required", let review = request["review"] as? [String: Any] else {
         throw HelperError(code: "bad_request", status: errSecParam, message: "full review requires the closed presence-bound request")
     }
     let plan = try DocumentPlan(review)
@@ -1002,12 +1038,10 @@ func recoveryPrivate() -> Int32 {
             let derived = secret.x963DerivedSymmetricKey(using: SHA256.self, sharedInfo: ciphertext.prefix(65), outputByteCount: 32)
             var material = derived.withUnsafeBytes { Data($0) }
             defer { material.resetBytes(in: 0..<material.count) }
-            let aes = SymmetricKey(data: material.prefix(16))
-            let nonce = try AES.GCM.Nonce(data: material.suffix(16))
-            let box = try AES.GCM.SealedBox(nonce: nonce, ciphertext: ciphertext.dropFirst(65).dropLast(16), tag: ciphertext.suffix(16))
-            var plain = try AES.GCM.open(box, using: aes)
+            var plain: Data
+            do { plain = try rootGrantsRecoveryOpenCiphertext(ciphertext, material: material) }
+            catch { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "invalid encrypted frame") }
             defer { plain.resetBytes(in: 0..<plain.count) }
-            guard plain.count == 68 && plain.prefix(4) == Data("KVN1".utf8) else { throw HelperError(code: "invalid_blob", status: errSecDecode, message: "invalid plaintext frame") }
             recoveryWrite(0, plain)
             return 0
         case "qualify-wrap":
@@ -1046,6 +1080,9 @@ if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-private-v2
 if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-sign-grant-v3"] {
     exit(rootGrantsSignGrantV3())
 }
+if CommandLine.arguments == [CommandLine.arguments[0], "--root-grants-sign-trust-contract-countersign-v1"] {
+    exit(rootGrantsSignTrustContractCountersignV1())
+}
 if CommandLine.arguments == [CommandLine.arguments[0], "--recovery-private"] {
     exit(recoveryPrivate())
 }
@@ -1058,6 +1095,7 @@ if CommandLine.arguments.dropFirst().first == "namecoin" {
     exit(result.exitCode)
 }
 
+installGenericHelperSIGPIPEIgnore()
 do {
     let request = try readFrame()
     guard let op = request["op"] as? String else {
