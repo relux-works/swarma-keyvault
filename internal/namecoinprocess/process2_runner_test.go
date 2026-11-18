@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relux-works/swarma-keyvault/internal/namecoinfiles"
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
 )
 
@@ -72,6 +73,44 @@ func process2RunnerFixture(t *testing.T, helper, outputPath string, timeoutSecon
 	return command, options, result, ack
 }
 
+type process2SetupFailure struct {
+	stage string
+	err   error
+}
+
+func runProcess2WithSetupFailureEvidence(ctx context.Context, command *exec.Cmd, options Process2RunOptions) (Outcome, process2Evidence, process2SetupFailure) {
+	if options.testHooks == nil {
+		options.testHooks = &process2RunTestHooks{}
+	}
+	previous := options.testHooks.onSetupError
+	var failure process2SetupFailure
+	options.testHooks.onSetupError = func(stage string, err error) {
+		if failure.err == nil {
+			failure = process2SetupFailure{stage: stage, err: err}
+		}
+		if previous != nil {
+			previous(stage, err)
+		}
+	}
+	outcome, evidence := runProcess2(ctx, command, options)
+	return outcome, evidence, failure
+}
+
+func assertNoProcess2SetupFailure(t *testing.T, failure process2SetupFailure) {
+	t.Helper()
+	if failure.err != nil {
+		t.Fatalf("unexpected Process2 setup failure at %s: %v", failure.stage, failure.err)
+	}
+}
+
+func requireProcess2SetupFailure(t *testing.T, failure process2SetupFailure, wantStage string) error {
+	t.Helper()
+	if failure.stage != wantStage || failure.err == nil {
+		t.Fatalf("Process2 setup failure = stage %q error %v; want stage %q and an error", failure.stage, failure.err, wantStage)
+	}
+	return failure.err
+}
+
 func assertInvalidProcess2Request(t *testing.T, outcome Outcome) {
 	t.Helper()
 	failure, err := namecoinwire.DecodeFailure(outcome.Line())
@@ -93,7 +132,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		// A matched public fixture transcript clears every transport and result gate.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		if !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) ||
 			!evidence.admitted || evidence.frameBytes != evidence.frameLength || !evidence.writerJoined ||
 			!evidence.statusEOF || !evidence.stdoutEOF || !evidence.stderrEOF || evidence.stderrHadBytes ||
@@ -118,7 +158,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		// A one-frame success-shaped status remains UNKNOWN and retains empty output.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "11")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if !evidence.admitted || !evidence.waitDone || evidence.waitErr || !evidence.statusEOF || len(evidence.status) != Process2StatusFrameBytes {
 			t.Fatal("partial status control did not reach the intended one-frame exit")
@@ -132,7 +173,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		// Unexpected stderr blocks release without deleting a fully written public file.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, wantResult, _ := process2RunnerFixture(t, helper, outputPath, "12")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if !evidence.stderrHadBytes || !evidence.waitDone || !evidence.statusEOF || !evidence.stdoutEOF {
 			t.Fatal("stderr violation did not reach the intended closed transcript")
@@ -147,7 +189,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
 		options.Admit = func(context.Context, *os.Process, [32]byte) error { return errors.New("fixture admission refusal") }
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.stdinCloseOK || !evidence.writerCloseOK || !evidence.waitDone {
 			t.Fatal("failed admission released custody bytes or left its child unresolved")
@@ -166,7 +209,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.waitDone {
 			t.Fatal("deadline during admission released custody or failed to resolve the retained child")
@@ -183,7 +227,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			<-admissionContext.Done()
 			return admissionContext.Err()
 		}
-		outcome, evidence := runProcess2(ctx, command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(ctx, command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.waitDone || evidence.waitErr ||
 			!evidence.stdinCloseOK || !evidence.writerCloseOK || !allProcess2ClosesOK(evidence.closeObservations) {
@@ -286,8 +331,12 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
 		command.Path = filepath.Join(t.TempDir(), "missing-helper")
 		command.Args[0] = command.Path
-		outcome, _ := runProcess2(context.Background(), command, options)
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
+		startErr := requireProcess2SetupFailure(t, setupFailure, "command.Start")
+		if !errors.Is(startErr, os.ErrNotExist) || !bytes.Contains([]byte(startErr.Error()), []byte(command.Path)) {
+			t.Fatalf("command.Start error = %q; want not-exist error naming %q", startErr, command.Path)
+		}
 		if command.Process != nil {
 			t.Fatal("failed generic spawn unexpectedly started a child")
 		}
@@ -299,7 +348,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
 		ctx, cancel := context.WithCancel(context.Background())
 		options.testHooks = &process2RunTestHooks{afterEvidence: cancel}
-		outcome, evidence := runProcess2(ctx, command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(ctx, command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		if ctx.Err() == nil || !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) ||
 			!evidence.writerJoined || !evidence.waitDone || !evidence.readerCloseOK || !evidence.outputCloseOK {
 			t.Fatal("authentic cancellation after the completed lifecycle barrier changed its valid success")
@@ -314,8 +364,11 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			t.Fatal(err)
 		}
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
-		outcome, _ := runProcess2(context.Background(), command, options)
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
+		if err := requireProcess2SetupFailure(t, setupFailure, "output-create"); !errors.Is(err, namecoinfiles.ErrUnsafe) {
+			t.Fatalf("output-create error = %q; want %q", err, namecoinfiles.ErrUnsafe)
+		}
 		if command.Process != nil {
 			t.Fatal("existing path was replaced after helper start")
 		}
@@ -323,6 +376,34 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			t.Fatal("existing output was truncated or replaced", err)
 		}
 	})
+
+	// complete-pair-control above is the paired positive for these forced setup failures.
+	for _, pipeName := range []string{"stdin", "fd4-status", "fd5-custody", "stdout", "stderr"} {
+		t.Run("pipe-creation-error-"+pipeName, func(t *testing.T) {
+			// Each named pipe refusal reports its exact error before child start.
+			outputPath := filepath.Join(t.TempDir(), "result.json")
+			command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+			wantErr := errors.New("fixture pipe error for " + pipeName)
+			options.testHooks = &process2RunTestHooks{createPipe: func(name string) (process2Pipe, error) {
+				if name == pipeName {
+					return process2Pipe{}, wantErr
+				}
+				return newProcess2Pipe(name)
+			}}
+			outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+			assertUnknown(t, outcome)
+			err := requireProcess2SetupFailure(t, setupFailure, "pipe:"+pipeName)
+			if err.Error() != wantErr.Error() {
+				t.Fatalf("pipe setup error = %q; want %q", err, wantErr)
+			}
+			if command.Process != nil || evidence.frameBytes != 0 {
+				t.Fatal("pipe setup failure started a child or wrote custody bytes")
+			}
+			if info, err := os.Stat(outputPath); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
+				t.Fatalf("pipe setup failure did not retain an empty mode-0600 output: info=%v err=%v", info, err)
+			}
+		})
+	}
 
 }
 
@@ -353,7 +434,8 @@ func TestProcess2DeadlineRecheckedAfterPublicResultValidation(t *testing.T) {
 				},
 				finalDeadlineNow: func() time.Time { return finalNow },
 			}
-			outcome, evidence := runProcess2(context.Background(), command, options)
+			outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+			assertNoProcess2SetupFailure(t, setupFailure)
 			if validated != 1 || !evidence.admitted || evidence.frameBytes != evidence.frameLength || !evidence.resultReadbackOK ||
 				!evidence.writerCloseOK || !evidence.writerJoined || !evidence.stdinCloseOK || !evidence.childEndsCloseOK ||
 				!evidence.statusEOF || evidence.statusOverflow || !evidence.stdoutEOF || evidence.stdoutOverflow ||
