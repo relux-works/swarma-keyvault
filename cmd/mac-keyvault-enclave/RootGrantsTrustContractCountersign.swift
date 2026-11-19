@@ -160,7 +160,8 @@ struct RootGrantsTrustContractCountersignRequest {
         try trustCountersignRequire(trustCountersignLowerHex(scopeHash, bytes: 32) || scopeHash.isEmpty, .bindingMismatch)
         try trustCountersignRequire(scopeHash == contract.scopeTextSHA256, .bindingMismatch)
         if let refusal = RootGrantsTrustContractV2.validateScopeText(
-            scopeFromBase64, reviewedHash: scopeHash, contractHash: contract.scopeTextSHA256
+            // The existing carrier hash distinguishes absent text from present empty bytes.
+            scopeFromBase64, available: !scopeHash.isEmpty, reviewedHash: scopeHash, contractHash: contract.scopeTextSHA256
         ) {
             throw RootGrantsReviewError(status: refusal.nativeStatus)
         }
