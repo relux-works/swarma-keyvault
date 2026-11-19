@@ -5,10 +5,12 @@ package namecoinfiles
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -187,6 +189,115 @@ func TestExclusiveOutputAndExactReadback(t *testing.T) {
 	persisted, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(persisted, expected) {
 		t.Fatal("close removed result")
+	}
+}
+
+func TestOutputRefusalKeepsSyscallCauseBehindSentinel(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "existing-result.json")
+	sentinel := []byte("existing output remains untouched")
+	if err := os.WriteFile(path, sentinel, 0o600); err != nil {
+		t.Fatal("fixture output creation failed")
+	}
+	if _, err := CreateOutput(path); err == nil {
+		t.Fatal("existing output was admitted")
+	} else {
+		if !errors.Is(err, ErrUnsafe) {
+			t.Fatal("existing output did not retain the refusal sentinel")
+		}
+		if got, want := err.Error(), "namecoin_file_unavailable"; got != want || got != ErrUnsafe.Error() {
+			t.Fatal("refusal text changed")
+		}
+		var errno unix.Errno
+		if !errors.As(err, &errno) || errno != unix.EEXIST || !errors.Is(err, unix.EEXIST) {
+			t.Fatal("refusal did not preserve the underlying EEXIST cause")
+		}
+	}
+	if raw, err := os.ReadFile(path); err != nil || !bytes.Equal(raw, sentinel) {
+		t.Fatal("existing output was modified")
+	}
+	for _, format := range []string{"%v", "%+v", "%#v"} {
+		cause := &os.PathError{Op: "stat", Path: path, Err: unix.EIO}
+		got := fmt.Sprintf(format, unsafeWithCause(cause))
+		if got != ErrUnsafe.Error() || strings.Contains(got, path) || strings.Contains(got, unix.EIO.Error()) {
+			t.Fatalf("format %q exposed the setup cause: %q", format, got)
+		}
+	}
+	if _, err := CreateOutput("relative-result"); err != ErrUnsafe {
+		t.Fatal("policy rejection did not keep the bare refusal sentinel")
+	}
+}
+
+func requireFileRefusalCause(t *testing.T, err error, want unix.Errno) {
+	t.Helper()
+	var errno unix.Errno
+	if err == nil || !errors.Is(err, ErrUnsafe) || err.Error() != ErrUnsafe.Error() ||
+		!errors.As(err, &errno) || errno != want || !errors.Is(err, want) {
+		t.Fatalf("refusal error = %v; want the stable sentinel with cause %s", err, want)
+	}
+}
+
+func TestFileForChildPreservesSecondValidationCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "result.json")
+	output, err := CreateOutput(path)
+	if err != nil {
+		t.Fatal("create output", err)
+	}
+	defer func() { _ = output.Close() }()
+
+	// A normal second-stage check passes before the final name is moved.
+	file, err := output.FileForChild()
+	if err != nil || file == nil {
+		t.Fatal("valid FileForChild control refused", err)
+	}
+	if err := os.Rename(path, path+".moved"); err != nil {
+		t.Fatal("move output for second-validation failure", err)
+	}
+	if _, err := output.FileForChild(); err == nil {
+		t.Fatal("missing output path passed second validation")
+	} else {
+		requireFileRefusalCause(t, err, unix.ENOENT)
+	}
+}
+
+func TestFileForChildPreservesDescriptorCheckCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	path := filepath.Join(base, "result.json")
+	output, err := CreateOutput(path)
+	if err != nil {
+		t.Fatal("create output", err)
+	}
+	defer func() { _ = output.Close() }()
+
+	// The valid descriptor is accepted first; closing it forces the later Fstat.
+	file, err := output.FileForChild()
+	if err != nil || file == nil {
+		t.Fatal("valid descriptor control refused", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal("close descriptor for forced Fstat failure", err)
+	}
+	if _, err := output.FileForChild(); err == nil {
+		t.Fatal("closed output descriptor passed validation")
+	} else {
+		requireFileRefusalCause(t, err, unix.EBADF)
+	}
+}
+
+func TestReadInputDoesNotExposeWalkSyscallCause(t *testing.T) {
+	base, _ := privateFixture(t)
+	missing := filepath.Join(base, "missing-parent", "request.json")
+	if _, err := ReadInput(missing, 64); err != ErrUnsafe {
+		t.Fatalf("ReadInput changed its syscall-refusal surface: %v", err)
+	}
+	if _, err := CreateOutput(missing); err == nil || !errors.Is(err, ErrUnsafe) {
+		t.Fatalf("output setup did not return the refusal sentinel: %v", err)
+	} else {
+		var errno unix.Errno
+		if !errors.As(err, &errno) || errno != unix.ENOENT {
+			t.Fatalf("output setup lost the parent-open cause: %v", err)
+		}
 	}
 }
 

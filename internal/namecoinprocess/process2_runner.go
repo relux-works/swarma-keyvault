@@ -46,6 +46,10 @@ type Process2RunOptions struct {
 // subprocess tests. Production callers cannot set these hooks.
 type process2RunTestHooks struct {
 	beforeAdmission       func(*os.Process)
+	onSetupError          func(string, error)
+	afterOutputOpen       func(*os.File)
+	beforeFileForChild    func()
+	createPipe            func(string) (process2Pipe, error)
 	beforeWriter          func()
 	writerComplete        func()
 	contextSelected       func()
@@ -261,6 +265,11 @@ func closeProcess2FDs(fds ...*process2FD) bool {
 func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOptions) (Outcome, process2Evidence) {
 	evidence := process2Evidence{context: options.Verification, invocation: options.Invocation,
 		binding: options.AttemptInputs.binding(), frameLength: len(options.Frame)}
+	reportSetupError := func(stage string, err error) {
+		if err != nil && options.testHooks != nil && options.testHooks.onSetupError != nil {
+			options.testHooks.onSetupError(stage, err)
+		}
+	}
 	unknown := unknownProcess2Outcome()
 	if ctx == nil {
 		ctx = context.Background()
@@ -284,49 +293,70 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	contextChannel := ctx.Done()
 	frame := bytes.Clone(options.Frame)
 	defer clear(frame)
-	output, err := namecoinfiles.CreateOutput(options.Invocation.args.OutputPath)
+	createOutput := namecoinfiles.CreateOutput
+	if hooks := options.testHooks; hooks != nil && hooks.afterOutputOpen != nil {
+		createOutput = func(path string) (*namecoinfiles.Output, error) {
+			return namecoinfiles.CreateOutputAfterOpenForTest(path, hooks.afterOutputOpen)
+		}
+	}
+	output, err := createOutput(options.Invocation.args.OutputPath)
 	if err != nil {
+		reportSetupError("output-create", err)
 		return unknown, evidence
+	}
+	if hooks := options.testHooks; hooks != nil && hooks.beforeFileForChild != nil {
+		hooks.beforeFileForChild()
 	}
 	outputFile, err := output.FileForChild()
 	if err != nil {
+		reportSetupError("output-file-for-child", err)
 		_ = output.Close()
 		return unknown, evidence
 	}
 	unix.CloseOnExec(int(outputFile.Fd()))
 
-	stdin, err := newProcess2Pipe("stdin")
+	createPipe := newProcess2Pipe
+	if options.testHooks != nil && options.testHooks.createPipe != nil {
+		createPipe = options.testHooks.createPipe
+	}
+	stdin, err := createPipe("stdin")
 	if err != nil {
+		reportSetupError("pipe:stdin", err)
 		_ = output.Close()
 		return unknown, evidence
 	}
-	status, err := newProcess2Pipe("fd4-status")
+	status, err := createPipe("fd4-status")
 	if err != nil {
+		reportSetupError("pipe:fd4-status", err)
 		closeProcess2FDs(stdin.read, stdin.write)
 		_ = output.Close()
 		return unknown, evidence
 	}
-	custody, err := newProcess2Pipe("fd5-custody")
+	custody, err := createPipe("fd5-custody")
 	if err != nil {
+		reportSetupError("pipe:fd5-custody", err)
 		closeProcess2FDs(stdin.read, stdin.write, status.read, status.write)
 		_ = output.Close()
 		return unknown, evidence
 	}
 	if options.custodyPipeCapacity > 0 {
 		if err := setProcess2PipeCapacity(custody.read.file.Fd(), options.custodyPipeCapacity); err != nil {
+			reportSetupError("pipe-capacity:fd5-custody", err)
 			closeProcess2FDs(stdin.read, stdin.write, status.read, status.write, custody.read, custody.write)
 			_ = output.Close()
 			return unknown, evidence
 		}
 	}
-	stdout, err := newProcess2Pipe("stdout")
+	stdout, err := createPipe("stdout")
 	if err != nil {
+		reportSetupError("pipe:stdout", err)
 		closeProcess2FDs(stdin.read, stdin.write, status.read, status.write, custody.read, custody.write)
 		_ = output.Close()
 		return unknown, evidence
 	}
-	stderr, err := newProcess2Pipe("stderr")
+	stderr, err := createPipe("stderr")
 	if err != nil {
+		reportSetupError("pipe:stderr", err)
 		closeProcess2FDs(stdin.read, stdin.write, status.read, status.write, custody.read, custody.write, stdout.read, stdout.write)
 		_ = output.Close()
 		return unknown, evidence
@@ -366,13 +396,16 @@ func runProcess2(ctx context.Context, command *exec.Cmd, options Process2RunOpti
 	command.Stderr = stderr.write.file
 	command.ExtraFiles = []*os.File{outputFile, status.write.file, custody.read.file}
 	startErr := command.Start()
-	if startErr != nil && command.Process == nil {
-		closeProcess2FDs(allFDs...)
-		for i := 0; i < 3; i++ {
-			<-readerChannel
+	if startErr != nil {
+		reportSetupError("command.Start", startErr)
+		if command.Process == nil {
+			closeProcess2FDs(allFDs...)
+			for i := 0; i < 3; i++ {
+				<-readerChannel
+			}
+			evidence.outputCloseOK = output.Close() == nil
+			return unknown, evidence
 		}
-		evidence.outputCloseOK = output.Close() == nil
-		return unknown, evidence
 	}
 	if command.Process == nil {
 		closeProcess2FDs(allFDs...)

@@ -6,12 +6,20 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/relux-works/swarma-keyvault/internal/namecoinfiles"
 	"github.com/relux-works/swarma-keyvault/internal/namecoinwire"
 )
 
@@ -72,6 +80,213 @@ func process2RunnerFixture(t *testing.T, helper, outputPath string, timeoutSecon
 	return command, options, result, ack
 }
 
+type process2SetupFailure struct {
+	stage string
+	err   error
+}
+
+func runProcess2WithSetupFailureEvidence(ctx context.Context, command *exec.Cmd, options Process2RunOptions) (Outcome, process2Evidence, process2SetupFailure) {
+	if options.testHooks == nil {
+		options.testHooks = &process2RunTestHooks{}
+	}
+	previous := options.testHooks.onSetupError
+	var failure process2SetupFailure
+	options.testHooks.onSetupError = func(stage string, err error) {
+		if failure.err == nil {
+			failure = process2SetupFailure{stage: stage, err: err}
+		}
+		if previous != nil {
+			previous(stage, err)
+		}
+	}
+	outcome, evidence := runProcess2(ctx, command, options)
+	return outcome, evidence, failure
+}
+
+func assertNoProcess2SetupFailure(t *testing.T, failure process2SetupFailure) {
+	t.Helper()
+	if failure.err != nil {
+		t.Fatalf("unexpected Process2 setup failure at %s: %s", failure.stage, process2SetupErrorText(failure.err))
+	}
+}
+
+func requireProcess2SetupFailure(t *testing.T, failure process2SetupFailure, wantStage string) error {
+	t.Helper()
+	if failure.stage != wantStage || failure.err == nil {
+		t.Fatalf("Process2 setup failure = stage %q error %q; want stage %q and an error", failure.stage, process2SetupErrorText(failure.err), wantStage)
+	}
+	return failure.err
+}
+
+// process2SetupErrorText exposes the OS cause to test logs without a PathError path.
+func process2SetupErrorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return process2SetupErrorText(pathErr.Err)
+	}
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return process2SetupErrorText(execErr.Err)
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return process2SetupErrorText(cause)
+	}
+	return err.Error()
+}
+
+// isProcess2TestHookField names only the private fields whose values must stay test-installed.
+func isProcess2TestHookField(name string) bool {
+	switch name {
+	case "testHooks", "onSetupError", "afterOutputOpen", "beforeFileForChild", "createPipe":
+		return true
+	default:
+		return false
+	}
+}
+
+func process2TestHookViolations(fset *token.FileSet, files []*ast.File) []string {
+	process2UnwrapParens := func(expression ast.Expr) ast.Expr {
+		for {
+			parenthesized, ok := expression.(*ast.ParenExpr)
+			if !ok {
+				return expression
+			}
+			expression = parenthesized.X
+		}
+	}
+	hookTypes := map[string]bool{"Process2RunOptions": true, "process2RunTestHooks": true}
+	for changed := true; changed; {
+		changed = false
+		for _, file := range files {
+			for _, declaration := range file.Decls {
+				group, ok := declaration.(*ast.GenDecl)
+				if !ok || group.Tok != token.TYPE {
+					continue
+				}
+				for _, spec := range group.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if !ok {
+						continue
+					}
+					underlying, ok := typeSpec.Type.(*ast.Ident)
+					if ok && hookTypes[underlying.Name] && !hookTypes[typeSpec.Name.Name] {
+						hookTypes[typeSpec.Name.Name] = true
+						changed = true
+					}
+				}
+			}
+		}
+	}
+	var violations []string
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			switch node := node.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range node.Lhs {
+					selector, ok := lhs.(*ast.SelectorExpr)
+					if ok && isProcess2TestHookField(selector.Sel.Name) {
+						position := fset.Position(selector.Pos())
+						violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+					}
+				}
+			case *ast.UnaryExpr:
+				if node.Op == token.AND {
+					if selector, ok := process2UnwrapParens(node.X).(*ast.SelectorExpr); ok && isProcess2TestHookField(selector.Sel.Name) {
+						violations = append(violations, fmt.Sprintf("%s:%d", fset.Position(selector.Pos()).Filename, fset.Position(selector.Pos()).Line))
+					}
+				}
+			case *ast.KeyValueExpr:
+				if field, ok := node.Key.(*ast.Ident); ok && isProcess2TestHookField(field.Name) {
+					position := fset.Position(field.Pos())
+					violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+				}
+			case *ast.CompositeLit:
+				typ, ok := node.Type.(*ast.Ident)
+				if !ok || !hookTypes[typ.Name] {
+					break
+				}
+				for _, element := range node.Elts {
+					if _, keyed := element.(*ast.KeyValueExpr); !keyed {
+						position := fset.Position(node.Pos())
+						violations = append(violations, fmt.Sprintf("%s:%d", position.Filename, position.Line))
+						break
+					}
+				}
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func TestProcess2TestHookGuardDetectsIndirectWritesAndAliases(t *testing.T) {
+	const source = `package namecoinprocess
+type Process2RunOptions struct { testHooks *process2RunTestHooks }
+type process2RunTestHooks struct { afterOutputOpen func() }
+type optionsAlias = Process2RunOptions
+func install(options *optionsAlias) {
+	callback := &(options.testHooks.afterOutputOpen)
+	*callback = nil
+	_ = optionsAlias{testHooks: nil}
+}`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fixture.go", source, 0)
+	if err != nil {
+		t.Fatal("parse indirect-write guard fixture", err)
+	}
+	var config types.Config
+	if _, err := config.Check("fixture", fset, []*ast.File{file}, nil); err != nil {
+		t.Fatal("type-check indirect-write guard fixture", err)
+	}
+	violations := process2TestHookViolations(fset, []*ast.File{file})
+	want := []string{"fixture.go:6", "fixture.go:8"}
+	if len(violations) != len(want) {
+		t.Fatalf("guard violations = %v; want %v", violations, want)
+	}
+	for i := range want {
+		if violations[i] != want[i] {
+			t.Fatalf("guard violation %d = %q; want %q", i, violations[i], want[i])
+		}
+	}
+}
+
+func TestProcess2TestHooksAreAssignedOnlyInTestFiles(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal("read Process2 source directory")
+	}
+	fset := token.NewFileSet()
+	var sourceFiles []*ast.File
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse non-test Go source %q", name)
+		}
+		sourceFiles = append(sourceFiles, file)
+	}
+	violations := process2TestHookViolations(fset, sourceFiles)
+	if len(violations) != 0 {
+		t.Fatalf("non-test source assigns Process2 test hook or pipe factory: %s", strings.Join(violations, ", "))
+	}
+}
+
+func TestProcess2DiagnosticTextRedactsPathErrors(t *testing.T) {
+	pathErr := &os.PathError{Op: "fork/exec", Path: "/private/test/missing-helper", Err: syscall.ENOENT}
+	for _, err := range []error{pathErr, &exec.Error{Name: "/private/test/missing-helper", Err: pathErr}} {
+		got := process2SetupErrorText(err)
+		if got != syscall.ENOENT.Error() || strings.Contains(got, "/private/test") {
+			t.Fatal("diagnostic text did not retain only the path-free OS cause")
+		}
+	}
+}
+
 func assertInvalidProcess2Request(t *testing.T, outcome Outcome) {
 	t.Helper()
 	failure, err := namecoinwire.DecodeFailure(outcome.Line())
@@ -93,7 +308,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		// A matched public fixture transcript clears every transport and result gate.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		if !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) ||
 			!evidence.admitted || evidence.frameBytes != evidence.frameLength || !evidence.writerJoined ||
 			!evidence.statusEOF || !evidence.stdoutEOF || !evidence.stderrEOF || evidence.stderrHadBytes ||
@@ -113,12 +329,29 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			t.Fatal("retained result file differs from the public fixture", err)
 		}
 	})
+	t.Run("complete-pair-control-production-nil-hooks", func(t *testing.T) {
+		// This pairs the observed fixture with the normal nil-hook Process2 path.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
+		outcome := RunProcess2(context.Background(), command, options)
+		if !outcome.Done() || !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) {
+			t.Fatal("nil-hook production path did not complete the valid fixture pair")
+		}
+		info, err := os.Stat(outputPath)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatal("nil-hook fd3 output did not remain an exclusive mode-0600 public result", err)
+		}
+		if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, wantResult) {
+			t.Fatal("nil-hook retained result differs from the public fixture", err)
+		}
+	})
 
 	t.Run("partial-status", func(t *testing.T) {
 		// A one-frame success-shaped status remains UNKNOWN and retains empty output.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "11")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if !evidence.admitted || !evidence.waitDone || evidence.waitErr || !evidence.statusEOF || len(evidence.status) != Process2StatusFrameBytes {
 			t.Fatal("partial status control did not reach the intended one-frame exit")
@@ -132,7 +365,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		// Unexpected stderr blocks release without deleting a fully written public file.
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, wantResult, _ := process2RunnerFixture(t, helper, outputPath, "12")
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if !evidence.stderrHadBytes || !evidence.waitDone || !evidence.statusEOF || !evidence.stdoutEOF {
 			t.Fatal("stderr violation did not reach the intended closed transcript")
@@ -147,7 +381,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
 		options.Admit = func(context.Context, *os.Process, [32]byte) error { return errors.New("fixture admission refusal") }
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.stdinCloseOK || !evidence.writerCloseOK || !evidence.waitDone {
 			t.Fatal("failed admission released custody bytes or left its child unresolved")
@@ -166,7 +401,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		outcome, evidence := runProcess2(context.Background(), command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.waitDone {
 			t.Fatal("deadline during admission released custody or failed to resolve the retained child")
@@ -183,7 +419,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 			<-admissionContext.Done()
 			return admissionContext.Err()
 		}
-		outcome, evidence := runProcess2(ctx, command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(ctx, command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		assertUnknown(t, outcome)
 		if evidence.admitted || evidence.frameBytes != 0 || evidence.writerJoined || !evidence.waitDone || evidence.waitErr ||
 			!evidence.stdinCloseOK || !evidence.writerCloseOK || !allProcess2ClosesOK(evidence.closeObservations) {
@@ -286,8 +523,14 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
 		command.Path = filepath.Join(t.TempDir(), "missing-helper")
 		command.Args[0] = command.Path
-		outcome, _ := runProcess2(context.Background(), command, options)
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
+		startErr := requireProcess2SetupFailure(t, setupFailure, "command.Start")
+		var pathErr *os.PathError
+		if !errors.Is(startErr, os.ErrNotExist) || !errors.As(startErr, &pathErr) || pathErr.Path != command.Path {
+			t.Fatal("command.Start did not retain the missing-helper not-exist cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(startErr))
 		if command.Process != nil {
 			t.Fatal("failed generic spawn unexpectedly started a child")
 		}
@@ -299,7 +542,8 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		command, options, wantResult, wantAck := process2RunnerFixture(t, helper, outputPath, "10")
 		ctx, cancel := context.WithCancel(context.Background())
 		options.testHooks = &process2RunTestHooks{afterEvidence: cancel}
-		outcome, evidence := runProcess2(ctx, command, options)
+		outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(ctx, command, options)
+		assertNoProcess2SetupFailure(t, setupFailure)
 		if ctx.Err() == nil || !outcome.Success() || !bytes.Equal(outcome.Result(), wantResult) || !bytes.Equal(outcome.Line(), wantAck) ||
 			!evidence.writerJoined || !evidence.waitDone || !evidence.readerCloseOK || !evidence.outputCloseOK {
 			t.Fatal("authentic cancellation after the completed lifecycle barrier changed its valid success")
@@ -311,18 +555,118 @@ func TestProcess2RunnerIntegrationAndForbiddenOutcomes(t *testing.T) {
 		outputPath := filepath.Join(t.TempDir(), "result.json")
 		sentinel := []byte("existing output must remain untouched")
 		if err := os.WriteFile(outputPath, sentinel, 0o600); err != nil {
-			t.Fatal(err)
+			t.Fatal("could not create existing-output fixture")
 		}
 		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
-		outcome, _ := runProcess2(context.Background(), command, options)
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
 		assertUnknown(t, outcome)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-create")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != "namecoin_file_unavailable" ||
+			!errors.As(outputErr, &errno) || errno != syscall.EEXIST {
+			t.Fatal("existing-output refusal did not preserve its sentinel and EEXIST cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
 		if command.Process != nil {
 			t.Fatal("existing path was replaced after helper start")
 		}
 		if raw, err := os.ReadFile(outputPath); err != nil || !bytes.Equal(raw, sentinel) {
-			t.Fatal("existing output was truncated or replaced", err)
+			t.Fatal("existing output was truncated or replaced")
+		}
+
+		publicCommand, publicOptions, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		publicOutcome := RunProcess2(context.Background(), publicCommand, publicOptions)
+		assertUnknown(t, publicOutcome)
+		if !bytes.Equal(publicOutcome.Line(), unknownProcess2Outcome().Line()) ||
+			bytes.Contains(publicOutcome.Line(), []byte(outputPath)) || bytes.Contains(publicOutcome.Line(), []byte("EEXIST")) {
+			t.Fatal("public Process2 outcome exposed the internal output-creation cause")
 		}
 	})
+
+	t.Run("output-revalidation-error-after-exclusive-open", func(t *testing.T) {
+		// The output is really created exclusively; closing its descriptor forces
+		// the following Fstat revalidation to fail with an OS cause.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		options.testHooks = &process2RunTestHooks{afterOutputOpen: func(file *os.File) {
+			if err := file.Close(); err != nil {
+				t.Errorf("close output descriptor for forced revalidation failure: %v", err)
+			}
+		}}
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertUnknown(t, outcome)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-create")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != "namecoin_file_unavailable" ||
+			!errors.As(outputErr, &errno) || errno != syscall.EBADF ||
+			process2SetupErrorText(outputErr) != syscall.EBADF.Error() {
+			t.Fatal("post-open output refusal did not preserve the safe sentinel and EBADF cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
+		if command.Process != nil {
+			t.Fatal("post-open output refusal started a helper")
+		}
+		if info, err := os.Stat(outputPath); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
+			t.Fatalf("post-open refusal did not preserve the newly created empty output: info=%v err=%v", info, err)
+		}
+	})
+
+	t.Run("file-for-child-second-validation-error", func(t *testing.T) {
+		// The complete-pair-control above proves the positive path. Remove only the
+		// just-created public output without dropping its link count.
+		outputPath := filepath.Join(t.TempDir(), "result.json")
+		command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+		options.testHooks = &process2RunTestHooks{beforeFileForChild: func() {
+			if err := os.Rename(outputPath, outputPath+".moved"); err != nil {
+				t.Errorf("move output for FileForChild validation failure: %v", err)
+			}
+		}}
+		outcome, _, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+		assertUnknown(t, outcome)
+		outputErr := requireProcess2SetupFailure(t, setupFailure, "output-file-for-child")
+		var errno syscall.Errno
+		if !errors.Is(outputErr, namecoinfiles.ErrUnsafe) || outputErr.Error() != namecoinfiles.ErrUnsafe.Error() ||
+			!errors.As(outputErr, &errno) || errno != syscall.ENOENT || !errors.Is(outputErr, syscall.ENOENT) ||
+			process2SetupErrorText(outputErr) != syscall.ENOENT.Error() {
+			t.Fatal("FileForChild refusal did not preserve its safe sentinel and ENOENT cause")
+		}
+		t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(outputErr))
+		if command.Process != nil {
+			t.Fatal("FileForChild refusal started a helper")
+		}
+		if _, err := os.Stat(outputPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("forced refusal unexpectedly restored the output path", err)
+		}
+	})
+
+	// complete-pair-control above is the paired positive for these forced setup failures.
+	for _, pipeName := range []string{"stdin", "fd4-status", "fd5-custody", "stdout", "stderr"} {
+		t.Run("pipe-creation-error-"+pipeName, func(t *testing.T) {
+			// Each named pipe refusal reports its exact error before child start.
+			outputPath := filepath.Join(t.TempDir(), "result.json")
+			command, options, _, _ := process2RunnerFixture(t, helper, outputPath, "10")
+			wantErr := errors.New("fixture pipe error for " + pipeName)
+			options.testHooks = &process2RunTestHooks{createPipe: func(name string) (process2Pipe, error) {
+				if name == pipeName {
+					return process2Pipe{}, wantErr
+				}
+				return newProcess2Pipe(name)
+			}}
+			outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+			assertUnknown(t, outcome)
+			err := requireProcess2SetupFailure(t, setupFailure, "pipe:"+pipeName)
+			if err.Error() != wantErr.Error() {
+				t.Fatalf("pipe setup error = %q; want %q", err, wantErr)
+			}
+			t.Logf("Process2 setup stage=%s OS error=%s", setupFailure.stage, process2SetupErrorText(err))
+			if command.Process != nil || evidence.frameBytes != 0 {
+				t.Fatal("pipe setup failure started a child or wrote custody bytes")
+			}
+			if info, err := os.Stat(outputPath); err != nil || info.Size() != 0 || info.Mode().Perm() != 0o600 {
+				t.Fatalf("pipe setup failure did not retain an empty mode-0600 output: info=%v err=%v", info, err)
+			}
+		})
+	}
 
 }
 
@@ -353,7 +697,8 @@ func TestProcess2DeadlineRecheckedAfterPublicResultValidation(t *testing.T) {
 				},
 				finalDeadlineNow: func() time.Time { return finalNow },
 			}
-			outcome, evidence := runProcess2(context.Background(), command, options)
+			outcome, evidence, setupFailure := runProcess2WithSetupFailureEvidence(context.Background(), command, options)
+			assertNoProcess2SetupFailure(t, setupFailure)
 			if validated != 1 || !evidence.admitted || evidence.frameBytes != evidence.frameLength || !evidence.resultReadbackOK ||
 				!evidence.writerCloseOK || !evidence.writerJoined || !evidence.stdinCloseOK || !evidence.childEndsCloseOK ||
 				!evidence.statusEOF || evidence.statusOverflow || !evidence.stdoutEOF || evidence.stdoutOverflow ||
