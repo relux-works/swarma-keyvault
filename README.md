@@ -279,11 +279,11 @@ The proposed [agent identity enrollment and request-key contract](docs/agent-enr
 requires owner-issued operation authority, exact card and H1 identity binding, a response from the
 authenticated selected server, durable reservation and rechecks, and an exact committed receipt
 before public metadata is written. Its administrative route and token-custody terms apply only to
-the owners' accepted homeserver deployment under the decision dated 2026-11-19. The immutable Link record
+the deployment named in the owners' decision of 2026-11-19. The immutable Link record
 of that decision and an accepted route-authorization mechanism remain pending, so registration
-refuses before network submission. Use or release after enrollment requires a separate accepted
-contract. This is not an installed registration or signing interface. The existing `nostr` and
-`agent-nostr` command families remain separate.
+refuses before reservation and network submission. Use or release after enrollment
+requires a separate accepted contract. This is not an installed registration or signing
+interface. The existing `nostr` and `agent-nostr` command families remain separate.
 
 ## Nostr keys
 
