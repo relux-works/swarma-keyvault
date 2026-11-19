@@ -32,6 +32,14 @@ qualified matched helper/vault pair; software fixtures do not prove them. On
 macOS use the confined test wrapper and a canonical private `TMPDIR` without
 symlink or writable-by-other ancestors for subprocess output fixtures.
 
+Run `go test -race -count=1 -timeout=30m ./internal/owneridentity` in the
+offline sandbox for the bounded source and fixture identity guards. Fixture
+controls reject unqualified owners such as `owner:account` and complete
+slash-qualified owners in raw text, JSON strings and Base64 JSON, while allowing
+neutral fixtures and the exact public `owner:id/` namespace prefix. Runtime owner
+admission is unchanged; these scans do not prove whole-program data flow. Keep
+captures in `.temp/` and test scratch under private `TMPDIR`/`GOCACHE`.
+
 The [offline registration interoperability suite](interop/namecoin-registration/README.md)
 checks the independently built identity CLI against public Namecoin wire, review
 frame and PSBT contracts. Run

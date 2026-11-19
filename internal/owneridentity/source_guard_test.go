@@ -21,6 +21,10 @@ import (
 // not whole-program data-flow analysis.
 var ownerLiteral = regexp.MustCompile(`(?i)(?:/Users/|/home/|~[^ /]+/|\b[a-z0-9-]+[./]grants-owner-v1(?:\.v| v)[1-9][0-9]*)`)
 var ownerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+/[a-z0-9]([a-z0-9]|-[a-z0-9]){0,31}\b`)
+
+// Fixtures also reject the earlier unqualified owner form. Retain a trailing
+// slash so only the exact public owner:id/ namespace can be exempted below.
+var fixtureOwnerScopeLiteral = regexp.MustCompile(`\bowner:[a-z0-9-]+(?:/[a-z0-9]([a-z0-9]|-[a-z0-9]){0,31}\b|/)?`)
 var matrixLiteral = regexp.MustCompile(`@[a-zA-Z0-9._=/-]+:[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`)
 var swiftFixedAssignment = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*(?::\s*[a-z0-9_?]+\s*)?(?:==|!=|=)\s*\(*\s*(?:"[^"\\]+"|[0-9]+\b)`)
 var swiftIdentityFallback = regexp.MustCompile(`(?im)\b([a-z][a-z0-9_]*)\s*\?\?\s*\(*\s*("[^"\\]+"|[a-z][a-z0-9_]*)`)
@@ -537,8 +541,8 @@ func fixtureIdentityHit(raw string, depth int) bool {
 	if fixtureProcessLabel.MatchString(raw) || fixtureRole.MatchString(raw) {
 		return true
 	}
-	for _, scope := range ownerScopeLiteral.FindAllString(raw, -1) {
-		if scope != "owner:example" && !strings.HasPrefix(scope, "owner:fixture-") {
+	for _, scope := range fixtureOwnerScopeLiteral.FindAllString(raw, -1) {
+		if scope != "owner:id/" && scope != "owner:example" && !strings.HasPrefix(scope, "owner:fixture-") {
 			return true
 		}
 	}
@@ -644,8 +648,9 @@ func TestMUFixtureIdentityBoundary(t *testing.T) {
 	}
 }
 
-// The fixture check detects raw, JSON and encoded violations, while legitimate
-// reserved example principals pass in all supported serializations.
+// The bounded fixture check rejects unqualified and slash-qualified owners in
+// raw text, JSON strings and all supported Base64 JSON forms. Neutral fixture
+// principals and the exact public owner:id/ namespace prefix remain allowed.
 func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 	// A complete synthetic scope stays rejected through fixture serialization.
 	forbiddenOwnerScope := strings.Join([]string{"owner", ":", "synthetic-checker", "/", "synthetic", "-", "subject"}, "")
@@ -657,6 +662,10 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 		{"@reader:example.org", false}, {"@reader:unreserved.test", true},
 		{"!fixture-room:example.invalid", false}, {"!fixture-room:outside.test", true},
 		{"owner:fixture-owner", false}, {"owner:example", false}, {forbiddenOwnerScope, true},
+		{"owner:account", true}, {"owner:account/", true},
+		{"owner:id/", false}, {"owner:id", true}, {"owner:id/subject", true},
+		{"owner:id/ owner:account", true},
+		{"owner:fixture-owner/subject", false},
 		{"metadata", false}, {"keeper", true},
 		{"fixture-receiver", false}, {"sample.orch-node", true},
 		{"a2a.identity", false}, {"grant/1", false}, {"mac-keyvault", false},
@@ -666,10 +675,20 @@ func TestFixtureIdentityBoundaryPlants(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for form, value := range []string{tc.principal, string(raw), base64.RawURLEncoding.EncodeToString(raw)} {
-			if fixtureIdentityHit(value, 0) != tc.forbidden {
-				t.Fatalf("fixture serialization control verdict differs at row %d form %d", row+1, form+1)
-			}
+		for _, form := range []struct{ name, value string }{
+			{"raw-text", tc.principal},
+			{"json-string", strconv.Quote(tc.principal)},
+			{"json-object", string(raw)},
+			{"base64-json", base64.StdEncoding.EncodeToString(raw)},
+			{"raw-base64-json", base64.RawStdEncoding.EncodeToString(raw)},
+			{"base64url-json", base64.URLEncoding.EncodeToString(raw)},
+			{"raw-base64url-json", base64.RawURLEncoding.EncodeToString(raw)},
+		} {
+			t.Run(strconv.Itoa(row+1)+"/"+form.name, func(t *testing.T) {
+				if got := fixtureIdentityHit(form.value, 0); got != tc.forbidden {
+					t.Errorf("fixture serialization control: forbidden = %v, want %v", got, tc.forbidden)
+				}
+			})
 		}
 	}
 }
