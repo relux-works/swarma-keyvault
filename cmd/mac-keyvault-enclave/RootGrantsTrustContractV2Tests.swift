@@ -121,22 +121,26 @@ struct RootGrantsTrustContractV2Tests {
                 "Touch ID confirms one root trust contract countersignature for owner:id/fixture-owner.")
     }
 
-    // Claim: empty and exact scope-text byte/hash pairs pass, while missing, unexpected, changed, or differently paired bytes coarsen to 13.
+    // Claim: explicit presence permits SHA256(empty) and exact nonempty bytes;
+    // absent, unexpected, changed and differently paired inputs keep status 13.
     @Test func scopeTextUsesOnlyItsOwnExactHash() throws {
         let text = Data("first line\nsecond line".utf8)
         let digest = SHA256.hash(data: text).map { String(format: "%02x", $0) }.joined()
-        #expect(RootGrantsTrustContractV2.validateScopeText(Data(), reviewedHash: "", contractHash: "") == nil)
-        #expect(RootGrantsTrustContractV2.validateScopeText(text, reviewedHash: digest, contractHash: digest) == nil)
+        let emptyDigest = SHA256.hash(data: Data()).map { String(format: "%02x", $0) }.joined()
+        #expect(RootGrantsTrustContractV2.validateScopeText(Data(), available: false, reviewedHash: "", contractHash: "") == nil)
+        #expect(RootGrantsTrustContractV2.validateScopeText(Data(), available: true, reviewedHash: emptyDigest, contractHash: emptyDigest) == nil)
+        #expect(RootGrantsTrustContractV2.validateScopeText(text, available: true, reviewedHash: digest, contractHash: digest) == nil)
 
-        let cases: [(Data, String, String, RootGrantsTrustContractV2FailureCode)] = [
-            (text, "", "", .scopeTextUnexpected),
-            (Data(), digest, digest, .scopeTextUnavailable),
-            (Data("changed line ending\r\n".utf8), digest, digest, .scopeTextHashMismatch),
-            (text, "", digest, .scopeTextHashMismatch),
+        let cases: [(Data, Bool, String, String, RootGrantsTrustContractV2FailureCode)] = [
+            (text, true, "", "", .scopeTextUnexpected),
+            (Data(), false, digest, digest, .scopeTextUnavailable),
+            (Data(), true, digest, digest, .scopeTextHashMismatch),
+            (Data("changed line ending\r\n".utf8), true, digest, digest, .scopeTextHashMismatch),
+            (text, true, "", digest, .scopeTextHashMismatch),
         ]
-        for (bytes, reviewedHash, contractHash, expected) in cases {
+        for (bytes, available, reviewedHash, contractHash, expected) in cases {
             let refusal = try #require(RootGrantsTrustContractV2.validateScopeText(
-                bytes, reviewedHash: reviewedHash, contractHash: contractHash))
+                bytes, available: available, reviewedHash: reviewedHash, contractHash: contractHash))
             #expect(refusal.code == expected)
             #expect(refusal.nativeStatus == .bindingMismatch)
         }
