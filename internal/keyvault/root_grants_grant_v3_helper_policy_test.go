@@ -203,3 +203,59 @@ func grantV3FinalRevalidationContextControl(t *testing.T, deadline bool) {
 		t.Fatalf("private math began after final-validation %s: entered=%v math=%v failure=%+v", want, enteredBoundary, mathStarted, failure)
 	}
 }
+
+// Claim: each check classifies one Err sample, so a deadline that appears
+// after a live sample is reported by the next check; stable timeout and
+// cancellation remain distinct. Limit: this scripted context fixes Err order
+// and does not exercise OS timer scheduling.
+func TestRootGrantsGrantV3AttemptCheckSnapshotsContextErrorOnce(t *testing.T) {
+	t.Run("deadline_after_live_sample", func(t *testing.T) {
+		ctx := &rootGrantsSequencedErrContext{
+			Context: context.Background(),
+			errs:    []error{nil, context.DeadlineExceeded},
+		}
+		attempt := &rootGrantsGrantV3Attempt{ctx: ctx}
+		if err := attempt.check(false); err != nil || ctx.calls != 1 {
+			t.Fatalf("live first sample was not classified once: calls=%d err=%v", ctx.calls, err)
+		}
+		err := attempt.check(false)
+		var failure *RootGrantsGrantV3Failure
+		if !errors.As(err, &failure) || failure.Code != "timeout" || failure.Outcome != "not_applied" || ctx.calls != 2 {
+			t.Fatalf("next check did not report the new deadline: calls=%d failure=%+v err=%v", ctx.calls, failure, err)
+		}
+	})
+
+	// Stable error controls prove one-sample timeout and cancellation classification.
+	for _, tc := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "stable_deadline", err: context.DeadlineExceeded, code: "timeout"},
+		{name: "stable_cancellation", err: context.Canceled, code: "canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &rootGrantsSequencedErrContext{Context: context.Background(), errs: []error{tc.err}}
+			attempt := &rootGrantsGrantV3Attempt{ctx: ctx}
+			err := attempt.check(false)
+			var failure *RootGrantsGrantV3Failure
+			if !errors.As(err, &failure) || failure.Code != tc.code || failure.Outcome != "not_applied" || ctx.calls != 1 {
+				t.Fatalf("stable %s classification mismatch: calls=%d failure=%+v err=%v", tc.name, ctx.calls, failure, err)
+			}
+		})
+	}
+}
+
+type rootGrantsSequencedErrContext struct {
+	context.Context
+	errs  []error
+	calls int
+}
+
+func (c *rootGrantsSequencedErrContext) Err() error {
+	c.calls++
+	if c.calls > len(c.errs) {
+		return c.errs[len(c.errs)-1]
+	}
+	return c.errs[c.calls-1]
+}
