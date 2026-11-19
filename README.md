@@ -273,6 +273,14 @@ root-grants vault applies before it adds an item and when it reads one back; see
 comparison runs with `go test -tags kvqfault -run TestNativeIntendedFrame ./internal/keyvault`
 and touches no Keychain item.
 
+## Agent enrollment and request keys
+
+The proposed [agent identity enrollment and request-key contract](docs/agent-enrollment.md)
+defines the owner-created identity, administrator-route registration, Keyvault token custody,
+accepted-card binding, native authorization and public metadata boundary. It is not an installed
+registration or signing interface. The existing `nostr` and `agent-nostr` command families remain
+separate.
+
 ## Nostr keys
 
 `mac-keyvault nostr` provides secp256k1 list/describe, public x-only hex or

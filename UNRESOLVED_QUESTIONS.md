@@ -22,3 +22,8 @@ Still open:
   metadata, and no native write, overwrite or delete qualification has been run (see
   `docs/root-storage-acl-policy.md`).
 - Forms on other macOS versions are unknown and refused until observed and reviewed.
+
+## Agent identity enrollment and request keys
+
+- Pulse's owner-selected identity-names-v2 amendment still marks its field, version, and resolver proposals as requiring acceptance before implementation. Pulse projections are unsigned and report source freshness as unknown; they do not prove that a card revision is accepted or current. What exact accepted card and reservation projection will the native enrollment authority consume? Until that representation is accepted and available, live registration and request-key creation refuse.
+- The native Keyvault registration/create path, protected account-token storage, current code-admission policy, and owner-approved session policy remain unimplemented and unqualified. The proposed no-per-key-presence mode is available only after an owner-sitting deployment explicitly admits the finite K3 management policy; otherwise no unattended issuance is allowed.
