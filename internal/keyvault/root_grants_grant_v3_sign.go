@@ -61,10 +61,11 @@ func (a *rootGrantsGrantV3Attempt) close() {
 }
 
 func (a *rootGrantsGrantV3Attempt) check(signed bool) error {
-	if errors.Is(a.ctx.Err(), context.DeadlineExceeded) {
+	contextErr := a.ctx.Err()
+	if errors.Is(contextErr, context.DeadlineExceeded) {
 		return rootGrantsGrantV3Failed("timeout", "sign", signed)
 	}
-	if a.ctx.Err() != nil {
+	if contextErr != nil {
 		return rootGrantsGrantV3Failed("canceled", "sign", signed)
 	}
 	return nil
