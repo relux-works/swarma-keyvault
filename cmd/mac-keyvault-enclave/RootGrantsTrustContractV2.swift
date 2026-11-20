@@ -235,7 +235,7 @@ struct RootGrantsTrustContractV2 {
         return nil
     }
 
-    static func validateScopeText(_ bytes: Data, reviewedHash: String,
+    static func validateScopeText(_ bytes: Data, available: Bool, reviewedHash: String,
                                   contractHash: String) -> RootGrantsTrustContractV2Failure? {
         guard reviewedHash == contractHash else {
             return RootGrantsTrustContractV2Failure(code: .scopeTextHashMismatch)
@@ -243,7 +243,8 @@ struct RootGrantsTrustContractV2 {
         if contractHash.isEmpty {
             return bytes.isEmpty ? nil : RootGrantsTrustContractV2Failure(code: .scopeTextUnexpected)
         }
-        guard !bytes.isEmpty else { return RootGrantsTrustContractV2Failure(code: .scopeTextUnavailable) }
+        // Presence is independent of byte count: SHA256(empty) binds present empty text.
+        guard available else { return RootGrantsTrustContractV2Failure(code: .scopeTextUnavailable) }
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         guard digest == contractHash else { return RootGrantsTrustContractV2Failure(code: .scopeTextHashMismatch) }
         return nil

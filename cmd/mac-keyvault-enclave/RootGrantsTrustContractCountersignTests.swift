@@ -148,10 +148,10 @@ struct RootGrantsTrustContractCountersignTests {
         let url = try #require(Bundle.module.url(forResource: "SHARED-CARRIER-VECTORS-22",
                                                  withExtension: "json"))
         let source = try Data(contentsOf: url)
-        #expect(Self.sha256(source) == "cb85e9c1520634808a29c8b7c8f3eda0825eef861a3174275f5f9f7d9b4f2758")
+        #expect(Self.sha256(source) == "1d272bcd9bc5865c3c84923366ec96e1b58f06b8bb110e29b1f1b2af9c36611b")
         let file = try JSONDecoder().decode(CarrierVectorFile.self, from: source)
         #expect(file.schema == "keyvault-root-grants-carrier-byte-vectors/1")
-        #expect(file.vectors.count == 13)
+        #expect(file.vectors.count == 17)
 
         var rows: [String] = []
         for vector in file.vectors {
@@ -175,6 +175,30 @@ struct RootGrantsTrustContractCountersignTests {
             #expect(observed == vector.expectedStatus, "\(vector.id): got status \(observed), want \(vector.expectedStatus)")
         }
         print(rows.joined(separator: "\n"))
+    }
+
+    // Claim: the builder preserves absent versus explicitly empty scope and reproduces
+    // all four complete shared requests, including refreshed nested pins. Public parsing
+    // rejects wrong empty bytes as 13 before private work; no private API is called here.
+    @Test func scopePresenceBuilderMatchesCompleteSharedRequests() throws {
+        let url = try #require(Bundle.module.url(forResource: "SHARED-CARRIER-VECTORS-22", withExtension: "json"))
+        let file = try JSONDecoder().decode(CarrierVectorFile.self, from: Data(contentsOf: url))
+        let text = Data("synthetic scope".utf8)
+        let expected = [
+            "scope-absent-empty": try Self.requestBytes(),
+            "scope-present-empty": try Self.requestBytes(contractScope: Data()),
+            "scope-present-nonempty": try Self.requestBytes(contractScope: text),
+            "scope-empty-wrong-hash": try Self.requestBytes(contractScope: text, reviewScope: Data()),
+        ]
+        var seen: Set<String> = []
+        for vector in file.vectors where expected[vector.id] != nil {
+            #expect(seen.insert(vector.id).inserted)
+            let bytes = try #require(Data(base64Encoded: vector.requestBase64))
+            #expect(bytes == expected[vector.id], "builder changed complete request for \(vector.id)")
+            #expect(Self.status(bytes)?.rawValue == vector.expectedStatus)
+        }
+        #expect(seen == Set(expected.keys))
+        #expect(expected["scope-absent-empty"] != expected["scope-present-empty"])
     }
 
     // Claim: both implementations consume the shared exact request bytes for all row-1 through row-7 C27 cases, including the four source-pinned requests, the paired 16/17 mixed fault, and approved-Base64/LIP precedence. This does not exercise signing or Keychain.
@@ -566,7 +590,7 @@ struct RootGrantsTrustContractCountersignTests {
         let bytes = try Self.requestBytes(contractScope: contractScope, reviewScope: wrongReviewScope)
         #expect(Self.status(bytes) == .bindingMismatch)
         #expect(RootGrantsTrustContractV2.validateScopeText(
-            wrongReviewScope, reviewedHash: Self.sha256(contractScope), contractHash: Self.sha256(contractScope)
+            wrongReviewScope, available: true, reviewedHash: Self.sha256(contractScope), contractHash: Self.sha256(contractScope)
         )?.code == .scopeTextHashMismatch)
     }
 
@@ -620,7 +644,7 @@ struct RootGrantsTrustContractCountersignTests {
         catch { return nil }
     }
 
-    private static func request(contractScope: Data = Data(), reviewScope: Data? = nil,
+    private static func request(contractScope: Data? = nil, reviewScope: Data? = nil,
                                 actions: String = "[\"instruct\",\"review\"]", note: String = "fixture",
                                 contractNotBefore: UInt64 = 1_900_000_000,
                                 contractNotAfter: UInt64 = 1_900_000_100,
@@ -632,7 +656,7 @@ struct RootGrantsTrustContractCountersignTests {
             authorityNotBefore: authorityNotBefore, authorityNotAfter: authorityNotAfter))
     }
 
-    private static func requestBytes(contractScope: Data = Data(), reviewScope: Data? = nil,
+    private static func requestBytes(contractScope: Data? = nil, reviewScope: Data? = nil,
                                      actions: String = "[\"instruct\",\"review\"]",
                                      note: String = "fixture",
                                      contractNotBefore: UInt64 = 1_900_000_000,
@@ -666,9 +690,11 @@ struct RootGrantsTrustContractCountersignTests {
         let notAfter = authorityNotAfter
         let maxGrantSeconds = authorityNotAfter - authorityNotBefore
         let granteeName = ""
-        let scope = reviewScope ?? contractScope
+        // nil is absent; Data() is explicitly present empty text.
+        let scope = reviewScope ?? contractScope ?? Data()
+        let scopeHash = contractScope.map { sha256($0) } ?? ""
         let contract = Self.contract(network: network, landlord: landlordName, agent: agentName,
-                                     scopeHash: contractScope.isEmpty ? "" : sha256(contractScope),
+                                     scopeHash: scopeHash,
                                      actions: actions, note: note, notBefore: contractNotBefore,
                                      notAfter: contractNotAfter)
         let contractHash = sha256(contract)
@@ -712,7 +738,7 @@ struct RootGrantsTrustContractCountersignTests {
             ("contract_bytes", .number(UInt64(contract.count))), ("contract_sha256", .string(contractHash)),
             ("scope_text_bytes_base64", .string(scope.base64EncodedString())),
             ("scope_text_bytes", .number(UInt64(scope.count))),
-            ("scope_text_sha256", .string(contractScope.isEmpty ? "" : sha256(contractScope))),
+            ("scope_text_sha256", .string(scopeHash)),
             ("issuance_context", context), ("authority", authority), ("record", record),
             ("authority_sha256", .string(sha256(try authority.canonical()))),
             ("record_sha256", .string(recordHash)),
